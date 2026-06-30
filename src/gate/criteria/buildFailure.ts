@@ -2,7 +2,7 @@ import type { PullRequest } from "../../types/core.js";
 
 export function check(pr: PullRequest): { triggered: boolean; reason: string } {
 	if (pr.ciStatus === "failure") {
-		return { triggered: true, reason: "CI build failed" };
+		return { triggered: true, reason: "CI failed (build or tests)" };
 	}
 	return { triggered: false, reason: "" };
 }
