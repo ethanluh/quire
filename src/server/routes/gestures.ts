@@ -34,6 +34,8 @@ export function gesturesRouter(
 
 				if (action === "accept") {
 					await queue.enqueue(bundle); // enqueues, does not merge (INV-5)
+					state.bundles.delete(bundleId);
+					state.cards.delete(bundleId);
 					res.json({ status: "queued", bundleId });
 				} else if (action === "reject") {
 					state.bundles.delete(bundleId);
