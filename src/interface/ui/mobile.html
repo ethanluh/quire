@@ -4,111 +4,118 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Quire</title>
+<link rel="stylesheet" href="styles/tokens.css">
+<link rel="stylesheet" href="styles/components.css">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; }
   body {
-    font-family: system-ui, sans-serif; background: #0f1117; color: #e2e8f0;
     display: flex; flex-direction: column; height: 100dvh; overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
   }
 
   header {
-    flex: 0 0 auto; padding: 12px 16px; border-bottom: 1px solid #1e2533;
-    display: flex; align-items: center; gap: 10px;
+    flex: 0 0 auto; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface-card);
+    display: flex; align-items: center; gap: var(--space-2);
   }
-  header h1 { font-size: 16px; font-weight: 600; letter-spacing: 0.04em; }
-  header .subtitle { font-size: 11px; color: #64748b; flex: 1; }
-  header a { font-size: 12px; color: #818cf8; text-decoration: none; }
+  header h1 {
+    font-family: var(--font-display); font-size: var(--text-lg); font-weight: var(--weight-semibold);
+    letter-spacing: var(--tracking-tight); color: var(--color-text-primary);
+  }
+  header .subtitle { font-size: var(--text-xs); color: var(--color-text-muted); flex: 1; }
+  header a { font-size: var(--text-sm); color: var(--color-brand); text-decoration: none; }
 
-  main { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-  .pane { display: none; padding: 16px; height: 100%; }
+  main { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--color-surface-page); }
+  .pane { display: none; padding: var(--space-4); height: 100%; }
   .pane.active { display: flex; flex-direction: column; }
 
   /* --- Review: swipeable card stack --- */
-  #pane-review { padding: 16px 0 0; }
-  .stack { position: relative; flex: 1 1 auto; min-height: 0; margin: 0 16px; }
+  #pane-review { padding: var(--space-4) 0 0; }
+  .stack { position: relative; flex: 1 1 auto; min-height: 0; margin: 0 var(--space-4); }
   .stack-card {
-    position: absolute; inset: 0; background: #161b27; border: 1px solid #1e2533; border-radius: 16px;
-    padding: 20px; display: flex; flex-direction: column; overflow-y: auto;
+    position: absolute; inset: 0;
+    background: var(--color-surface-card); border: 1px solid var(--color-border); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    padding: var(--space-5); display: flex; flex-direction: column; overflow-y: auto;
     touch-action: none; will-change: transform; user-select: none;
   }
-  .stack-card.flagged { border-left: 4px solid #ef4444; }
-  .stack-card.clean { border-left: 4px solid #22c55e; }
   .stack-card.dragging { transition: none; }
-  .stack-card.snap-back { transition: transform 0.25s ease-out; }
-  .stack-card.fly { transition: transform 0.3s ease-in, opacity 0.3s ease-in; }
+  .stack-card.snap-back { transition: transform var(--duration-base) var(--ease-settle); }
+  .stack-card.fly { transition: transform var(--duration-slow) var(--ease-standard), opacity var(--duration-slow) var(--ease-standard); }
 
-  .card-direction { font-size: 17px; font-weight: 600; line-height: 1.4; margin-bottom: 12px; }
-  .card-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
-  .badge { font-size: 11px; padding: 3px 9px; border-radius: 12px; font-weight: 500; }
-  .badge-blast { background: #1e2533; color: #94a3b8; }
-  .badge-flag { background: #2d1f0e; color: #f59e0b; }
-  .badge-drift-clean { background: #0d2016; color: #22c55e; }
-  .badge-drift-flagged { background: #2d0d0d; color: #ef4444; }
+  .card-meta { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
 
-  .drift-signals { margin-top: 8px; padding: 10px 12px; background: #1a1020; border-radius: 6px; font-size: 12px; color: #e879f9; }
-  .drift-signals ul { padding-left: 16px; margin-top: 4px; }
-  .drift-signals li { margin-top: 3px; }
-  .residual { margin-top: 10px; font-size: 11px; color: #475569; font-style: italic; }
-
-  .stamp {
-    position: absolute; top: 18px; padding: 6px 14px; font-size: 16px; font-weight: 800;
-    letter-spacing: 0.08em; border-radius: 8px; border: 3px solid; opacity: 0; pointer-events: none;
+  .drift-signals {
+    margin-top: var(--space-3); padding: var(--space-3); background: var(--color-surface-sunken);
+    border-left: 2px solid var(--color-flagged); border-radius: var(--radius-sm);
+    font-size: var(--text-sm); color: var(--color-text-secondary);
   }
-  .stamp-accept { right: 16px; color: #22c55e; border-color: #22c55e; transform: rotate(12deg); }
-  .stamp-reject { left: 16px; color: #ef4444; border-color: #ef4444; transform: rotate(-12deg); }
-  .stamp-defer  { left: 50%; bottom: 18px; top: auto; transform: translateX(-50%); color: #6366f1; border-color: #6366f1; }
+  .drift-signals strong { color: var(--color-text-primary); font-weight: var(--weight-medium); }
+  .drift-signals ul { padding-left: var(--space-4); margin: var(--space-1) 0 0; }
+  .drift-signals li { margin-top: var(--space-1); }
 
-  .stack-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: #475569; font-size: 14px; }
+  /* Stamps are a calm seal of intent, not a scoreboard flash. */
+  .stamp {
+    position: absolute; top: var(--space-4); padding: var(--space-2) var(--space-4); font-size: var(--text-base);
+    font-weight: var(--weight-semibold); letter-spacing: var(--tracking-wider); text-transform: uppercase;
+    border-radius: var(--radius-md); border: 2px solid; opacity: 0; pointer-events: none;
+    font-family: var(--font-display); background: var(--color-surface-card);
+  }
+  .stamp-accept { right: var(--space-4); color: var(--color-accept); border-color: var(--color-accept); transform: rotate(8deg); }
+  .stamp-reject { left: var(--space-4); color: var(--color-reject); border-color: var(--color-reject); transform: rotate(-8deg); }
+  .stamp-defer  { left: 50%; bottom: var(--space-4); top: auto; transform: translateX(-50%); color: var(--color-defer); border-color: var(--color-defer); }
 
-  .gesture-hints { flex: 0 0 auto; display: flex; justify-content: space-between; padding: 14px 24px 6px; font-size: 11px; color: #475569; }
+  .stack-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-text-faint); font-size: var(--text-base); }
 
-  .tap-gestures { flex: 0 0 auto; display: flex; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }
-  .btn { flex: 1; padding: 13px 0; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
-  .btn-accept { background: #22c55e; color: #000; }
-  .btn-defer  { background: #6366f1; color: #fff; }
-  .btn-reject { background: #ef4444; color: #fff; }
+  .gesture-hints {
+    flex: 0 0 auto; display: flex; justify-content: space-between; padding: var(--space-3) var(--space-6) var(--space-1);
+    font-size: var(--text-xs); color: var(--color-text-faint); letter-spacing: var(--tracking-wide);
+  }
+
+  .tap-gestures { flex: 0 0 auto; display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom)); }
+  .tap-gestures .btn { flex: 1; padding: var(--space-3) 0; text-align: center; }
 
   /* --- Shelf / Queue lists --- */
-  .list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
-  .list-card { background: #161b27; border: 1px solid #1e2533; border-radius: 12px; padding: 14px 16px; }
-  .list-card .card-direction { font-size: 14px; margin-bottom: 8px; }
-  .list-card .btn { padding: 9px 0; font-size: 13px; margin-top: 8px; }
+  .list { display: flex; flex-direction: column; gap: var(--space-3); overflow-y: auto; }
+  .list-card .card-direction { font-size: var(--text-base); margin-bottom: var(--space-3); }
+  .list-card .btn { width: 100%; padding: var(--space-3) 0; margin-top: var(--space-3); text-align: center; }
 
-  .queue-entry { background: #161b27; border: 1px solid #1e2533; border-radius: 10px; padding: 12px 14px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
-  .queue-entry .entry-id { font-family: monospace; color: #94a3b8; font-size: 10px; }
-  .status-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
-  .status-queued  { background: #1e2533; color: #94a3b8; }
-  .status-landing { background: #2d1f0e; color: #f59e0b; }
-  .status-landed  { background: #0d2016; color: #22c55e; }
+  .queue-entry { font-size: var(--text-sm); display: flex; justify-content: space-between; align-items: center; }
+  .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
+  .status-badge { font-size: var(--text-xs); padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); }
+  .status-queued  { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
+  .status-landed  { background: var(--color-accept-wash); color: var(--color-accept); }
 
+  .ingest-form p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
   .ingest-form textarea {
-    width: 100%; height: 40vh; background: #161b27; border: 1px solid #1e2533; border-radius: 10px;
-    color: #e2e8f0; font-family: monospace; font-size: 12px; padding: 12px; resize: vertical;
+    width: 100%; height: 40vh; background: var(--color-surface-overlay); border: 1px solid var(--color-border);
+    border-radius: var(--radius-md); color: var(--color-text-primary); font-family: var(--font-mono);
+    font-size: var(--text-sm); padding: var(--space-3); resize: vertical;
   }
-  .ingest-form .btn-ingest { margin-top: 10px; width: 100%; }
-  .result-msg { margin-top: 10px; font-size: 13px; color: #22c55e; }
-  .result-msg.error { color: #ef4444; }
+  .ingest-form .btn-ingest { margin-top: var(--space-3); width: 100%; text-align: center; }
+  .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
+  .result-msg.error { color: var(--color-reject); }
 
-  .empty { color: #475569; font-size: 14px; padding: 40px 0; text-align: center; }
+  .empty { color: var(--color-text-faint); font-size: var(--text-base); padding: var(--space-10) 0; text-align: center; }
 
   /* --- Bottom tab bar --- */
   nav.tabbar {
-    flex: 0 0 auto; display: flex; border-top: 1px solid #1e2533; background: #11141d;
+    flex: 0 0 auto; display: flex; border-top: 1px solid var(--color-border); background: var(--color-surface-card);
     padding-bottom: env(safe-area-inset-bottom);
   }
   nav.tabbar .tab {
-    flex: 1; text-align: center; padding: 10px 0 8px; font-size: 11px; color: #64748b;
-    border-top: 2px solid transparent; cursor: pointer;
+    flex: 1; text-align: center; padding: var(--space-3) 0 var(--space-2); font-size: var(--text-xs);
+    color: var(--color-text-muted); border-top: 2px solid transparent; cursor: pointer;
   }
-  nav.tabbar .tab .icon { display: block; font-size: 18px; margin-bottom: 2px; }
-  nav.tabbar .tab.active { color: #e2e8f0; border-top-color: #6366f1; }
+  nav.tabbar .tab .icon { display: block; font-size: var(--text-lg); margin-bottom: var(--space-1); }
+  nav.tabbar .tab.active { color: var(--color-brand); border-top-color: var(--color-brand); }
 
   #toast {
-    position: fixed; left: 16px; right: 16px; bottom: calc(78px + env(safe-area-inset-bottom));
-    background: #2d0d0d; color: #fca5a5; border: 1px solid #ef4444; border-radius: 10px;
-    padding: 10px 14px; font-size: 13px; text-align: center; opacity: 0; pointer-events: none;
-    transition: opacity 0.2s; z-index: 100;
+    position: fixed; left: var(--space-4); right: var(--space-4); bottom: calc(78px + env(safe-area-inset-bottom));
+    background: var(--color-reject-wash); color: var(--color-reject); border: 1px solid var(--color-reject);
+    border-radius: var(--radius-md); padding: var(--space-3); font-size: var(--text-sm); text-align: center;
+    opacity: 0; pointer-events: none; transition: opacity var(--duration-base) var(--ease-standard); z-index: 100;
   }
   #toast.visible { opacity: 1; }
 </style>
@@ -142,9 +149,9 @@
 
   <div id="pane-ingest" class="pane">
     <div class="ingest-form">
-      <p style="font-size:12px;color:#64748b;margin-bottom:10px">Paste a PR payload (or array of payloads) as JSON:</p>
+      <p>Paste a PR payload (or array of payloads) as JSON:</p>
       <textarea id="ingest-payload" placeholder='{"id":"pr-1","repoOwner":"org","repoName":"repo","number":1,"declaredDirection":"add passwordless auth","diff":{"raw":"...","hunks":[]},"ciStatus":"success"}'></textarea>
-      <button class="btn btn-ingest" id="btn-ingest">Ingest</button>
+      <button class="btn btn-defer btn-ingest" id="btn-ingest">Ingest</button>
       <div id="ingest-result" class="result-msg" style="display:none"></div>
     </div>
   </div>
@@ -190,8 +197,8 @@ function escapeHtml(value) {
 }
 
 function driftBadge(drift) {
-  if (drift.status === 'clean') return '<span class="badge badge-drift-clean">Clean</span>';
-  return '<span class="badge badge-drift-flagged">Drift flagged</span>';
+  if (drift.status === 'clean') return '<span class="badge badge-clean">Clean</span>';
+  return '<span class="badge badge-flagged">Drift flagged</span>';
 }
 
 function renderSignals(drift) {
@@ -201,14 +208,14 @@ function renderSignals(drift) {
     if (s.kind === 'footprintAnomaly') return `Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
     return escapeHtml(s.description);
   });
-  return `<div class="drift-signals"><strong>Drift signals</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
+  return `<div class="drift-signals"><strong>Drift signals (noted, not an error)</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
 }
 
 function cardBodyHtml(card) {
-  const flags = card.flags.map(f => `<span class="badge badge-flag">${escapeHtml(f)}</span>`).join('');
+  const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
   return `<div class="card-direction">${escapeHtml(card.directionSummary)}</div>
     <div class="card-meta">
-      <span class="badge badge-blast">Blast radius: ${card.blastRadius} files</span>
+      <span class="badge badge-neutral">Blast radius: ${card.blastRadius} files</span>
       ${driftBadge(card.drift)} ${flags}
     </div>
     ${renderSignals(card.drift)}
@@ -244,13 +251,13 @@ function renderStack() {
   visible.forEach((card, i) => {
     const depthFromTop = visible.length - 1 - i;
     const el = document.createElement('div');
-    el.className = 'stack-card ' + (card.drift.status === 'flagged' ? 'flagged' : 'clean');
+    el.className = 'stack-card';
     el.style.transform = `translateY(${depthFromTop * 8}px) scale(${1 - depthFromTop * 0.04})`;
     el.style.zIndex = String(i);
     el.innerHTML = cardBodyHtml(card) +
-      '<div class="stamp stamp-accept">ACCEPT</div>' +
-      '<div class="stamp stamp-reject">REJECT</div>' +
-      '<div class="stamp stamp-defer">DEFER</div>';
+      '<div class="stamp stamp-accept">Accept</div>' +
+      '<div class="stamp stamp-reject">Reject</div>' +
+      '<div class="stamp stamp-defer">Defer</div>';
     if (depthFromTop === 0) {
       attachDrag(el, card);
       topCardEl = el;
@@ -389,7 +396,7 @@ document.getElementById('btn-tap-reject').addEventListener('click', () => tapGes
 async function loadShelf() {
   const cards = await api('GET', '/shelf');
   const el = document.getElementById('shelf-list');
-  el.innerHTML = cards.length ? cards.map(c => `<div class="list-card">
+  el.innerHTML = cards.length ? cards.map(c => `<div class="list-card card">
     ${cardBodyHtml(c)}
     <button class="btn btn-accept" onclick="promote('${escapeHtml(c.bundleId)}')">Unshelf</button>
   </div>`).join('') : '<div class="empty">Shelf is empty.</div>';
@@ -406,7 +413,7 @@ async function loadQueue() {
   const entries = await api('GET', '/queue');
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
-  el.innerHTML = entries.map(e => `<div class="queue-entry">
+  el.innerHTML = entries.map(e => `<div class="queue-entry card">
     <div><div>${escapeHtml(e.bundle.direction)}</div><div class="entry-id">${escapeHtml(e.bundleId)}</div></div>
     <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
   </div>`).join('');
@@ -434,6 +441,10 @@ document.getElementById('btn-ingest').addEventListener('click', async () => {
     el.style.display = 'block';
   }
 });
+
+// Theme: "paper" (light, default) and "ink" (dark) — kept in sync with the desktop view.
+const THEME_KEY = 'quire-theme';
+document.documentElement.setAttribute('data-theme', localStorage.getItem(THEME_KEY) === 'ink' ? 'ink' : 'paper');
 
 loadReview();
 </script>
