@@ -16,7 +16,10 @@ export async function loadState(path: string): Promise<QueueState> {
 			"entries" in parsed &&
 			Array.isArray((parsed as Record<string, unknown>)["entries"])
 		) {
-			return parsed as QueueState;
+			const state = parsed as QueueState;
+			// Older persisted entries predate mergedPrIds - default it so dequeueNext()
+			// doesn't crash on .includes() against a missing field.
+			return { entries: state.entries.map((e) => ({ ...e, mergedPrIds: e.mergedPrIds ?? [] })) };
 		}
 	} catch {
 		// corrupted file — start fresh

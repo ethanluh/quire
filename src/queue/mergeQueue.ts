@@ -26,52 +26,60 @@ export class MergeQueue {
 			enqueuedAt: new Date().toISOString(),
 			status: "queued",
 			revertedPrIds: [],
+			mergedPrIds: [],
 		};
 		this.state = { entries: [...this.state.entries, entry] };
 		await this.persist();
 	}
 
-	async dequeueNext(): Promise<MergeQueueEntry | undefined> {
-		const idx = this.state.entries.findIndex((e) => e.status === "queued");
-		if (idx < 0) return undefined;
-
-		const entry = this.state.entries[idx]!;
-		const updated: MergeQueueEntry = { ...entry, status: "landing" };
+	private async setEntry(bundleId: string, updated: MergeQueueEntry): Promise<void> {
 		this.state = {
-			entries: this.state.entries.map((e, i) => (i === idx ? updated : e)),
+			entries: this.state.entries.map((e) => (e.bundleId === bundleId ? updated : e)),
 		};
 		await this.persist();
+	}
 
-		// Merge each member PR
-		for (const pr of entry.bundle.members) {
-			await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+	async dequeueNext(): Promise<MergeQueueEntry | undefined> {
+		// Resume a bundle stuck in "landing" (e.g. the process crashed mid-merge) before
+		// picking up a fresh "queued" one, so a partial merge is never silently abandoned.
+		let entry = this.state.entries.find((e) => e.status === "landing");
+		if (entry === undefined) {
+			entry = this.state.entries.find((e) => e.status === "queued");
+		}
+		if (entry === undefined) return undefined;
+
+		if (entry.status === "queued") {
+			entry = { ...entry, status: "landing" };
+			await this.setEntry(entry.bundleId, entry);
 		}
 
-		const landed: MergeQueueEntry = { ...updated, status: "landed" };
-		this.state = {
-			entries: this.state.entries.map((e) => (e.bundleId === entry.bundleId ? landed : e)),
-		};
-		await this.persist();
+		// Merge each member PR, skipping ones already merged in a prior attempt, and
+		// persisting progress after every member so a crash here can resume cleanly.
+		for (const pr of entry.bundle.members) {
+			if (entry.mergedPrIds.includes(pr.id)) continue;
+			await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+			entry = { ...entry, mergedPrIds: [...entry.mergedPrIds, pr.id] };
+			await this.setEntry(entry.bundleId, entry);
+		}
+
+		const landed: MergeQueueEntry = { ...entry, status: "landed" };
+		await this.setEntry(entry.bundleId, landed);
 		return landed;
 	}
 
 	async revertPr(bundleId: string, prId: string): Promise<string> {
 		const entry = this.state.entries.find((e) => e.bundleId === bundleId);
 		if (entry === undefined) throw new Error(`Bundle ${bundleId} not found in queue`);
+		if (entry.status !== "landed") {
+			throw new Error(`Cannot revert PR ${prId}: bundle ${bundleId} has not landed (status: ${entry.status})`);
+		}
 
 		const pr = entry.bundle.members.find((m) => m.id === prId);
 		if (pr === undefined) throw new Error(`PR ${prId} not found in bundle ${bundleId}`);
 
 		const revertUrl = await this.github.revertPullRequest(pr.repoOwner, pr.repoName, pr.number);
 
-		const updated: MergeQueueEntry = {
-			...entry,
-			revertedPrIds: [...entry.revertedPrIds, prId],
-		};
-		this.state = {
-			entries: this.state.entries.map((e) => (e.bundleId === bundleId ? updated : e)),
-		};
-		await this.persist();
+		await this.setEntry(bundleId, { ...entry, revertedPrIds: [...entry.revertedPrIds, prId] });
 		return revertUrl;
 	}
 
