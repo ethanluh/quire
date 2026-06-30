@@ -72,6 +72,8 @@
     flex: 0 0 auto; display: flex; justify-content: space-between; padding: var(--space-3) var(--space-6) var(--space-1);
     font-size: var(--text-xs); color: var(--color-text-faint); letter-spacing: var(--tracking-wide);
   }
+  .gesture-hints span { display: inline-flex; align-items: center; gap: var(--space-1); }
+  .gesture-hints svg { width: var(--space-3); height: var(--space-3); }
 
   .tap-gestures { flex: 0 0 auto; display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom)); }
   .tap-gestures .btn { flex: 1; padding: var(--space-3) 0; text-align: center; }
@@ -109,7 +111,8 @@
     flex: 1; text-align: center; padding: var(--space-3) 0 var(--space-2); font-size: var(--text-xs);
     color: var(--color-text-muted); border-top: 2px solid transparent; cursor: pointer;
   }
-  nav.tabbar .tab .icon { display: block; font-size: var(--text-lg); margin-bottom: var(--space-1); }
+  nav.tabbar .tab .icon { display: block; margin-bottom: var(--space-1); }
+  nav.tabbar .tab .icon svg { width: var(--text-lg); height: var(--text-lg); }
   nav.tabbar .tab.active { color: var(--color-brand); border-top-color: var(--color-brand); }
 
   #toast {
@@ -131,7 +134,11 @@
 <main>
   <div id="pane-review" class="pane active">
     <div class="stack" id="stack"></div>
-    <div class="gesture-hints"><span>&larr; reject</span><span>defer &darr;</span><span>accept &rarr;</span></div>
+    <div class="gesture-hints">
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg> reject</span>
+      <span>defer <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></span>
+      <span>accept <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span>
+    </div>
     <div class="tap-gestures">
       <button class="btn btn-reject" id="btn-tap-reject">Reject</button>
       <button class="btn btn-defer" id="btn-tap-defer">Defer</button>
@@ -159,10 +166,10 @@
 </main>
 
 <nav class="tabbar">
-  <div class="tab active" data-tab="review"><span class="icon">&#128203;</span>Review</div>
-  <div class="tab" data-tab="shelf"><span class="icon">&#128230;</span>Shelf</div>
-  <div class="tab" data-tab="queue"><span class="icon">&#9202;</span>Queue</div>
-  <div class="tab" data-tab="ingest"><span class="icon">&#10133;</span>Ingest</div>
+  <div class="tab active" data-tab="review"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></span>Review</div>
+  <div class="tab" data-tab="shelf"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg></span>Shelf</div>
+  <div class="tab" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Queue</div>
+  <div class="tab" data-tab="ingest"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span>Ingest</div>
 </nav>
 
 <div id="toast"></div>
