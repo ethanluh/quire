@@ -103,13 +103,18 @@
     padding: var(--space-2) var(--space-3);
     font-size: var(--text-sm);
     display: flex;
-    justify-content: space-between;
     align-items: center;
     gap: var(--space-2);
   }
-  .repo-entry .repo-name { font-family: var(--font-mono); }
+  .repo-entry .repo-name {
+    font-family: var(--font-mono);
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .repo-entry.selected { border-color: var(--color-brand); }
-  .repo-entry .badge-private { font-size: var(--text-xs); }
+  .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 64px; justify-content: center; }
 
   .ingest-form p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
   .ingest-form textarea {
@@ -419,10 +424,10 @@ accountDisconnectBtn.addEventListener('click', async () => {
 
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
-  const privacyBadge = repo.private ? '<span class="badge badge-neutral badge-private">Private</span>' : '';
+  const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
-    <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${privacyBadge}
+    <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isSelected
       ? '<span class="badge badge-clean">Selected</span>'
       : `<button class="btn btn-defer" onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">Select</button>`}
