@@ -5,6 +5,7 @@ import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { PullRequest } from "../../src/engine/types/core.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
+import type { GateLog, ScreenLog } from "../../src/engine/types/instrumentation.js";
 
 function makePR(id: string, direction: string, overrides: Partial<PullRequest> = {}): PullRequest {
 	return {
@@ -104,5 +105,61 @@ describe("orchestratePipeline — integration", () => {
 				expect(msg.content).not.toContain(direction);
 			}
 		}
+	});
+
+	it("runs without an instrumentation sink (it's optional, not a hard dependency)", async () => {
+		stub.queueCompletion('["adds OTP login"]');
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		analyzer.setFootprint([]);
+		const prs = [makePR("pr-1", "add passwordless auth")];
+
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore);
+		expect(result.cards.length).toBe(1);
+	});
+
+	it("reports gate and screen instrumentation to a provided sink", async () => {
+		stub.queueCompletion('["adds OTP login"]');
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		analyzer.setFootprint([]);
+
+		const gateLogs: GateLog[] = [];
+		const screenLogs: ScreenLog[] = [];
+		const instrumentation = {
+			recordGate: (entry: GateLog) => { gateLogs.push(entry); },
+			recordScreen: (entry: ScreenLog) => { screenLogs.push(entry); },
+		};
+
+		const prs = [
+			makePR("pr-fail", "add passwordless auth", { ciStatus: "failure" }),
+			makePR("pr-ok", "add passwordless auth"),
+		];
+
+		await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore, instrumentation);
+
+		expect(gateLogs).toEqual([
+			{
+				prId: "pr-fail",
+				criterionName: "buildFailure",
+				mode: "enforce",
+				triggered: true,
+				recordedAt: expect.any(String),
+			},
+			{
+				prId: "pr-ok",
+				criterionName: "buildFailure",
+				mode: "enforce",
+				triggered: false,
+				recordedAt: expect.any(String),
+			},
+		]);
+		expect(screenLogs).toEqual([
+			{
+				prId: "pr-ok",
+				bundleId: expect.any(String),
+				signalCount: 0,
+				flagged: false,
+				recordedAt: expect.any(String),
+			},
+		]);
 	});
 });

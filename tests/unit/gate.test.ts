@@ -56,4 +56,19 @@ describe("runGate", () => {
 		const result = runGate(makePR({ id: "pr-1" }), config, audit, existing);
 		expect(result.outcome.result).toBe("reject");
 	});
+
+	it("reports a criteriaOutcomes entry for every evaluated criterion, none for off", () => {
+		const config: GateConfig = {
+			criteria: [
+				{ name: "buildFailure", mode: "enforce" },
+				{ name: "outOfScope", mode: "off" },
+				{ name: "duplicate", mode: "shadow" },
+			],
+		};
+		const result = runGate(makePR({ ciStatus: "failure" }), config, audit);
+		expect(result.criteriaOutcomes).toEqual([
+			{ criterionName: "buildFailure", mode: "enforce", triggered: true },
+			{ criterionName: "duplicate", mode: "shadow", triggered: false },
+		]);
+	});
 });

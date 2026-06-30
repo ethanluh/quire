@@ -64,8 +64,12 @@ describe("adminRouter POST /reset", () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-admin-"));
 		const queuePath = join(dir, "queue.json");
 		const deferLogPath = join(dir, "instrumentation", "defers.ndjson");
+		const gateLogPath = join(dir, "instrumentation", "gate.ndjson");
+		const screenLogPath = join(dir, "instrumentation", "screen.ndjson");
 		await mkdir(dirname(deferLogPath), { recursive: true });
 		await writeFile(deferLogPath, '{"bundleId":"b-1"}\n', "utf8");
+		await writeFile(gateLogPath, '{"prId":"pr-1"}\n', "utf8");
+		await writeFile(screenLogPath, '{"prId":"pr-1"}\n', "utf8");
 
 		const state = createServerState();
 		state.bundles.set("b-1", makeBundle("b-1"));
@@ -80,7 +84,7 @@ describe("adminRouter POST /reset", () => {
 		await queue.enqueue(makeBundle("b-3"));
 
 		const app = express();
-		app.use("/admin", adminRouter(state, auditStore, queue, deferLogPath));
+		app.use("/admin", adminRouter(state, auditStore, queue, deferLogPath, [gateLogPath, screenLogPath]));
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
 
@@ -94,6 +98,8 @@ describe("adminRouter POST /reset", () => {
 		expect(auditStore.list()).toHaveLength(0);
 		expect(await queue.listEntries()).toHaveLength(0);
 		expect(await readFile(deferLogPath, "utf8")).toBe("");
+		expect(await readFile(gateLogPath, "utf8")).toBe("");
+		expect(await readFile(screenLogPath, "utf8")).toBe("");
 	});
 
 	it("rejects a request missing the X-Quire-Admin header without clearing anything (CSRF guard)", async () => {

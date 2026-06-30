@@ -1,5 +1,5 @@
 import type { PullRequest } from "../types/core.js";
-import type { GateConfig, GateResult } from "../types/gate.js";
+import type { GateConfig, GateCriterionOutcome, GateResult } from "../types/gate.js";
 import type { AuditStore } from "./auditStore.js";
 import * as buildFailure from "./criteria/buildFailure.js";
 import * as outOfScope from "./criteria/outOfScope.js";
@@ -39,6 +39,7 @@ export function runGate(
 ): GateResult {
 	let rejection: { criterionName: string; reason: string } | undefined;
 	let shadowed: { criterionName: string; reason: string } | undefined;
+	const criteriaOutcomes: GateCriterionOutcome[] = [];
 
 	// Evaluate every criterion rather than stopping at the first match, so a PR that
 	// trips more than one shadow-mode criterion gets every hit recorded in the audit
@@ -49,6 +50,7 @@ export function runGate(
 		if (mode === "off") continue;
 
 		const { triggered, reason } = criterion.run(pr, config, existingPrs);
+		criteriaOutcomes.push({ criterionName: criterion.name, mode, triggered });
 		if (!triggered) continue;
 
 		if (mode === "enforce") {
@@ -60,10 +62,10 @@ export function runGate(
 	}
 
 	if (rejection !== undefined) {
-		return { prId: pr.id, outcome: { result: "reject", ...rejection } };
+		return { prId: pr.id, outcome: { result: "reject", ...rejection }, criteriaOutcomes };
 	}
 	if (shadowed !== undefined) {
-		return { prId: pr.id, outcome: { result: "shadow", ...shadowed } };
+		return { prId: pr.id, outcome: { result: "shadow", ...shadowed }, criteriaOutcomes };
 	}
-	return { prId: pr.id, outcome: { result: "pass" } };
+	return { prId: pr.id, outcome: { result: "pass" }, criteriaOutcomes };
 }

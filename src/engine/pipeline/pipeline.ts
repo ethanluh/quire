@@ -3,6 +3,7 @@ import type { GateConfig } from "../types/gate.js";
 import type { LlmProvider } from "../drift/effectList/provider.js";
 import type { StaticAnalyzer } from "../drift/footprint/analyzer.js";
 import type { AuditStore } from "../gate/auditStore.js";
+import type { InstrumentationSink } from "../types/instrumentation.js";
 import { runGate } from "../gate/gate.js";
 import { buildBundles, type BundleConfig } from "../bundle/bundler.js";
 import { runCheapScreen } from "../drift/screen.js";
@@ -31,6 +32,7 @@ export async function orchestratePipeline(
 	provider: LlmProvider,
 	analyzer: StaticAnalyzer,
 	auditStore: AuditStore,
+	instrumentation?: InstrumentationSink,
 ): Promise<PipelineResult> {
 	const passed: PullRequest[] = [];
 	const rejected: PullRequest[] = [];
@@ -45,6 +47,13 @@ export async function orchestratePipeline(
 			rejected.push(pr);
 		} else {
 			shadowed.push(pr);
+		}
+
+		if (instrumentation?.recordGate !== undefined) {
+			const recordedAt = new Date().toISOString();
+			for (const criterionOutcome of result.criteriaOutcomes) {
+				await instrumentation.recordGate({ prId: pr.id, recordedAt, ...criterionOutcome });
+			}
 		}
 	}
 
@@ -62,6 +71,16 @@ export async function orchestratePipeline(
 			for (const member of bundle.members) {
 				const verdict = await runCheapScreen(member, bundle, provider, analyzer);
 				driftVerdicts.set(member.id, verdict);
+
+				if (instrumentation?.recordScreen !== undefined) {
+					await instrumentation.recordScreen({
+						prId: member.id,
+						bundleId: bundle.id,
+						signalCount: verdict.status === "flagged" ? verdict.signals.length : 0,
+						flagged: verdict.status === "flagged",
+						recordedAt: new Date().toISOString(),
+					});
+				}
 			}
 			cards.push(buildReviewCard(bundle, driftVerdicts));
 		}
