@@ -61,6 +61,53 @@
     margin: 0 0 var(--space-4);
   }
 
+  .account-panel { max-width: 480px; }
+  .account-panel p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
+  .account-panel input {
+    width: 100%;
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    padding: var(--space-2) var(--space-3);
+  }
+  .account-panel input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .account-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
+    font-size: var(--text-sm);
+  }
+  .account-status .login { font-weight: var(--weight-medium); color: var(--color-text-primary); }
+
+  .repo-panel { margin-top: var(--space-6); }
+  .repo-panel h3 {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wider);
+    margin: 0 0 var(--space-3);
+  }
+  .repo-list { display: flex; flex-direction: column; gap: var(--space-2); max-height: 320px; overflow-y: auto; }
+  .repo-entry {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .repo-entry .repo-name { font-family: var(--font-mono); }
+  .repo-entry.selected { border-color: var(--color-brand); }
+  .repo-entry .badge-private { font-size: var(--text-xs); }
+
   .ingest-form { max-width: 600px; }
   .ingest-form p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
   .ingest-form textarea {
@@ -119,6 +166,7 @@
   <div class="tab" data-tab="shelf">Shelf</div>
   <div class="tab" data-tab="queue">Merge queue</div>
   <div class="tab" data-tab="ingest">Ingest</div>
+  <div class="tab" data-tab="account">Account</div>
 </div>
 
 <div id="pane-review" class="pane active">
@@ -152,6 +200,24 @@
   </div>
 </div>
 
+<div id="pane-account" class="pane">
+  <div class="account-panel">
+    <div class="account-status" id="account-status">Checking connection&hellip;</div>
+    <div id="account-connect-form">
+      <p>Connect a GitHub account so Quire can merge and revert PRs on its behalf. Paste a <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">personal access token</a> with repo access.</p>
+      <input type="password" id="account-token" placeholder="ghp_..." autocomplete="off">
+      <button class="btn btn-accept" style="margin-top:12px" id="btn-account-connect">Connect</button>
+    </div>
+    <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
+    <div id="account-result" class="result-msg" style="display:none"></div>
+
+    <div class="repo-panel" id="repo-panel" style="display:none">
+      <h3>Repository to work on</h3>
+      <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
+    </div>
+  </div>
+</div>
+
 <script>
 const tabs = document.querySelectorAll('.tab');
 tabs.forEach(tab => {
@@ -163,6 +229,7 @@ tabs.forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
+    if (tab.dataset.tab === 'account') loadAccount();
   });
 });
 
@@ -291,6 +358,92 @@ clearAllBtn.addEventListener('click', async () => {
   loadShelf();
   loadQueue();
 });
+
+// Connecting/disconnecting hits localhost-only, admin-header-gated endpoints, so the
+// controls are hidden when the UI isn't being served to the machine running Quire —
+// same treatment as the clear-all button above.
+const isLocalUi = LOCAL_HOSTNAMES.has(location.hostname);
+const accountConnectForm = document.getElementById('account-connect-form');
+const accountDisconnectBtn = document.getElementById('btn-account-disconnect');
+
+const repoPanel = document.getElementById('repo-panel');
+
+async function loadAccount() {
+  const statusEl = document.getElementById('account-status');
+  const resultEl = document.getElementById('account-result');
+  resultEl.style.display = 'none';
+  const status = await api('GET', '/account/github/status');
+  if (status.connected) {
+    statusEl.innerHTML = `Connected as <span class="login">${escapeHtml(status.login)}</span>`;
+    accountConnectForm.style.display = 'none';
+    accountDisconnectBtn.style.display = isLocalUi ? 'inline-block' : 'none';
+    if (isLocalUi) {
+      repoPanel.style.display = 'block';
+      loadRepos(status.selectedRepo);
+    } else {
+      repoPanel.style.display = 'none';
+    }
+  } else {
+    statusEl.textContent = isLocalUi
+      ? 'Not connected.'
+      : 'Not connected. Connecting is only available from the machine running Quire.';
+    accountConnectForm.style.display = isLocalUi ? 'block' : 'none';
+    accountDisconnectBtn.style.display = 'none';
+    repoPanel.style.display = 'none';
+  }
+}
+
+document.getElementById('btn-account-connect').addEventListener('click', async () => {
+  const tokenInput = document.getElementById('account-token');
+  const token = tokenInput.value.trim();
+  const resultEl = document.getElementById('account-result');
+  if (!token) return;
+  const result = await api('POST', '/account/github/connect', { token }, { 'X-Quire-Admin': '1' });
+  if (result.error) {
+    resultEl.textContent = 'Error: ' + result.error;
+    resultEl.className = 'result-msg error';
+    resultEl.style.display = 'block';
+    return;
+  }
+  tokenInput.value = '';
+  loadAccount();
+});
+
+accountDisconnectBtn.addEventListener('click', async () => {
+  if (!confirm('Disconnect the connected GitHub account?')) return;
+  await api('POST', '/account/github/disconnect', undefined, { 'X-Quire-Admin': '1' });
+  loadAccount();
+});
+
+function repoHtml(repo, selectedRepo) {
+  const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
+  const privacyBadge = repo.private ? '<span class="badge badge-neutral badge-private">Private</span>' : '';
+  return `<div class="repo-entry${isSelected ? ' selected' : ''}">
+    <span class="repo-name">${escapeHtml(repo.fullName)}</span>
+    ${privacyBadge}
+    ${isSelected
+      ? '<span class="badge badge-clean">Selected</span>'
+      : `<button class="btn btn-defer" onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">Select</button>`}
+  </div>`;
+}
+
+async function loadRepos(selectedRepo) {
+  const listEl = document.getElementById('repo-list');
+  const result = await api('GET', '/account/github/repos', undefined, { 'X-Quire-Admin': '1' });
+  if (result.error) {
+    listEl.innerHTML = `<div class="empty">${escapeHtml(result.error)}</div>`;
+    return;
+  }
+  const repos = result.repos || [];
+  listEl.innerHTML = repos.length
+    ? repos.map((r) => repoHtml(r, result.selected || selectedRepo)).join('')
+    : '<div class="empty">No repos found for this account.</div>';
+}
+
+async function selectRepo(owner, name) {
+  await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
+  loadAccount();
+}
 
 // Theme: "paper" (light, default) and "ink" (dark) — same tokens, see styles/tokens.css.
 const THEME_KEY = 'quire-theme';
