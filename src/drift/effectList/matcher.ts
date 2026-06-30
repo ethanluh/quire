@@ -45,6 +45,10 @@ export async function matchEffectsToDirection(
 		// fall through
 	}
 
-	// Fallback: treat all as matched (conservative — better than losing data)
-	return effects.map((clause) => ({ clause, matchedDirection: true }));
+	// Parse failure means the independent check never actually ran. Per INV-3,
+	// agreement may never clear a member, so an unverified clause must not be
+	// reported as matched — that would be indistinguishable from real agreement
+	// and would let a screen failure silently produce a "clean" verdict.
+	// Fail closed: treat every clause as an orphan so the screen flags instead.
+	return effects.map((clause) => ({ clause, matchedDirection: false }));
 }
