@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Quire is a triage tool for pull requests produced by a fleet of coding agents (a swarm). It groups PRs that pursue the same product direction into a **bundle**, so a human makes one directional decision per bundle instead of one per PR. The human accepts, defers, or rejects a bundle with a single gesture. Quire does **not** verify code correctness — that is assumed handled upstream.
 
+## Pull request discipline
+
+Whenever a PR addresses a GitHub issue, link the issue in the PR body using a closing keyword so GitHub closes it automatically on merge (e.g. `Closes #<number>`, `Fixes #<number>`, or `Resolves #<number>`). Never open a PR that addresses a tracked issue without this link.
+
 ## Code style
 
 - TypeScript strict mode throughout.
