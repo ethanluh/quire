@@ -241,6 +241,7 @@ let gestureInFlight = false;
 const STACK_DEPTH = 3;
 const SWIPE_X = 110;
 const SWIPE_Y = 100;
+const STAMP_DEADZONE = 24;
 
 async function loadReview() {
   reviewCards = await api('GET', '/bundles');
@@ -294,9 +295,22 @@ function attachDrag(el, card) {
     dy = e.clientY - startY;
     const rotate = dx / 18;
     el.style.transform = `translate(${dx}px, ${dy}px) rotate(${rotate}deg)`;
-    stampA.style.opacity = String(Math.min(Math.max(dx / SWIPE_X, 0), 1));
-    stampR.style.opacity = String(Math.min(Math.max(-dx / SWIPE_X, 0), 1));
-    stampD.style.opacity = dy > Math.abs(dx) ? String(Math.min(Math.max(dy / SWIPE_Y, 0), 1)) : '0';
+
+    // Exactly one stamp may show at a time: pick the single dominant
+    // direction for this drag and snap it fully on, with the other two
+    // fully off. No partial/fading opacity — that's what let two stamps
+    // appear at once on a diagonal drag.
+    let active = null;
+    if (dy > STAMP_DEADZONE && dy > Math.abs(dx)) {
+      active = 'defer';
+    } else if (dx > STAMP_DEADZONE) {
+      active = 'accept';
+    } else if (dx < -STAMP_DEADZONE) {
+      active = 'reject';
+    }
+    stampA.style.opacity = active === 'accept' ? '1' : '0';
+    stampR.style.opacity = active === 'reject' ? '1' : '0';
+    stampD.style.opacity = active === 'defer' ? '1' : '0';
   }
 
   function endDrag() {
