@@ -97,4 +97,9 @@ export class MergeQueue {
 		this.state = { entries: this.state.entries.filter((e) => e.bundleId !== bundleId) };
 		await this.persist();
 	}
+
+	async clear(): Promise<void> {
+		this.state = { entries: [] };
+		await this.persist();
+	}
 }

@@ -1,4 +1,4 @@
-import type { Bundle, ReviewCard } from "../types/core.js";
+import type { Bundle, ReviewCard } from "../../engine/types/core.js";
 
 export interface ServerState {
 	bundles: Map<string, Bundle>;

@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
-import { extractEffects } from "../../src/drift/effectList/extractor.js";
-import { matchEffectsToDirection } from "../../src/drift/effectList/matcher.js";
-import { runCheapScreen } from "../../src/drift/screen.js";
+import { extractEffects } from "../../src/engine/drift/effectList/extractor.js";
+import { matchEffectsToDirection } from "../../src/engine/drift/effectList/matcher.js";
+import { runCheapScreen } from "../../src/engine/drift/screen.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
-import type { Bundle, Diff, PullRequest } from "../../src/types/core.js";
+import type { Bundle, Diff, PullRequest } from "../../src/engine/types/core.js";
 
 const EMPTY_DIFF: Diff = { raw: "", hunks: [] };
 

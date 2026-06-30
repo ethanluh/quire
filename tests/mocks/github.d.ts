@@ -1,4 +1,4 @@
-import type { GitHubClient, RawPRPayload } from "../../src/github/client.js";
+import type { GitHubClient, RawPRPayload } from "../../src/engine/github/client.js";
 export declare class StubGitHubClient implements GitHubClient {
     private readonly prFixtures;
     readonly mergedPrs: string[];

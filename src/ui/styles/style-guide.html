@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quire — style guide</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<style>
+	body { padding: var(--space-8) var(--space-6) var(--space-16); }
+	.wrap { max-width: 880px; margin: 0 auto; }
+
+	.intro {
+		display: flex;
+		justify-content: space-between;
+		align-items: flex-start;
+		gap: var(--space-6);
+		margin-bottom: var(--space-12);
+	}
+	.intro p { color: var(--color-text-secondary); max-width: 46ch; line-height: var(--leading-relaxed); margin-top: var(--space-2); }
+
+	.theme-toggle {
+		display: flex;
+		gap: var(--space-1);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-pill);
+		padding: var(--space-1);
+		background: var(--color-surface-card);
+		flex-shrink: 0;
+	}
+	.theme-toggle button {
+		font-family: var(--font-body);
+		font-size: var(--text-xs);
+		font-weight: var(--weight-medium);
+		letter-spacing: var(--tracking-wide);
+		padding: var(--space-1) var(--space-3);
+		border-radius: var(--radius-pill);
+		border: none;
+		background: transparent;
+		color: var(--color-text-muted);
+		cursor: pointer;
+	}
+	.theme-toggle button.active { background: var(--color-brand); color: var(--color-surface-card); }
+
+	section { margin-bottom: var(--space-12); }
+	section > .label { display: block; margin-bottom: var(--space-4); }
+	section > p.note { color: var(--color-text-secondary); margin: var(--space-2) 0 var(--space-5); max-width: 60ch; line-height: var(--leading-relaxed); }
+
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+		gap: var(--space-3);
+	}
+
+	.swatch { border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--color-border); }
+	.swatch-fill { height: 64px; }
+	.swatch-meta { padding: var(--space-2) var(--space-3); background: var(--color-surface-card); }
+	.swatch-meta .name { font-size: var(--text-xs); font-weight: var(--weight-medium); display: block; }
+	.swatch-meta .hex  { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+	.type-row { display: flex; align-items: baseline; gap: var(--space-5); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-border); }
+	.type-row:last-child { border-bottom: none; }
+	.type-row .tag { width: 110px; flex-shrink: 0; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+	.type-row .sample { font-family: var(--font-display); }
+
+	.weight-row { display: flex; align-items: baseline; gap: var(--space-5); padding: var(--space-2) 0; }
+	.weight-row .tag { width: 110px; flex-shrink: 0; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+	.font-sample { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-4); background: var(--color-surface-card); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+	.font-sample .tag { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+	.font-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); }
+
+	.space-ruler { display: flex; align-items: flex-end; gap: var(--space-3); }
+	.space-ruler .block { background: var(--color-brand-wash); border: 1px solid var(--color-brand); border-radius: 2px; }
+	.space-ruler .col { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+	.space-ruler .tag { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+	.radius-row, .shadow-row { display: flex; gap: var(--space-5); flex-wrap: wrap; }
+	.demo-box { width: 96px; height: 64px; background: var(--color-surface-card); border: 1px solid var(--color-border); display: flex; align-items: flex-end; justify-content: center; padding-bottom: var(--space-2); }
+	.demo-box .tag { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+	.motion-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+	.motion-table th, .motion-table td { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-border); }
+	.motion-table th { color: var(--color-text-muted); font-weight: var(--weight-medium); font-size: var(--text-xs); letter-spacing: var(--tracking-wide); text-transform: uppercase; }
+	.motion-table td { font-family: var(--font-mono); }
+
+	.demo-stage { display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap; }
+	.demo-card { width: 220px; }
+	.replay-btn { font-family: var(--font-mono); }
+
+	.component-block { display: flex; flex-direction: column; gap: var(--space-4); }
+	.row { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+
+	.example-card-list { max-width: 360px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+	<div class="intro">
+		<div>
+			<h1 class="heading" style="font-size:var(--text-2xl)">Quire — style guide</h1>
+			<p>Derived from <code class="mono">docs/design-feel.md</code>: calm, deliberate, editorial. A worktable for gathered leaves, not a feed to swipe through. This page is the tokens in <code class="mono">tokens.css</code> and the recipes in <code class="mono">components.css</code>, made visible.</p>
+		</div>
+		<div class="theme-toggle" id="theme-toggle">
+			<button data-theme="paper" class="active">Paper</button>
+			<button data-theme="ink">Ink</button>
+		</div>
+	</div>
+
+	<section>
+		<span class="label">Color — surfaces &amp; ink</span>
+		<div class="grid" id="swatches-surface"></div>
+	</section>
+
+	<section>
+		<span class="label">Color — gesture &amp; state semantics</span>
+		<p class="note">Muted on purpose. A drift flag is a routine, high-recall screen result — not an alarm — so it gets an ochre "noted," not a red siren. Accept/defer/reject are three distinct, equally calm hues; none reads as more "correct" than the others.</p>
+		<div class="grid" id="swatches-state"></div>
+	</section>
+
+	<section>
+		<span class="label">Typography — families</span>
+		<p class="note">A literary serif carries judgment text written by a human-facing surface (the wordmark, the card's direction summary) — it should read as written, not computed. A humanist sans carries fast-scan UI. Monospace is reserved for IDs and other literal, technical strings.</p>
+		<div class="font-row">
+			<div class="font-sample">
+				<span class="tag">--font-display</span>
+				<span style="font-family:var(--font-display); font-size:var(--text-lg)">Add passwordless auth</span>
+			</div>
+			<div class="font-sample">
+				<span class="tag">--font-body</span>
+				<span style="font-family:var(--font-body); font-size:var(--text-lg)">Accept · Defer · Reject</span>
+			</div>
+			<div class="font-sample">
+				<span class="tag">--font-mono</span>
+				<span style="font-family:var(--font-mono); font-size:var(--text-lg)">bundle-4f2a</span>
+			</div>
+		</div>
+	</section>
+
+	<section>
+		<span class="label">Typography — scale</span>
+		<div id="type-scale"></div>
+	</section>
+
+	<section>
+		<span class="label">Typography — weight</span>
+		<div id="weight-scale"></div>
+	</section>
+
+	<section>
+		<span class="label">Spacing — 4px grid</span>
+		<div class="space-ruler" id="space-ruler"></div>
+	</section>
+
+	<section>
+		<span class="label">Radius &amp; elevation</span>
+		<p class="note">Soft but not bubbly — bound-paper edges, not app-icon corners. Shadows are a paper resting on a desk, not a glossy floating panel.</p>
+		<div class="radius-row" id="radius-row" style="margin-bottom:var(--space-5)"></div>
+		<div class="shadow-row" id="shadow-row"></div>
+	</section>
+
+	<section>
+		<span class="label">Motion</span>
+		<p class="note">Decelerating settle, never bounce/spring/elastic — nothing here should feel like a game piece landing. <code class="mono">--duration-shelf</code> is the longest on purpose: defer is the one gesture the spec asks to teach its meaning spatially.</p>
+		<table class="motion-table">
+			<thead><tr><th>Token</th><th>Value</th><th>Used for</th></tr></thead>
+			<tbody>
+				<tr><td>--duration-fast</td><td>120ms</td><td>button press feedback</td></tr>
+				<tr><td>--duration-base</td><td>200ms</td><td>tab switch, drift signal reveal</td></tr>
+				<tr><td>--duration-slow</td><td>360ms</td><td>card entrance, accept/reject exit</td></tr>
+				<tr><td>--duration-shelf</td><td>480ms</td><td>defer → drop into shelf tray</td></tr>
+				<tr><td>--ease-standard</td><td>cubic-bezier(0.4, 0, 0.2, 1)</td><td>interactive feedback</td></tr>
+				<tr><td>--ease-settle</td><td>cubic-bezier(0.16, 1, 0.3, 1)</td><td>entrances, the shelf drop</td></tr>
+			</tbody>
+		</table>
+
+		<div class="demo-stage" style="margin-top:var(--space-6)">
+			<div class="demo-card card" id="demo-card">
+				<div class="card-direction">Add passwordless auth</div>
+				<div class="row">
+					<span class="badge badge-neutral">Blast radius: 4 files</span>
+					<span class="badge badge-clean">Clean</span>
+				</div>
+			</div>
+			<div class="component-block">
+				<button class="btn btn-accept replay-btn" data-anim="leaving-right">Accept →</button>
+				<button class="btn btn-defer replay-btn" data-anim="dropping-to-shelf">Defer ↓</button>
+				<button class="btn btn-reject replay-btn" data-anim="leaving-left">Reject ←</button>
+				<button class="btn replay-btn" id="replay-settle" style="color:var(--color-text-secondary)">Replay entrance</button>
+			</div>
+		</div>
+	</section>
+
+	<section>
+		<span class="label">Components</span>
+		<div class="component-block">
+			<div class="row">
+				<button class="btn btn-accept">Accept</button>
+				<button class="btn btn-defer">Defer</button>
+				<button class="btn btn-reject">Reject</button>
+			</div>
+			<div class="row">
+				<span class="badge badge-neutral">Blast radius: 6 files</span>
+				<span class="badge badge-clean">Clean</span>
+				<span class="badge badge-flagged">Drift flagged</span>
+			</div>
+			<div class="tabs">
+				<div class="tab active">Review queue</div>
+				<div class="tab">Shelf</div>
+				<div class="tab">Merge queue</div>
+			</div>
+			<div class="example-card-list">
+				<div class="card">
+					<div class="card-direction">Migrate session storage to signed cookies</div>
+					<div class="row" style="margin-bottom:var(--space-2)">
+						<span class="badge badge-neutral">Blast radius: 11 files</span>
+						<span class="badge badge-flagged">Drift flagged</span>
+						<span class="badge badge-neutral">migration</span>
+					</div>
+					<div class="residual">Behavioral check not yet active; rare undeclared changes may not be caught.</div>
+				</div>
+			</div>
+			<div class="shelf-tray">
+				<span class="label">Deferred for closer inspection</span>
+				<p class="note" style="margin-top:var(--space-2)">A card lands here on a human's discretionary call, or because the drift check flagged it — the card's own badge says which, so the two reasons never collapse into one undifferentiated tray.</p>
+			</div>
+		</div>
+	</section>
+
+</div>
+
+<script>
+const PAPER_SURFACES = [
+	['--color-surface-page', '#efe8d8'],
+	['--color-surface-card', '#fbf6ec'],
+	['--color-surface-sunken', '#e6dec8'],
+	['--color-border', '#ddd2b3'],
+	['--color-text-primary', '#2c2620'],
+	['--color-text-secondary', '#5b5142'],
+	['--color-text-muted', '#8a7f68'],
+	['--color-brand', '#7c3b32'],
+];
+const STATE_TOKENS = [
+	['--color-accept', 'accept'],
+	['--color-defer', 'defer'],
+	['--color-reject', 'reject'],
+	['--color-flagged', 'flagged'],
+];
+
+function swatch(varName, label) {
+	return `<div class="swatch">
+		<div class="swatch-fill" style="background:var(${varName})"></div>
+		<div class="swatch-meta"><span class="name">${label}</span><span class="hex">${varName}</span></div>
+	</div>`;
+}
+
+document.getElementById('swatches-surface').innerHTML =
+	PAPER_SURFACES.map(([v]) => swatch(v, v.replace('--color-', ''))).join('');
+
+document.getElementById('swatches-state').innerHTML =
+	STATE_TOKENS.map(([v, label]) => swatch(v, label)).join('');
+
+const TYPE_SCALE = [
+	['--text-2xl', '36px · display only'],
+	['--text-xl', '26px · page title'],
+	['--text-lg', '20px · section header'],
+	['--text-md', '17px · card direction'],
+	['--text-base', '15px · body / UI default'],
+	['--text-sm', '13px · meta, badges'],
+	['--text-xs', '11px · micro labels'],
+];
+document.getElementById('type-scale').innerHTML = TYPE_SCALE.map(([v, desc]) =>
+	`<div class="type-row"><span class="tag">${v}</span><span class="sample" style="font-size:var(${v})">Gathered by direction</span><span class="tag">${desc}</span></div>`
+).join('');
+
+const WEIGHTS = [
+	['--weight-regular', 400],
+	['--weight-medium', 500],
+	['--weight-semibold', 600],
+	['--weight-bold', 700],
+];
+document.getElementById('weight-scale').innerHTML = WEIGHTS.map(([v, n]) =>
+	`<div class="weight-row"><span class="tag">${v}</span><span style="font-weight:var(${v}); font-size:var(--text-md)">Direction summary (${n})</span></div>`
+).join('');
+
+const SPACES = ['--space-1','--space-2','--space-3','--space-4','--space-5','--space-6','--space-8','--space-10','--space-12'];
+document.getElementById('space-ruler').innerHTML = SPACES.map(v =>
+	`<div class="col"><div class="block" style="width:24px; height:var(${v})"></div><span class="tag">${v.replace('--space-','')}</span></div>`
+).join('');
+
+const RADII = [['--radius-sm','sm'],['--radius-md','md'],['--radius-lg','lg'],['--radius-pill','pill']];
+document.getElementById('radius-row').innerHTML = RADII.map(([v, label]) =>
+	`<div class="demo-box" style="border-radius:var(${v})"><span class="tag">${label}</span></div>`
+).join('');
+
+const SHADOWS = [['--shadow-sm','sm'],['--shadow-md','md'],['--shadow-lg','lg']];
+document.getElementById('shadow-row').innerHTML = SHADOWS.map(([v, label]) =>
+	`<div class="demo-box" style="box-shadow:var(${v}); border-color:transparent"><span class="tag">${label}</span></div>`
+).join('');
+
+// Theme toggle
+document.getElementById('theme-toggle').addEventListener('click', (e) => {
+	const btn = e.target.closest('button');
+	if (!btn) return;
+	document.documentElement.setAttribute('data-theme', btn.dataset.theme);
+	document.querySelectorAll('#theme-toggle button').forEach(b => b.classList.toggle('active', b === btn));
+});
+
+// Motion demo replay
+const demoCard = document.getElementById('demo-card');
+document.querySelectorAll('.replay-btn[data-anim]').forEach(btn => {
+	btn.addEventListener('click', () => {
+		demoCard.className = 'demo-card card';
+		requestAnimationFrame(() => {
+			demoCard.classList.add(btn.dataset.anim);
+			demoCard.addEventListener('animationend', () => {
+				demoCard.className = 'demo-card card';
+			}, { once: true });
+		});
+	});
+});
+document.getElementById('replay-settle').addEventListener('click', () => {
+	demoCard.className = 'demo-card';
+	requestAnimationFrame(() => demoCard.classList.add('card'));
+});
+</script>
+</body>
+</html>

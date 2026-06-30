@@ -11,6 +11,7 @@
   header { padding: 16px 24px; border-bottom: 1px solid #1e2533; display: flex; align-items: center; gap: 12px; }
   header h1 { font-size: 18px; font-weight: 600; letter-spacing: 0.04em; }
   header .subtitle { font-size: 13px; color: #64748b; }
+  header .btn-clear-all { margin-left: auto; }
 
   .tabs { display: flex; gap: 2px; padding: 12px 24px 0; border-bottom: 1px solid #1e2533; }
   .tab { padding: 8px 16px; font-size: 13px; cursor: pointer; border-radius: 6px 6px 0 0; color: #64748b; border-bottom: 2px solid transparent; }
@@ -75,6 +76,8 @@
 <header>
   <h1>Quire</h1>
   <span class="subtitle">Direction triage for swarm PRs</span>
+  <a class="btn btn-defer" id="link-mobile" href="mobile.html" style="text-decoration:none;margin-left:auto">Mobile view</a>
+  <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
 </header>
 
 <div class="tabs">
@@ -129,8 +132,8 @@ tabs.forEach(tab => {
   });
 });
 
-async function api(method, path, body) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+async function api(method, path, body, extraHeaders) {
+  const opts = { method, headers: { 'Content-Type': 'application/json', ...(extraHeaders || {}) } };
   if (body !== undefined) opts.body = JSON.stringify(body);
   const r = await fetch(path, opts);
   return r.json();
@@ -238,7 +241,39 @@ document.getElementById('btn-ingest').addEventListener('click', async () => {
   }
 });
 
-loadReview();
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+const clearAllBtn = document.getElementById('btn-clear-all');
+if (LOCAL_HOSTNAMES.has(location.hostname)) {
+  clearAllBtn.style.display = 'inline-block';
+}
+clearAllBtn.addEventListener('click', async () => {
+  if (!confirm('Clear all stored content (bundles, shelf, merge queue, audit log)? This cannot be undone.')) return;
+  // Custom header forces a CORS preflight, so a cross-origin page can't trigger this via a bare fetch().
+  const result = await api('POST', '/admin/reset', undefined, { 'X-Quire-Admin': '1' });
+  if (result.error) {
+    alert('Could not clear data: ' + result.error);
+    return;
+  }
+  loadReview();
+  loadShelf();
+  loadQueue();
+});
+
+// Narrow viewports get the touch-gesture mobile view by default; ?desktop=1 opts out,
+// and the opt-out is remembered so a later reload/bookmark doesn't bounce back to mobile.
+// Checked before the initial load so a redirecting visit never fires a wasted fetch/render first.
+const VIEW_PREF_KEY = 'quire-view-pref';
+if (location.search.includes('desktop=1')) {
+  localStorage.setItem(VIEW_PREF_KEY, 'desktop');
+}
+if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop') {
+  location.replace('mobile.html');
+} else {
+  loadReview();
+}
+document.getElementById('link-mobile').addEventListener('click', () => {
+  localStorage.removeItem(VIEW_PREF_KEY);
+});
 </script>
 </body>
 </html>

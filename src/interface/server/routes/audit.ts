@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { AuditStore } from "../../gate/auditStore.js";
+import type { AuditStore } from "../../../engine/gate/auditStore.js";
 
 export function auditRouter(auditStore: AuditStore): Router {
 	const router = Router();

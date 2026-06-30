@@ -1,1 +1,1 @@
-export { StubStaticAnalyzer } from "../../src/drift/footprint/stubAnalyzer.js";
+export { StubStaticAnalyzer } from "../../src/engine/drift/footprint/stubAnalyzer.js";

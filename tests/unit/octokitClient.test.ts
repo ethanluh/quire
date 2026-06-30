@@ -1,6 +1,6 @@
 import { describe, it, expect, jest } from "@jest/globals";
 import type { Octokit } from "@octokit/rest";
-import { OctokitGitHubClient } from "../../src/github/octokitClient.js";
+import { OctokitGitHubClient } from "../../src/engine/github/octokitClient.js";
 
 interface FakeCheckRun {
 	status: "completed" | "in_progress" | "queued";
