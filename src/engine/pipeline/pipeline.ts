@@ -38,7 +38,7 @@ export async function orchestratePipeline(
 
 	// Gate each PR
 	for (const pr of prs) {
-		const result = runGate(pr, config.gate, auditStore, passed);
+		const result = await runGate(pr, config.gate, auditStore, passed);
 		if (result.outcome.result === "pass") {
 			passed.push(pr);
 		} else if (result.outcome.result === "reject") {

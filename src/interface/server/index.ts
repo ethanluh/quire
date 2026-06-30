@@ -2,7 +2,7 @@ import express from "express";
 import { Octokit } from "@octokit/rest";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AuditStore } from "../../engine/gate/auditStore.js";
+import { loadAuditStore } from "../../engine/gate/auditStore.js";
 import { MergeQueue } from "../../engine/queue/mergeQueue.js";
 import type { GitHubClient } from "../../engine/github/client.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
@@ -29,6 +29,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "../../../data");
 const QUEUE_PATH = join(DATA_DIR, "queue.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
+const AUDIT_LOG_PATH = join(DATA_DIR, "instrumentation/audit.ndjson");
 const ACCOUNT_PATH = join(DATA_DIR, "github-account.json");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
@@ -51,7 +52,7 @@ async function main(): Promise<void> {
 	// Serve static UI
 	app.use(express.static(join(__dirname, "../ui")));
 
-	const auditStore = new AuditStore();
+	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
 	const githubToken = process.env["GITHUB_TOKEN"];
 	const connectedAccount = await loadAccount(ACCOUNT_PATH);
 

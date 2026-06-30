@@ -1,4 +1,5 @@
 import type { PullRequest } from "../types/core.js";
+import { appendNdjson, readNdjson, truncateNdjson } from "../instrumentation/store.js";
 
 export interface AuditEntry {
 	pr: PullRequest;
@@ -8,17 +9,35 @@ export interface AuditEntry {
 }
 
 export class AuditStore {
-	private readonly entries: AuditEntry[] = [];
+	private readonly entries: AuditEntry[];
 
-	add(pr: PullRequest, criterionName: string, reason: string): void {
-		this.entries.push({ pr, criterionName, reason, addedAt: new Date().toISOString() });
+	constructor(
+		private readonly logPath?: string,
+		initialEntries: ReadonlyArray<AuditEntry> = [],
+	) {
+		this.entries = [...initialEntries];
+	}
+
+	async add(pr: PullRequest, criterionName: string, reason: string): Promise<void> {
+		const entry: AuditEntry = { pr, criterionName, reason, addedAt: new Date().toISOString() };
+		this.entries.push(entry);
+		if (this.logPath !== undefined) await appendNdjson(this.logPath, entry);
 	}
 
 	list(): ReadonlyArray<AuditEntry> {
 		return this.entries;
 	}
 
-	clear(): void {
+	async clear(): Promise<void> {
 		this.entries.length = 0;
+		if (this.logPath !== undefined) await truncateNdjson(this.logPath);
 	}
+}
+
+// Re-instantiates a store from its persisted NDJSON log (if any), so shadow-mode
+// audit history survives a process restart instead of resetting to empty (INV-6).
+export async function loadAuditStore(logPath?: string): Promise<AuditStore> {
+	if (logPath === undefined) return new AuditStore();
+	const entries = await readNdjson<AuditEntry>(logPath);
+	return new AuditStore(logPath, entries);
 }

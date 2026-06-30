@@ -31,12 +31,12 @@ const CRITERIA: ReadonlyArray<CriterionCheck> = [
 	},
 ];
 
-export function runGate(
+export async function runGate(
 	pr: PullRequest,
 	config: GateConfig,
 	auditStore: AuditStore,
 	existingPrs: ReadonlyArray<PullRequest> = [],
-): GateResult {
+): Promise<GateResult> {
 	let rejection: { criterionName: string; reason: string } | undefined;
 	let shadowed: { criterionName: string; reason: string } | undefined;
 
@@ -54,7 +54,7 @@ export function runGate(
 		if (mode === "enforce") {
 			rejection ??= { criterionName: criterion.name, reason };
 		} else if (mode === "shadow") {
-			auditStore.add(pr, criterion.name, reason);
+			await auditStore.add(pr, criterion.name, reason);
 			shadowed ??= { criterionName: criterion.name, reason };
 		}
 	}

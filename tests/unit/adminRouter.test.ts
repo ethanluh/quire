@@ -73,7 +73,7 @@ describe("adminRouter POST /reset", () => {
 		state.shelf.set("b-2", makeCard("b-2"));
 
 		const auditStore = new AuditStore();
-		auditStore.add(makePR(), "duplicate", "looks like a dup");
+		await auditStore.add(makePR(), "duplicate", "looks like a dup");
 
 		const queue = new MergeQueue(queuePath, new StubGitHubClient());
 		await queue.load();
