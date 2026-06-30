@@ -95,6 +95,7 @@
     letter-spacing: var(--tracking-wider);
     margin: 0 0 var(--space-3);
   }
+  .repo-search { margin-bottom: var(--space-3); }
   .repo-list { display: flex; flex-direction: column; gap: var(--space-2); max-height: 320px; overflow-y: auto; }
   .repo-entry {
     background: var(--color-surface-card);
@@ -220,6 +221,7 @@
 
     <div class="repo-panel" id="repo-panel" style="display:none">
       <h3>Repository to work on</h3>
+      <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
       <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
     </div>
   </div>
@@ -434,6 +436,24 @@ function repoHtml(repo, selectedRepo) {
   </div>`;
 }
 
+let loadedRepos = [];
+let loadedSelectedRepo = null;
+
+function renderRepoList() {
+  const listEl = document.getElementById('repo-list');
+  const query = document.getElementById('repo-search').value.trim().toLowerCase();
+  const repos = query
+    ? loadedRepos.filter((r) => r.fullName.toLowerCase().includes(query))
+    : loadedRepos;
+  if (!loadedRepos.length) {
+    listEl.innerHTML = '<div class="empty">No repos found for this account.</div>';
+  } else if (!repos.length) {
+    listEl.innerHTML = '<div class="empty">No repos match your search.</div>';
+  } else {
+    listEl.innerHTML = repos.map((r) => repoHtml(r, loadedSelectedRepo)).join('');
+  }
+}
+
 async function loadRepos(selectedRepo) {
   const listEl = document.getElementById('repo-list');
   const result = await api('GET', '/account/github/repos', undefined, { 'X-Quire-Admin': '1' });
@@ -441,11 +461,12 @@ async function loadRepos(selectedRepo) {
     listEl.innerHTML = `<div class="empty">${escapeHtml(result.error)}</div>`;
     return;
   }
-  const repos = result.repos || [];
-  listEl.innerHTML = repos.length
-    ? repos.map((r) => repoHtml(r, result.selected || selectedRepo)).join('')
-    : '<div class="empty">No repos found for this account.</div>';
+  loadedRepos = result.repos || [];
+  loadedSelectedRepo = result.selected || selectedRepo;
+  renderRepoList();
 }
+
+document.getElementById('repo-search').addEventListener('input', renderRepoList);
 
 async function selectRepo(owner, name) {
   await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
