@@ -1,5 +1,6 @@
 import type { Bundle, PullRequest } from "../types/core.js";
-import type { EmbeddingProvider } from "../drift/effectList/provider.js";
+import type { LlmProvider } from "../drift/effectList/provider.js";
+import { extractEffects } from "../drift/effectList/extractor.js";
 import { clusterPRs } from "./similarity.js";
 
 function stableId(prIds: ReadonlyArray<string>): string {
@@ -17,16 +18,28 @@ export interface BundleConfig {
 	similarityThreshold: number;
 }
 
+export interface BundleResult {
+	bundles: ReadonlyArray<Bundle>;
+	// Effects extracted blind to declaredDirection (INV-2) while clustering — handed
+	// back so the drift check can reuse them instead of re-extracting per member.
+	effectsByPr: ReadonlyMap<string, ReadonlyArray<string>>;
+}
+
 export async function buildBundles(
 	prs: ReadonlyArray<PullRequest>,
-	provider: EmbeddingProvider,
+	provider: LlmProvider,
 	config: BundleConfig,
-): Promise<ReadonlyArray<Bundle>> {
-	if (prs.length === 0) return [];
+): Promise<BundleResult> {
+	if (prs.length === 0) return { bundles: [], effectsByPr: new Map() };
 
-	const clusters = await clusterPRs(prs, provider, { threshold: config.similarityThreshold });
+	const effectsByPr = new Map<string, ReadonlyArray<string>>();
+	for (const pr of prs) {
+		effectsByPr.set(pr.id, await extractEffects(pr.diff, pr.testNamesChanged, provider));
+	}
 
-	return clusters.map((members): Bundle => {
+	const clusters = await clusterPRs(prs, effectsByPr, provider, { threshold: config.similarityThreshold });
+
+	const bundles = clusters.map((members): Bundle => {
 		const anchor = members[0];
 		if (anchor === undefined) throw new Error("Cluster must have at least one member");
 		return {
@@ -35,4 +48,6 @@ export async function buildBundles(
 			members,
 		};
 	});
+
+	return { bundles, effectsByPr };
 }

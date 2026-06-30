@@ -80,17 +80,15 @@ describe("runCheapScreen — INV-3: clean only when zero signals", () => {
 	});
 
 	it("returns clean when no orphans and no surprising symbols", async () => {
-		stub.queueCompletion('["adds OTP-based login"]'); // extractor
 		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP-based login", matchedDirection: true }])); // matcher
 		analyzer.setFootprint(["src/auth.ts"]);
 		const pr = makePR();
 		const bundle = makeBundle([pr]);
-		const verdict = await runCheapScreen(pr, bundle, stub, analyzer);
+		const verdict = await runCheapScreen(pr, bundle, ["adds OTP-based login"], stub, analyzer);
 		expect(verdict.status).toBe("clean");
 	});
 
 	it("flags when there is an orphan clause", async () => {
-		stub.queueCompletion('["adds OTP login", "silently enables global rate limiting"]');
 		stub.queueCompletion(JSON.stringify([
 			{ clause: "adds OTP login", matchedDirection: true },
 			{ clause: "silently enables global rate limiting", matchedDirection: false },
@@ -98,7 +96,9 @@ describe("runCheapScreen — INV-3: clean only when zero signals", () => {
 		analyzer.setFootprint(["src/auth.ts"]);
 		const pr = makePR();
 		const bundle = makeBundle([pr]);
-		const verdict = await runCheapScreen(pr, bundle, stub, analyzer);
+		const verdict = await runCheapScreen(
+			pr, bundle, ["adds OTP login", "silently enables global rate limiting"], stub, analyzer,
+		);
 		expect(verdict.status).toBe("flagged");
 		if (verdict.status === "flagged") {
 			const signal = verdict.signals.find(s => s.kind === "effectList");
@@ -107,13 +107,12 @@ describe("runCheapScreen — INV-3: clean only when zero signals", () => {
 	});
 
 	it("flags when a symbol is outside the expected footprint", async () => {
-		stub.queueCompletion('["adds OTP login"]');
 		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
 		analyzer.setFootprint(["src/auth.ts"]);
 		analyzer.setSymbols([{ name: "rateLimiter", filePath: "src/middleware.ts", kind: "export" }]);
 		const pr = makePR();
 		const bundle = makeBundle([pr]);
-		const verdict = await runCheapScreen(pr, bundle, stub, analyzer);
+		const verdict = await runCheapScreen(pr, bundle, ["adds OTP login"], stub, analyzer);
 		expect(verdict.status).toBe("flagged");
 		if (verdict.status === "flagged") {
 			const signal = verdict.signals.find(s => s.kind === "footprintAnomaly");
@@ -123,13 +122,12 @@ describe("runCheapScreen — INV-3: clean only when zero signals", () => {
 
 	it("does not return clean solely because all effects matched (INV-3)", async () => {
 		// Even if all effects match, footprint anomaly still flags
-		stub.queueCompletion('["adds OTP login"]');
 		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
 		analyzer.setFootprint(["src/auth.ts"]);
 		analyzer.setSymbols([{ name: "logger", filePath: "src/infra/logger.ts", kind: "export" }]);
 		const pr = makePR();
 		const bundle = makeBundle([pr]);
-		const verdict = await runCheapScreen(pr, bundle, stub, analyzer);
+		const verdict = await runCheapScreen(pr, bundle, ["adds OTP login"], stub, analyzer);
 		expect(verdict.status).toBe("flagged");
 	});
 });

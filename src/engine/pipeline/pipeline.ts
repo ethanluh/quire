@@ -82,12 +82,14 @@ export async function orchestratePipeline(
 	const bundles: Bundle[] = [];
 	const cards: ReviewCard[] = [];
 	try {
-		bundles.push(...(await buildBundles(passed, provider, config.bundle)));
+		const { bundles: builtBundles, effectsByPr } = await buildBundles(passed, provider, config.bundle);
+		bundles.push(...builtBundles);
 
 		for (const bundle of bundles) {
 			const driftVerdicts = new Map<string, DriftVerdict>();
 			for (const member of bundle.members) {
-				const verdict = await runCheapScreen(member, bundle, provider, analyzer);
+				const rawClauses = effectsByPr.get(member.id) ?? [];
+				const verdict = await runCheapScreen(member, bundle, rawClauses, provider, analyzer);
 				driftVerdicts.set(member.id, verdict);
 				await logSafely(() =>
 					sink?.logDriftScreen?.({

@@ -1,19 +1,19 @@
 import type { Bundle, DriftSignal, DriftVerdict, PullRequest } from "../types/core.js";
 import type { LlmProvider } from "./effectList/provider.js";
 import type { StaticAnalyzer } from "./footprint/analyzer.js";
-import { extractEffects } from "./effectList/extractor.js";
 import { matchEffectsToDirection } from "./effectList/matcher.js";
 
 export async function runCheapScreen(
 	pr: PullRequest,
 	bundle: Bundle,
+	// Extracted blind to declaredDirection (INV-2) by the caller, e.g. bundler's
+	// clustering pass — reused here rather than extracted twice.
+	rawClauses: ReadonlyArray<string>,
 	provider: LlmProvider,
 	analyzer: StaticAnalyzer,
 ): Promise<DriftVerdict> {
 	const signals: DriftSignal[] = [];
 
-	// Effect-list signal — extraction is blind to direction (INV-2)
-	const rawClauses = await extractEffects(pr.diff, pr.testNamesChanged, provider);
 	const effects = await matchEffectsToDirection(rawClauses, bundle.direction, provider);
 	const orphanClauses = effects
 		.filter((e) => !e.matchedDirection)
