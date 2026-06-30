@@ -21,6 +21,7 @@ function makePrResponse(body: string | null, overrides: Record<string, unknown> 
 
 function makeFakeOctokit(opts: {
 	pr?: ReturnType<typeof makePrResponse>;
+	listPrs?: ReadonlyArray<ReturnType<typeof makePrResponse>>;
 	diff?: string;
 	files?: ReadonlyArray<{ filename: string }>;
 	checkRuns?: ReadonlyArray<FakeCheckRun>;
@@ -33,7 +34,7 @@ function makeFakeOctokit(opts: {
 	});
 	const merge = jest.fn(async () => ({ data: {} }));
 	const listFiles = jest.fn(async () => ({ data: opts.files ?? [{ filename: "src/auth.ts" }] }));
-	const list = jest.fn(async () => ({ data: [pr] }));
+	const list = jest.fn(async () => ({ data: opts.listPrs ?? [pr] }));
 	const listForRef = jest.fn(async () => ({ data: opts.checkRuns ?? [{ status: "completed", conclusion: "success" }] }));
 	const graphql = jest.fn(async () => opts.graphqlResult ?? { revertPullRequest: { pullRequest: { url: "https://github.com/org/repo/pull/8" } } });
 
@@ -92,6 +93,28 @@ describe("OctokitGitHubClient", () => {
 			const client = new OctokitGitHubClient(octokit);
 			const payload = await client.getPullRequest("org", "repo", 7);
 			expect(payload.ciStatus).toBe("unknown");
+		});
+
+		it("reports failure when a check run has gone stale", async () => {
+			const { octokit } = makeFakeOctokit({ checkRuns: [{ status: "completed", conclusion: "stale" }] });
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.ciStatus).toBe("failure");
+		});
+	});
+
+	describe("listOpenPullRequests", () => {
+		it("maps every PR returned by the list endpoint", async () => {
+			const prA = makePrResponse("<!-- declared-direction: add passwordless auth -->", { id: 1, number: 5 });
+			const prB = makePrResponse("<!-- declared-direction: add rate limiting -->", { id: 2, number: 6 });
+			const { octokit } = makeFakeOctokit({ listPrs: [prA, prB] });
+			const client = new OctokitGitHubClient(octokit);
+			const payloads = await client.listOpenPullRequests("org", "repo");
+			expect(payloads.map((p) => p.number)).toEqual([5, 6]);
+			expect(payloads.map((p) => p.declaredDirection)).toEqual([
+				"add passwordless auth",
+				"add rate limiting",
+			]);
 		});
 	});
 

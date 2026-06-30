@@ -104,7 +104,7 @@ export class OctokitGitHubClient implements GitHubClient {
 		const checkRuns = await this.octokit.paginate(this.octokit.rest.checks.listForRef, { owner, repo, ref });
 		if (checkRuns.length === 0) return "unknown";
 		if (checkRuns.some((run) => run.status !== "completed")) return "pending";
-		const failed = new Set(["failure", "timed_out", "cancelled", "action_required"]);
+		const failed = new Set(["failure", "timed_out", "cancelled", "action_required", "stale"]);
 		if (checkRuns.some((run) => run.conclusion !== null && failed.has(run.conclusion))) return "failure";
 		return "success";
 	}
