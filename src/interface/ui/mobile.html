@@ -115,14 +115,22 @@
     font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--color-text-muted);
     text-transform: uppercase; letter-spacing: var(--tracking-wider); margin: 0 0 var(--space-3);
   }
+  .repo-search { margin-bottom: var(--space-3); }
   .repo-list { display: flex; flex-direction: column; gap: var(--space-2); }
   .repo-entry {
     background: var(--color-surface-card); border: 1px solid var(--color-border); border-radius: var(--radius-md);
     padding: var(--space-2) var(--space-3); font-size: var(--text-sm);
     display: flex; justify-content: space-between; align-items: center; gap: var(--space-2);
   }
-  .repo-entry .repo-name { font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .repo-entry .repo-name {
+    font-family: var(--font-mono); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .repo-entry.selected { border-color: var(--color-brand); }
+  .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 64px; justify-content: center; }
+  /* The blanket `.account-panel .btn { width: 100% }` rule above is meant for the
+     connect/disconnect buttons; without this override it also stretches each repo
+     row's "Select" button to fill the row, the bug this fixes. */
+  .repo-entry .btn { width: auto; margin-top: 0; padding: var(--space-2) var(--space-5); flex: 0 0 auto; }
 
   .empty { color: var(--color-text-faint); font-size: var(--text-base); padding: var(--space-10) 0; text-align: center; }
 
@@ -201,6 +209,7 @@
 
       <div class="repo-panel" id="repo-panel" style="display:none">
         <h3>Repository to work on</h3>
+        <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
         <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
       </div>
     </div>
@@ -586,12 +595,32 @@ accountDisconnectBtn.addEventListener('click', async () => {
 
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
+  const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
+    ${privacyBadge}
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isSelected
       ? '<span class="badge badge-clean">Selected</span>'
       : `<button class="btn btn-defer" onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">Select</button>`}
   </div>`;
+}
+
+let loadedRepos = [];
+let loadedSelectedRepo = null;
+
+function renderRepoList() {
+  const listEl = document.getElementById('repo-list');
+  const query = document.getElementById('repo-search').value.trim().toLowerCase();
+  const repos = query
+    ? loadedRepos.filter((r) => r.fullName.toLowerCase().includes(query))
+    : loadedRepos;
+  if (!loadedRepos.length) {
+    listEl.innerHTML = '<div class="empty">No repos found for this account.</div>';
+  } else if (!repos.length) {
+    listEl.innerHTML = '<div class="empty">No repos match your search.</div>';
+  } else {
+    listEl.innerHTML = repos.map((r) => repoHtml(r, loadedSelectedRepo)).join('');
+  }
 }
 
 async function loadRepos(selectedRepo) {
@@ -601,11 +630,12 @@ async function loadRepos(selectedRepo) {
     listEl.innerHTML = `<div class="empty">${escapeHtml(result.error)}</div>`;
     return;
   }
-  const repos = result.repos || [];
-  listEl.innerHTML = repos.length
-    ? repos.map((r) => repoHtml(r, result.selected || selectedRepo)).join('')
-    : '<div class="empty">No repos found for this account.</div>';
+  loadedRepos = result.repos || [];
+  loadedSelectedRepo = result.selected || selectedRepo;
+  renderRepoList();
 }
+
+document.getElementById('repo-search').addEventListener('input', renderRepoList);
 
 async function selectRepo(owner, name) {
   await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
