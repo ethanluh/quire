@@ -1,9 +1,12 @@
 import express from "express";
+import { Octokit } from "@octokit/rest";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AuditStore } from "../../engine/gate/auditStore.js";
 import { MergeQueue } from "../../engine/queue/mergeQueue.js";
+import type { GitHubClient } from "../../engine/github/client.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
+import { OctokitGitHubClient } from "../../engine/github/octokitClient.js";
 import { StubLlmProvider } from "../../engine/drift/effectList/stubProvider.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
@@ -43,7 +46,12 @@ async function main(): Promise<void> {
 	app.use(express.static(join(__dirname, "../ui")));
 
 	const auditStore = new AuditStore();
-	const github = new StubGitHubClient();
+	const githubToken = process.env["GITHUB_TOKEN"];
+	const useRealGithub = githubToken !== undefined && githubToken !== "";
+	const github: GitHubClient = useRealGithub
+		? new OctokitGitHubClient(new Octokit({ auth: githubToken }))
+		: new StubGitHubClient();
+	console.log(useRealGithub ? "GitHub client: octokit (GITHUB_TOKEN set)" : "GitHub client: stub (GITHUB_TOKEN not set)");
 	const queue = new MergeQueue(QUEUE_PATH, github);
 	await queue.load();
 
