@@ -4,6 +4,7 @@ import type { MergeQueue } from "../../queue/mergeQueue.js";
 import type { ServerState } from "../state.js";
 import { truncateNdjson } from "../../instrumentation/store.js";
 import { localOnly } from "../middleware/localOnly.js";
+import { requireAdminHeader } from "../middleware/requireAdminHeader.js";
 
 export function adminRouter(
 	state: ServerState,
@@ -13,7 +14,7 @@ export function adminRouter(
 ): Router {
 	const router = Router();
 
-	router.post("/reset", localOnly, async (_req, res, next) => {
+	router.post("/reset", localOnly, requireAdminHeader, async (_req, res, next) => {
 		try {
 			state.bundles.clear();
 			state.cards.clear();

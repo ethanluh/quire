@@ -41,10 +41,13 @@ function makeBundle(id: string): Bundle {
 	return { id, direction: "add passwordless auth", members: [] };
 }
 
-async function postReset(server: Server): Promise<{ status: number; body: { status?: string; error?: string } }> {
+async function postReset(
+	server: Server,
+	headers: Record<string, string> = { "X-Quire-Admin": "1" },
+): Promise<{ status: number; body: { status?: string; error?: string } }> {
 	const address = server.address();
 	if (address === null || typeof address === "string") throw new Error("no address");
-	const res = await fetch(`http://127.0.0.1:${address.port}/admin/reset`, { method: "POST" });
+	const res = await fetch(`http://127.0.0.1:${address.port}/admin/reset`, { method: "POST", headers });
 	return { status: res.status, body: (await res.json()) as { status?: string; error?: string } };
 }
 
@@ -91,5 +94,29 @@ describe("adminRouter POST /reset", () => {
 		expect(auditStore.list()).toHaveLength(0);
 		expect(await queue.listEntries()).toHaveLength(0);
 		expect(await readFile(deferLogPath, "utf8")).toBe("");
+	});
+
+	it("rejects a request missing the X-Quire-Admin header without clearing anything (CSRF guard)", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-admin-"));
+		const queuePath = join(dir, "queue.json");
+		const deferLogPath = join(dir, "instrumentation", "defers.ndjson");
+
+		const state = createServerState();
+		state.bundles.set("b-1", makeBundle("b-1"));
+
+		const auditStore = new AuditStore();
+		const queue = new MergeQueue(queuePath, new StubGitHubClient());
+		await queue.load();
+
+		const app = express();
+		app.use("/admin", adminRouter(state, auditStore, queue, deferLogPath));
+		server = app.listen(0);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		// Mirrors a bare cross-origin `fetch(url, { method: "POST" })`: no custom header.
+		const { status } = await postReset(server, {});
+
+		expect(status).toBe(403);
+		expect(state.bundles.size).toBe(1);
 	});
 });
