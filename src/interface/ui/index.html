@@ -4,79 +4,112 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Quire</title>
+<link rel="stylesheet" href="styles/tokens.css">
+<link rel="stylesheet" href="styles/components.css">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: system-ui, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+  header {
+    padding: var(--space-4) var(--space-6);
+    border-bottom: 1px solid var(--color-border);
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    background: var(--color-surface-card);
+  }
+  header h1 {
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    font-weight: var(--weight-semibold);
+    letter-spacing: var(--tracking-tight);
+    color: var(--color-text-primary);
+  }
+  header .subtitle { font-size: var(--text-sm); color: var(--color-text-muted); }
+  header .btn-theme { margin-left: auto; }
+  header a.btn { text-decoration: none; }
 
-  header { padding: 16px 24px; border-bottom: 1px solid #1e2533; display: flex; align-items: center; gap: 12px; }
-  header h1 { font-size: 18px; font-weight: 600; letter-spacing: 0.04em; }
-  header .subtitle { font-size: 13px; color: #64748b; }
-  header .btn-clear-all { margin-left: auto; }
+  .tabs { padding: var(--space-3) var(--space-6) 0; background: var(--color-surface-page); }
 
-  .tabs { display: flex; gap: 2px; padding: 12px 24px 0; border-bottom: 1px solid #1e2533; }
-  .tab { padding: 8px 16px; font-size: 13px; cursor: pointer; border-radius: 6px 6px 0 0; color: #64748b; border-bottom: 2px solid transparent; }
-  .tab.active { color: #e2e8f0; border-bottom-color: #6366f1; }
-
-  .pane { display: none; padding: 24px; }
+  .pane { display: none; padding: var(--space-6); }
   .pane.active { display: block; }
 
-  .card-list { display: flex; flex-direction: column; gap: 16px; max-width: 720px; }
+  .card-list { display: flex; flex-direction: column; gap: var(--space-4); max-width: 720px; }
 
-  .card {
-    background: #161b27;
-    border: 1px solid #1e2533;
-    border-radius: 10px;
-    padding: 20px;
+  .card-meta { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+
+  /* Drift signals read as a noted observation, not a warning. */
+  .drift-signals {
+    margin-top: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-surface-sunken);
+    border-left: 2px solid var(--color-flagged);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
   }
-  .card.flagged { border-left: 3px solid #ef4444; }
-  .card.clean { border-left: 3px solid #22c55e; }
+  .drift-signals strong { color: var(--color-text-primary); font-weight: var(--weight-medium); }
+  .drift-signals ul { padding-left: var(--space-4); margin: var(--space-1) 0 0; }
+  .drift-signals li { margin-top: var(--space-1); }
 
-  .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
-  .card-direction { font-size: 15px; font-weight: 600; line-height: 1.4; flex: 1; margin-right: 12px; }
-  .card-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-  .badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 500; }
-  .badge-blast { background: #1e2533; color: #94a3b8; }
-  .badge-flag { background: #2d1f0e; color: #f59e0b; }
-  .badge-drift-clean { background: #0d2016; color: #22c55e; }
-  .badge-drift-flagged { background: #2d0d0d; color: #ef4444; }
+  .gestures { display: flex; gap: var(--space-2); margin-top: var(--space-4); }
 
-  .drift-signals { margin-top: 8px; padding: 10px 12px; background: #1a1020; border-radius: 6px; font-size: 12px; color: #e879f9; }
-  .drift-signals ul { padding-left: 16px; margin-top: 4px; }
-  .drift-signals li { margin-top: 3px; }
-
-  .residual { margin-top: 10px; font-size: 11px; color: #475569; font-style: italic; }
-
-  .gestures { display: flex; gap: 8px; margin-top: 14px; }
-  .btn { padding: 7px 18px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: opacity 0.15s; }
-  .btn:hover { opacity: 0.85; }
-  .btn-accept { background: #22c55e; color: #000; }
-  .btn-defer  { background: #6366f1; color: #fff; }
-  .btn-reject { background: #ef4444; color: #fff; }
-
-  .shelf-tray { background: #1a1f2e; border: 1px dashed #2d3748; border-radius: 10px; padding: 16px 20px; }
-  .shelf-tray h3 { font-size: 13px; color: #64748b; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .shelf-tray h3 {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wider);
+    margin: 0 0 var(--space-4);
+  }
 
   .ingest-form { max-width: 600px; }
-  .ingest-form textarea { width: 100%; height: 220px; background: #161b27; border: 1px solid #1e2533; border-radius: 8px; color: #e2e8f0; font-family: monospace; font-size: 12px; padding: 12px; resize: vertical; }
-  .ingest-form .btn-ingest { margin-top: 10px; background: #6366f1; color: #fff; padding: 9px 22px; font-size: 13px; border-radius: 6px; border: none; cursor: pointer; }
-  .result-msg { margin-top: 10px; font-size: 13px; color: #22c55e; }
-  .result-msg.error { color: #ef4444; }
+  .ingest-form p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
+  .ingest-form textarea {
+    width: 100%;
+    height: 220px;
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    padding: var(--space-3);
+    resize: vertical;
+  }
+  .ingest-form textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .ingest-form .btn-ingest { margin-top: var(--space-3); }
+  .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
+  .result-msg.error { color: var(--color-reject); }
 
-  .empty { color: #475569; font-size: 14px; padding: 40px 0; text-align: center; }
-  .queue-list { display: flex; flex-direction: column; gap: 8px; max-width: 600px; }
-  .queue-entry { background: #161b27; border: 1px solid #1e2533; border-radius: 8px; padding: 14px 18px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
-  .queue-entry .entry-id { font-family: monospace; color: #94a3b8; font-size: 11px; }
-  .status-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
-  .status-queued  { background: #1e2533; color: #94a3b8; }
-  .status-landing { background: #2d1f0e; color: #f59e0b; }
-  .status-landed  { background: #0d2016; color: #22c55e; }
+  .empty { color: var(--color-text-faint); font-size: var(--text-base); padding: var(--space-10) 0; text-align: center; }
+
+  .queue-list { display: flex; flex-direction: column; gap: var(--space-2); max-width: 600px; }
+  .queue-entry {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
+
+  .status-badge {
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-pill);
+  }
+  .status-queued  { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
+  .status-landed  { background: var(--color-accept-wash); color: var(--color-accept); }
 </style>
 </head>
 <body>
 <header>
   <h1>Quire</h1>
   <span class="subtitle">Direction triage for swarm PRs</span>
-  <a class="btn btn-defer" id="link-mobile" href="mobile.html" style="text-decoration:none;margin-left:auto">Mobile view</a>
+  <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+  <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
   <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
 </header>
 
@@ -111,9 +144,9 @@
 
 <div id="pane-ingest" class="pane">
   <div class="ingest-form">
-    <p style="font-size:13px;color:#64748b;margin-bottom:10px">Paste a PR payload (or array of payloads) as JSON:</p>
+    <p>Paste a PR payload (or array of payloads) as JSON:</p>
     <textarea id="ingest-payload" placeholder='{"id":"pr-1","repoOwner":"org","repoName":"repo","number":1,"declaredDirection":"add passwordless auth","diff":{"raw":"...","hunks":[]},"ciStatus":"success"}'></textarea>
-    <button class="btn-ingest" id="btn-ingest">Ingest</button>
+    <button class="btn btn-defer btn-ingest" id="btn-ingest">Ingest</button>
     <div id="ingest-result" class="result-msg" style="display:none"></div>
   </div>
 </div>
@@ -149,8 +182,8 @@ function escapeHtml(value) {
 }
 
 function driftBadge(drift) {
-  if (drift.status === 'clean') return '<span class="badge badge-drift-clean">Clean</span>';
-  return '<span class="badge badge-drift-flagged">Drift flagged</span>';
+  if (drift.status === 'clean') return '<span class="badge badge-clean">Clean</span>';
+  return '<span class="badge badge-flagged">Drift flagged</span>';
 }
 
 function renderSignals(drift) {
@@ -160,22 +193,21 @@ function renderSignals(drift) {
     if (s.kind === 'footprintAnomaly') return `Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
     return escapeHtml(s.description);
   });
-  return `<div class="drift-signals"><strong>Drift signals</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
+  return `<div class="drift-signals"><strong>Drift signals (noted, not an error)</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
 }
 
 function cardHtml(card, shelfMode) {
-  const cls = card.drift.status === 'flagged' ? 'flagged' : 'clean';
-  const flags = card.flags.map(f => `<span class="badge badge-flag">${escapeHtml(f)}</span>`).join('');
+  const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
   const bundleId = escapeHtml(card.bundleId);
   const gestures = shelfMode
     ? `<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
     : `<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept</button>
        <button class="btn btn-defer"  onclick="gesture('${bundleId}','defer')">Defer</button>
        <button class="btn btn-reject" onclick="gesture('${bundleId}','reject')">Reject</button>`;
-  return `<div class="card ${cls}" id="card-${bundleId}">
-    <div class="card-header"><div class="card-direction">${escapeHtml(card.directionSummary)}</div></div>
+  return `<div class="card" id="card-${bundleId}">
+    <div class="card-direction">${escapeHtml(card.directionSummary)}</div>
     <div class="card-meta">
-      <span class="badge badge-blast">Blast radius: ${card.blastRadius} files</span>
+      <span class="badge badge-neutral">Blast radius: ${card.blastRadius} files</span>
       ${driftBadge(card.drift)} ${flags}
     </div>
     ${renderSignals(card.drift)}
@@ -257,6 +289,20 @@ clearAllBtn.addEventListener('click', async () => {
   loadReview();
   loadShelf();
   loadQueue();
+});
+
+// Theme: "paper" (light, default) and "ink" (dark) — same tokens, see styles/tokens.css.
+const THEME_KEY = 'quire-theme';
+const themeBtn = document.getElementById('btn-theme');
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  themeBtn.textContent = theme === 'ink' ? 'Light' : 'Dark';
+}
+applyTheme(localStorage.getItem(THEME_KEY) === 'ink' ? 'ink' : 'paper');
+themeBtn.addEventListener('click', () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
 });
 
 // Narrow viewports get the touch-gesture mobile view by default; ?desktop=1 opts out,
