@@ -37,4 +37,5 @@ The value proposition rests on a single bargain: the human stops checking correc
 ## Docs
 
 - [`docs/engineering-handoff.md`](docs/engineering-handoff.md) — full build spec: architecture, design invariants, drift-detection design, data model, phases, prior art, and success metrics.
+- [`docs/design-feel.md`](docs/design-feel.md) — the intended visual/interaction tone, inferred from the product's stated values, for use when styling the UI.
 - [`CLAUDE.md`](CLAUDE.md) — guidance for Claude Code agents working in this repo.
