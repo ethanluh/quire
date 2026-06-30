@@ -166,9 +166,9 @@ function cardHtml(card, shelfMode) {
   const bundleId = escapeHtml(card.bundleId);
   const gestures = shelfMode
     ? `<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
-    : `<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept →</button>
-       <button class="btn btn-defer"  onclick="gesture('${bundleId}','defer')">Defer ↓</button>
-       <button class="btn btn-reject" onclick="gesture('${bundleId}','reject')">Reject ←</button>`;
+    : `<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept</button>
+       <button class="btn btn-defer"  onclick="gesture('${bundleId}','defer')">Defer</button>
+       <button class="btn btn-reject" onclick="gesture('${bundleId}','reject')">Reject</button>`;
   return `<div class="card ${cls}" id="card-${bundleId}">
     <div class="card-header"><div class="card-direction">${escapeHtml(card.directionSummary)}</div></div>
     <div class="card-meta">
