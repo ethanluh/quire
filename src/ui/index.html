@@ -136,6 +136,15 @@ async function api(method, path, body) {
   return r.json();
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function driftBadge(drift) {
   if (drift.status === 'clean') return '<span class="badge badge-drift-clean">Clean</span>';
   return '<span class="badge badge-drift-flagged">Drift flagged</span>';
@@ -144,29 +153,30 @@ function driftBadge(drift) {
 function renderSignals(drift) {
   if (drift.status !== 'flagged') return '';
   const items = drift.signals.map(s => {
-    if (s.kind === 'effectList') return `Orphan effects: ${s.orphanClauses.join(', ')}`;
-    if (s.kind === 'footprintAnomaly') return `Surprising symbols: ${s.surprisingSymbols.map(x => x.name).join(', ')}`;
-    return s.description;
+    if (s.kind === 'effectList') return `Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
+    if (s.kind === 'footprintAnomaly') return `Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
+    return escapeHtml(s.description);
   });
   return `<div class="drift-signals"><strong>Drift signals</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
 }
 
 function cardHtml(card, shelfMode) {
   const cls = card.drift.status === 'flagged' ? 'flagged' : 'clean';
-  const flags = card.flags.map(f => `<span class="badge badge-flag">${f}</span>`).join('');
+  const flags = card.flags.map(f => `<span class="badge badge-flag">${escapeHtml(f)}</span>`).join('');
+  const bundleId = escapeHtml(card.bundleId);
   const gestures = shelfMode
-    ? `<button class="btn btn-accept" onclick="promote('${card.bundleId}')">Unshelf</button>`
-    : `<button class="btn btn-accept" onclick="gesture('${card.bundleId}','accept')">Accept →</button>
-       <button class="btn btn-defer"  onclick="gesture('${card.bundleId}','defer')">Defer ↓</button>
-       <button class="btn btn-reject" onclick="gesture('${card.bundleId}','reject')">Reject ←</button>`;
-  return `<div class="card ${cls}" id="card-${card.bundleId}">
-    <div class="card-header"><div class="card-direction">${card.directionSummary}</div></div>
+    ? `<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
+    : `<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept →</button>
+       <button class="btn btn-defer"  onclick="gesture('${bundleId}','defer')">Defer ↓</button>
+       <button class="btn btn-reject" onclick="gesture('${bundleId}','reject')">Reject ←</button>`;
+  return `<div class="card ${cls}" id="card-${bundleId}">
+    <div class="card-header"><div class="card-direction">${escapeHtml(card.directionSummary)}</div></div>
     <div class="card-meta">
       <span class="badge badge-blast">Blast radius: ${card.blastRadius} files</span>
       ${driftBadge(card.drift)} ${flags}
     </div>
     ${renderSignals(card.drift)}
-    <div class="residual">${card.residualDisclosure}</div>
+    <div class="residual">${escapeHtml(card.residualDisclosure)}</div>
     <div class="gestures">${gestures}</div>
   </div>`;
 }
@@ -188,8 +198,8 @@ async function loadQueue() {
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry">
-    <div><div>${e.bundle.direction}</div><div class="entry-id">${e.bundleId}</div></div>
-    <span class="status-badge status-${e.status}">${e.status}</span>
+    <div><div>${escapeHtml(e.bundle.direction)}</div><div class="entry-id">${escapeHtml(e.bundleId)}</div></div>
+    <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
   </div>`).join('');
 }
 
