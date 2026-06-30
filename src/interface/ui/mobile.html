@@ -298,7 +298,14 @@ function attachDrag(el, card) {
     // instead of following the raw 2D finger position. Whichever axis
     // dominates the drag wins; the other axis is pinned to 0, and an
     // upward drag is clamped to 0 rather than allowed negative.
-    if (rawDy > Math.abs(rawDx)) {
+    //
+    // A real downward thumb swipe drifts sideways toward whichever hand
+    // is holding the phone (bottom-right for one-handed right-handed use,
+    // bottom-left for left-handed), so the down axis gets a wider cone —
+    // 60 degrees off vertical rather than 45 — applied symmetrically so
+    // neither hand is favored over the other.
+    const DOWN_HALF_ANGLE_RATIO = 1 / Math.sqrt(3); // tan(30deg): cone is 60deg off vertical on each side
+    if (rawDy > Math.abs(rawDx) * DOWN_HALF_ANGLE_RATIO) {
       dx = 0;
       dy = Math.max(0, rawDy);
     } else {
