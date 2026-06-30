@@ -56,4 +56,20 @@ describe("runGate", () => {
 		const result = runGate(makePR({ id: "pr-1" }), config, audit, existing);
 		expect(result.outcome.result).toBe("reject");
 	});
+
+	it("records a per-criterion decision only for criteria not in off mode", () => {
+		const config: GateConfig = {
+			criteria: [
+				{ name: "buildFailure", mode: "enforce" },
+				{ name: "outOfScope", mode: "off" },
+				{ name: "duplicate", mode: "shadow" },
+			],
+		};
+		const result = runGate(makePR({ ciStatus: "failure" }), config, audit);
+		expect(result.decisions).toHaveLength(2);
+		const byName = Object.fromEntries(result.decisions.map((d) => [d.criterionName, d]));
+		expect(byName["buildFailure"]).toMatchObject({ mode: "enforce", triggered: true });
+		expect(byName["duplicate"]).toMatchObject({ mode: "shadow", triggered: false });
+		expect(byName["outOfScope"]).toBeUndefined();
+	});
 });

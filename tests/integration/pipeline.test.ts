@@ -5,6 +5,10 @@ import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { PullRequest } from "../../src/engine/types/core.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
+import type {
+	GateDecisionLog,
+	DriftScreenLog,
+} from "../../src/engine/types/instrumentation.js";
 
 function makePR(id: string, direction: string, overrides: Partial<PullRequest> = {}): PullRequest {
 	return {
@@ -104,5 +108,42 @@ describe("orchestratePipeline — integration", () => {
 				expect(msg.content).not.toContain(direction);
 			}
 		}
+	});
+
+	it("runs without a sink (instrumentation is optional, not a hard dependency)", async () => {
+		stub.queueCompletion('["adds OTP login"]');
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		analyzer.setFootprint([]);
+
+		const prs = [makePR("pr-1", "add passwordless auth")];
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore);
+		expect(result.cards.length).toBe(1);
+	});
+
+	it("reports gate decisions and drift-screen results through the instrumentation sink", async () => {
+		stub.queueCompletion('["adds OTP login"]');
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		analyzer.setFootprint([]);
+
+		const gateDecisions: GateDecisionLog[] = [];
+		const driftScreens: DriftScreenLog[] = [];
+		const sink = {
+			logGateDecision: (entry: GateDecisionLog) => {
+				gateDecisions.push(entry);
+			},
+			logDriftScreen: (entry: DriftScreenLog) => {
+				driftScreens.push(entry);
+			},
+		};
+
+		const prs = [makePR("pr-1", "add passwordless auth")];
+		await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore, sink);
+
+		expect(gateDecisions).toEqual([
+			expect.objectContaining({ prId: "pr-1", criterionName: "buildFailure", mode: "enforce", triggered: false }),
+		]);
+		expect(driftScreens).toEqual([
+			expect.objectContaining({ bundleId: expect.any(String), prId: "pr-1", signalCount: 0, flagged: false }),
+		]);
 	});
 });

@@ -1,5 +1,6 @@
 import type { Bundle, DriftVerdict, PullRequest, ReviewCard } from "../types/core.js";
 import type { GateConfig } from "../types/gate.js";
+import type { InstrumentationSink } from "../types/instrumentation.js";
 import type { LlmProvider } from "../drift/effectList/provider.js";
 import type { StaticAnalyzer } from "../drift/footprint/analyzer.js";
 import type { AuditStore } from "../gate/auditStore.js";
@@ -31,6 +32,9 @@ export async function orchestratePipeline(
 	provider: LlmProvider,
 	analyzer: StaticAnalyzer,
 	auditStore: AuditStore,
+	// Optional: instrumentation is a pluggable add-on, not a hard dependency for the
+	// pipeline to run. Omitting it (or the caller's sink lacking a method) is a no-op.
+	sink?: InstrumentationSink,
 ): Promise<PipelineResult> {
 	const passed: PullRequest[] = [];
 	const rejected: PullRequest[] = [];
@@ -39,6 +43,9 @@ export async function orchestratePipeline(
 	// Gate each PR
 	for (const pr of prs) {
 		const result = runGate(pr, config.gate, auditStore, passed);
+		for (const decision of result.decisions) {
+			await sink?.logGateDecision?.(decision);
+		}
 		if (result.outcome.result === "pass") {
 			passed.push(pr);
 		} else if (result.outcome.result === "reject") {
@@ -62,6 +69,13 @@ export async function orchestratePipeline(
 			for (const member of bundle.members) {
 				const verdict = await runCheapScreen(member, bundle, provider, analyzer);
 				driftVerdicts.set(member.id, verdict);
+				await sink?.logDriftScreen?.({
+					bundleId: bundle.id,
+					prId: member.id,
+					signalCount: verdict.status === "flagged" ? verdict.signals.length : 0,
+					flagged: verdict.status === "flagged",
+					recordedAt: new Date().toISOString(),
+				});
 			}
 			cards.push(buildReviewCard(bundle, driftVerdicts));
 		}

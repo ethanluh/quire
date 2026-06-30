@@ -1,5 +1,9 @@
 import type { ReviewCard } from "../types/core.js";
-import type { DeferLog, HumanFinding } from "../types/instrumentation.js";
+import type {
+	DeferLog,
+	HumanFinding,
+	InstrumentationSink,
+} from "../types/instrumentation.js";
 import { appendNdjson } from "./store.js";
 
 export async function logDefer(
@@ -17,4 +21,22 @@ export async function logDefer(
 
 export async function logHumanFinding(logPath: string, finding: HumanFinding): Promise<void> {
 	await appendNdjson(logPath, finding);
+}
+
+export interface NdjsonInstrumentationPaths {
+	gateLogPath: string;
+	driftScreenLogPath: string;
+}
+
+// The pluggable sink the pipeline calls into for gate/drift-screen logging (see
+// types/instrumentation.ts). NDJSON is the same on-disk format as the existing
+// defer log; swap this factory out for a different InstrumentationSink without
+// touching the pipeline.
+export function createNdjsonInstrumentationSink(
+	paths: NdjsonInstrumentationPaths,
+): InstrumentationSink {
+	return {
+		logGateDecision: (entry) => appendNdjson(paths.gateLogPath, entry),
+		logDriftScreen: (entry) => appendNdjson(paths.driftScreenLogPath, entry),
+	};
 }

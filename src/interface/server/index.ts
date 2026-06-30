@@ -23,12 +23,15 @@ import { auditRouter } from "./routes/audit.js";
 import { adminRouter } from "./routes/admin.js";
 import { githubAccountRouter } from "./routes/account.js";
 import { errorHandler } from "./middleware/errors.js";
+import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "../../../data");
 const QUEUE_PATH = join(DATA_DIR, "queue.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
+const GATE_LOG_PATH = join(DATA_DIR, "instrumentation/gate-decisions.ndjson");
+const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjson");
 const ACCOUNT_PATH = join(DATA_DIR, "github-account.json");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
@@ -75,8 +78,15 @@ async function main(): Promise<void> {
 	const provider = new StubLlmProvider();
 	const analyzer = new TypeScriptAnalyzer();
 	const state = createServerState();
+	const instrumentationSink = createNdjsonInstrumentationSink({
+		gateLogPath: GATE_LOG_PATH,
+		driftScreenLogPath: DRIFT_SCREEN_LOG_PATH,
+	});
 
-	app.use("/prs", prsRouter(state, pipelineConfig, provider, analyzer, auditStore, queue));
+	app.use(
+		"/prs",
+		prsRouter(state, pipelineConfig, provider, analyzer, auditStore, queue, instrumentationSink),
+	);
 	app.use("/bundles", bundlesRouter(state));
 	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH));
 	app.use("/queue", queueRouter(queue));
