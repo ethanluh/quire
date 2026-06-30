@@ -48,17 +48,19 @@ describe("gesturesRouter — review queue removal", () => {
 	let baseUrl: string;
 	let state: ReturnType<typeof createServerState>;
 	let dataDir: string;
+	let github: StubGitHubClient;
 
 	beforeEach(async () => {
 		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
 		state = createServerState();
-		const queue = new MergeQueue(join(dataDir, "queue.json"), new StubGitHubClient());
+		github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dataDir, "queue.json"), github);
 		await queue.load();
 
 		const app = express();
 		app.use(express.json());
 		app.use("/bundles", bundlesRouter(state));
-		app.use("/bundles", gesturesRouter(state, queue, join(dataDir, "defers.ndjson")));
+		app.use("/bundles", gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github));
 
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, resolve);
@@ -112,5 +114,44 @@ describe("gesturesRouter — review queue removal", () => {
 		const cards = await (await fetch(`${baseUrl}/bundles`)).json();
 		expect(cards).toEqual([]);
 		expect(state.shelf.has("b-3")).toBe(true);
+	});
+
+	it("posts a review card comment to each member PR on accept", async () => {
+		state.bundles.set("b-4", makeBundle("b-4"));
+		state.cards.set("b-4", makeCard("b-4"));
+
+		await gesture("b-4", "accept");
+
+		expect(github.postedReviewCardComments).toEqual([
+			expect.objectContaining({
+				owner: "org",
+				repo: "repo",
+				prNumber: 1,
+				action: "accept",
+				card: makeCard("b-4"),
+			}),
+		]);
+	});
+
+	it("posts a review card comment to each member PR on reject", async () => {
+		state.bundles.set("b-5", makeBundle("b-5"));
+		state.cards.set("b-5", makeCard("b-5"));
+
+		await gesture("b-5", "reject");
+
+		expect(github.postedReviewCardComments).toEqual([
+			expect.objectContaining({ owner: "org", repo: "repo", prNumber: 1, action: "reject" }),
+		]);
+	});
+
+	it("posts a review card comment to each member PR on defer", async () => {
+		state.bundles.set("b-6", makeBundle("b-6"));
+		state.cards.set("b-6", makeCard("b-6"));
+
+		await gesture("b-6", "defer");
+
+		expect(github.postedReviewCardComments).toEqual([
+			expect.objectContaining({ owner: "org", repo: "repo", prNumber: 1, action: "defer" }),
+		]);
 	});
 });

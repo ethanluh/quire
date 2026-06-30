@@ -32,7 +32,7 @@ function makeFakeOctokit(opts: {
 	checkRuns?: ReadonlyArray<FakeCheckRun>;
 	combinedStatus?: FakeCombinedStatus;
 	graphqlResult?: unknown;
-}): { octokit: Octokit; merge: jest.Mock; graphql: jest.Mock } {
+}): { octokit: Octokit; merge: jest.Mock; graphql: jest.Mock; createComment: jest.Mock } {
 	const pr = opts.pr ?? makePrResponse("<!-- declared-direction: add passwordless auth -->");
 	const get = jest.fn(async (params: { mediaType?: { format: string } }) => {
 		if (params.mediaType?.format === "diff") return { data: opts.diff ?? "diff --git a/x b/x" };
@@ -46,6 +46,7 @@ function makeFakeOctokit(opts: {
 		data: opts.combinedStatus ?? { state: "success", statuses: [] },
 	}));
 	const graphql = jest.fn(async () => opts.graphqlResult ?? { revertPullRequest: { pullRequest: { url: "https://github.com/org/repo/pull/8" } } });
+	const createComment = jest.fn(async () => ({ data: {} }));
 
 	const paginate = jest.fn(async (method: (p: unknown) => Promise<{ data: unknown }>, params: unknown) => {
 		const res = await method(params);
@@ -53,12 +54,17 @@ function makeFakeOctokit(opts: {
 	});
 
 	const octokit = {
-		rest: { pulls: { get, merge, listFiles, list }, checks: { listForRef }, repos: { getCombinedStatusForRef } },
+		rest: {
+			pulls: { get, merge, listFiles, list },
+			checks: { listForRef },
+			repos: { getCombinedStatusForRef },
+			issues: { createComment },
+		},
 		paginate,
 		graphql,
 	} as unknown as Octokit;
 
-	return { octokit, merge, graphql };
+	return { octokit, merge, graphql, createComment };
 }
 
 describe("OctokitGitHubClient", () => {
@@ -177,6 +183,31 @@ describe("OctokitGitHubClient", () => {
 			expect(graphql).toHaveBeenCalledWith(expect.stringContaining("revertPullRequest"), {
 				pullRequestId: "PR_node123",
 			});
+		});
+	});
+
+	describe("postReviewCardComment", () => {
+		it("posts a formatted comment via the issues API", async () => {
+			const { octokit, createComment } = makeFakeOctokit({});
+			const client = new OctokitGitHubClient(octokit);
+
+			await client.postReviewCardComment("org", "repo", 7, "accept", {
+				bundleId: "b-1",
+				directionSummary: "add passwordless auth",
+				blastRadius: 2,
+				flags: [],
+				drift: { status: "clean" },
+				residualDisclosure: "behavioral confirm not run",
+			});
+
+			expect(createComment).toHaveBeenCalledWith(
+				expect.objectContaining({
+					owner: "org",
+					repo: "repo",
+					issue_number: 7,
+					body: expect.stringContaining("add passwordless auth"),
+				}),
+			);
 		});
 	});
 });

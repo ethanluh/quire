@@ -1,9 +1,19 @@
+import type { GestureAction, ReviewCard } from "../types/core.js";
 import type { GitHubClient, RawPRPayload } from "./client.js";
+
+export interface PostedReviewCardComment {
+	owner: string;
+	repo: string;
+	prNumber: number;
+	action: GestureAction;
+	card: ReviewCard;
+}
 
 export class StubGitHubClient implements GitHubClient {
 	private readonly prFixtures: Map<string, RawPRPayload> = new Map();
 	readonly mergedPrs: string[] = [];
 	readonly revertedPrs: string[] = [];
+	readonly postedReviewCardComments: PostedReviewCardComment[] = [];
 
 	addFixture(owner: string, repo: string, pr: RawPRPayload): void {
 		this.prFixtures.set(`${owner}/${repo}/${pr.number}`, pr);
@@ -30,5 +40,15 @@ export class StubGitHubClient implements GitHubClient {
 	async revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string> {
 		this.revertedPrs.push(`${owner}/${repo}/${prNumber}`);
 		return `https://github.com/${owner}/${repo}/pull/999`;
+	}
+
+	async postReviewCardComment(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		action: GestureAction,
+		card: ReviewCard,
+	): Promise<void> {
+		this.postedReviewCardComments.push({ owner, repo, prNumber, action, card });
 	}
 }
