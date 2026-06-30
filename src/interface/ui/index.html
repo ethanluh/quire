@@ -259,16 +259,17 @@ clearAllBtn.addEventListener('click', async () => {
   loadQueue();
 });
 
-loadReview();
-
 // Narrow viewports get the touch-gesture mobile view by default; ?desktop=1 opts out,
 // and the opt-out is remembered so a later reload/bookmark doesn't bounce back to mobile.
+// Checked before the initial load so a redirecting visit never fires a wasted fetch/render first.
 const VIEW_PREF_KEY = 'quire-view-pref';
 if (location.search.includes('desktop=1')) {
   localStorage.setItem(VIEW_PREF_KEY, 'desktop');
 }
 if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop') {
   location.replace('mobile.html');
+} else {
+  loadReview();
 }
 document.getElementById('link-mobile').addEventListener('click', () => {
   localStorage.removeItem(VIEW_PREF_KEY);

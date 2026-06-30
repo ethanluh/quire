@@ -218,6 +218,11 @@ function cardBodyHtml(card) {
 // --- Review: swipeable stack ---
 const stackEl = document.getElementById('stack');
 let reviewCards = [];
+let topCardEl = null;
+// True from the moment a gesture commits until the stack has actually
+// re-rendered to match it, so a second drag/tap can't act on stale data
+// or a stale DOM node while that re-render is still pending.
+let gestureInFlight = false;
 const STACK_DEPTH = 3;
 const SWIPE_X = 110;
 const SWIPE_Y = 100;
@@ -229,6 +234,8 @@ async function loadReview() {
 
 function renderStack() {
   stackEl.innerHTML = '';
+  topCardEl = null;
+  gestureInFlight = false;
   if (!reviewCards.length) {
     stackEl.innerHTML = '<div class="stack-empty">No bundles in review queue.</div>';
     return;
@@ -244,7 +251,10 @@ function renderStack() {
       '<div class="stamp stamp-accept">ACCEPT</div>' +
       '<div class="stamp stamp-reject">REJECT</div>' +
       '<div class="stamp stamp-defer">DEFER</div>';
-    if (depthFromTop === 0) attachDrag(el, card);
+    if (depthFromTop === 0) {
+      attachDrag(el, card);
+      topCardEl = el;
+    }
     stackEl.appendChild(el);
   });
 }
@@ -254,6 +264,14 @@ function attachDrag(el, card) {
   const stampA = el.querySelector('.stamp-accept');
   const stampR = el.querySelector('.stamp-reject');
   const stampD = el.querySelector('.stamp-defer');
+
+  function snapBack() {
+    el.classList.add('snap-back');
+    el.style.transform = 'translate(0,0) rotate(0deg)';
+    stampA.style.opacity = '0';
+    stampR.style.opacity = '0';
+    stampD.style.opacity = '0';
+  }
 
   function onMove(e) {
     if (!dragging) return;
@@ -266,12 +284,24 @@ function attachDrag(el, card) {
     stampD.style.opacity = dy > Math.abs(dx) ? String(Math.min(Math.max(dy / SWIPE_Y, 0), 1)) : '0';
   }
 
-  function onUp() {
-    if (!dragging) return;
+  function endDrag() {
     dragging = false;
     el.classList.remove('dragging');
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onCancel);
+  }
+
+  function onUp() {
+    if (!dragging) return;
+    endDrag();
+
+    if (gestureInFlight) {
+      // Another gesture (e.g. a second touch tapping a button) already
+      // committed this card while we were mid-drag; don't double-fire.
+      snapBack();
+      return;
+    }
 
     if (dy > SWIPE_Y && dy > Math.abs(dx)) {
       commit(el, card, 'defer', `translate(${dx}px, 600px) rotate(0deg)`);
@@ -280,12 +310,17 @@ function attachDrag(el, card) {
     } else if (dx < -SWIPE_X) {
       commit(el, card, 'reject', `translate(-900px, ${dy}px) rotate(-20deg)`);
     } else {
-      el.classList.add('snap-back');
-      el.style.transform = 'translate(0,0) rotate(0deg)';
-      stampA.style.opacity = '0';
-      stampR.style.opacity = '0';
-      stampD.style.opacity = '0';
+      snapBack();
     }
+  }
+
+  function onCancel() {
+    // The platform aborted the touch (e.g. an OS edge-swipe gesture) — no
+    // pointerup will follow for this pointer, so end the drag here instead
+    // of leaving `dragging` stuck true and the window listeners attached.
+    if (!dragging) return;
+    endDrag();
+    snapBack();
   }
 
   el.addEventListener('pointerdown', (e) => {
@@ -296,6 +331,7 @@ function attachDrag(el, card) {
     el.setPointerCapture(e.pointerId);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
   });
 }
 
@@ -308,6 +344,8 @@ function showError(message) {
 }
 
 function commit(el, card, action, flyTransform) {
+  if (gestureInFlight) return; // already acted on this card via another input path
+  gestureInFlight = true;
   el.classList.add('fly');
   el.style.transform = flyTransform;
   el.style.opacity = '0';
@@ -334,10 +372,9 @@ function commit(el, card, action, flyTransform) {
 }
 
 function tapGesture(action) {
-  if (!reviewCards.length) return;
+  if (!reviewCards.length || gestureInFlight || !topCardEl) return;
   const card = reviewCards[0];
-  const el = stackEl.querySelector('.stack-card:last-child');
-  if (!el) return;
+  const el = topCardEl;
   const flyTransform = action === 'accept' ? 'translate(900px, 0) rotate(20deg)'
     : action === 'reject' ? 'translate(-900px, 0) rotate(-20deg)'
     : 'translate(0, 600px) rotate(0deg)';
