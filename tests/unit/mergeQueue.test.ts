@@ -2,9 +2,9 @@ import { describe, it, expect, afterEach } from "@jest/globals";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MergeQueue } from "../../src/queue/mergeQueue.js";
-import { StubGitHubClient } from "../../src/github/stubClient.js";
-import type { Bundle } from "../../src/types/core.js";
+import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import type { Bundle } from "../../src/engine/types/core.js";
 
 function makeBundle(id: string): Bundle {
 	return {

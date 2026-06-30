@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { normalizePR, validateIncomingPayload } from "../../src/ingest/ingest.js";
+import { normalizePR, validateIncomingPayload } from "../../src/engine/ingest/ingest.js";
 
 const BASE_PAYLOAD = {
 	id: "pr-1",

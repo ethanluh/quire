@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { MergeQueue } from "../../queue/mergeQueue.js";
+import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 
 export function queueRouter(queue: MergeQueue): Router {
 	const router = Router();

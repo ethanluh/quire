@@ -1,9 +1,9 @@
 import { describe, it, expect } from "@jest/globals";
-import { matchEffectsToDirection } from "../../src/drift/effectList/matcher.js";
-import { runCheapScreen } from "../../src/drift/screen.js";
+import { matchEffectsToDirection } from "../../src/engine/drift/effectList/matcher.js";
+import { runCheapScreen } from "../../src/engine/drift/screen.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
-import type { Bundle, PullRequest } from "../../src/types/core.js";
+import type { Bundle, PullRequest } from "../../src/engine/types/core.js";
 
 function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
 	return {

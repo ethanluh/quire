@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
-import { orchestratePipeline } from "../../src/pipeline/pipeline.js";
-import { AuditStore } from "../../src/gate/auditStore.js";
+import { orchestratePipeline } from "../../src/engine/pipeline/pipeline.js";
+import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
-import type { PullRequest } from "../../src/types/core.js";
-import type { PipelineConfig } from "../../src/pipeline/pipeline.js";
+import type { PullRequest } from "../../src/engine/types/core.js";
+import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 
 function makePR(id: string, direction: string, overrides: Partial<PullRequest> = {}): PullRequest {
 	return {

@@ -1,1 +1,1 @@
-export { StubGitHubClient } from "../../src/github/stubClient.js";
+export { StubGitHubClient } from "../../src/engine/github/stubClient.js";

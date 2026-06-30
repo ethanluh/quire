@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
-import type { MergeQueue } from "../../queue/mergeQueue.js";
+import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { ServerState } from "../state.js";
-import { logDefer } from "../../instrumentation/logger.js";
+import { logDefer } from "../../../engine/instrumentation/logger.js";
 import { validateBody } from "../middleware/validation.js";
 
 const GestureSchema = z.object({

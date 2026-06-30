@@ -1,1 +1,1 @@
-export { StubLlmProvider } from "../../src/drift/effectList/stubProvider.js";
+export { StubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.js";

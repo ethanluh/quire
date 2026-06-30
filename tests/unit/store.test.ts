@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "@jest/globals";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendNdjson, truncateNdjson } from "../../src/instrumentation/store.js";
+import { appendNdjson, truncateNdjson } from "../../src/engine/instrumentation/store.js";
 
 describe("truncateNdjson", () => {
 	let dir: string;

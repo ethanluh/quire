@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
-import { runGate } from "../../src/gate/gate.js";
-import { AuditStore } from "../../src/gate/auditStore.js";
-import type { PullRequest } from "../../src/types/core.js";
-import type { GateConfig } from "../../src/types/gate.js";
+import { runGate } from "../../src/engine/gate/gate.js";
+import { AuditStore } from "../../src/engine/gate/auditStore.js";
+import type { PullRequest } from "../../src/engine/types/core.js";
+import type { GateConfig } from "../../src/engine/types/gate.js";
 
 function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
 	return {

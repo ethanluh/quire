@@ -1,5 +1,5 @@
 import { describe, it, expect, jest } from "@jest/globals";
-import { localOnly } from "../../src/server/middleware/localOnly.js";
+import { localOnly } from "../../src/interface/server/middleware/localOnly.js";
 import type { Request, Response, NextFunction } from "express";
 
 function makeReq(remoteAddress: string | undefined): Request {

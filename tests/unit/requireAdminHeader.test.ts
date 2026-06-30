@@ -1,5 +1,5 @@
 import { describe, it, expect, jest } from "@jest/globals";
-import { requireAdminHeader } from "../../src/server/middleware/requireAdminHeader.js";
+import { requireAdminHeader } from "../../src/interface/server/middleware/requireAdminHeader.js";
 import type { Request, Response, NextFunction } from "express";
 
 function makeReq(headerValue: string | undefined): Request {

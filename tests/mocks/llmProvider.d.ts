@@ -1,4 +1,4 @@
-import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "../../src/drift/effectList/provider.js";
+import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "../../src/engine/drift/effectList/provider.js";
 export declare class StubLlmProvider implements LlmProvider {
     private readonly completionQueue;
     private readonly embeddingMap;

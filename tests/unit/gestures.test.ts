@@ -4,12 +4,12 @@ import type { Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServerState } from "../../src/server/state.js";
-import { bundlesRouter } from "../../src/server/routes/bundles.js";
-import { gesturesRouter } from "../../src/server/routes/gestures.js";
-import { MergeQueue } from "../../src/queue/mergeQueue.js";
-import { StubGitHubClient } from "../../src/github/stubClient.js";
-import type { Bundle, ReviewCard } from "../../src/types/core.js";
+import { createServerState } from "../../src/interface/server/state.js";
+import { bundlesRouter } from "../../src/interface/server/routes/bundles.js";
+import { gesturesRouter } from "../../src/interface/server/routes/gestures.js";
+import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import type { Bundle, ReviewCard } from "../../src/engine/types/core.js";
 
 function makeBundle(id: string): Bundle {
 	return {
