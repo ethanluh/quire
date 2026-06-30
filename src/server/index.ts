@@ -27,7 +27,6 @@ const pipelineConfig: PipelineConfig = {
 	gate: {
 		criteria: [
 			{ name: "buildFailure", mode: "enforce" },
-			{ name: "testFailure", mode: "shadow" },
 			{ name: "outOfScope", mode: "off" },
 			{ name: "duplicate", mode: "shadow" },
 		],
