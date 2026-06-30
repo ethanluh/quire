@@ -7,6 +7,11 @@ interface FakeCheckRun {
 	conclusion: string | null;
 }
 
+interface FakeCombinedStatus {
+	state: "success" | "failure" | "pending";
+	statuses: ReadonlyArray<{ state: string }>;
+}
+
 function makePrResponse(body: string | null, overrides: Record<string, unknown> = {}) {
 	return {
 		id: 42,
@@ -25,6 +30,7 @@ function makeFakeOctokit(opts: {
 	diff?: string;
 	files?: ReadonlyArray<{ filename: string }>;
 	checkRuns?: ReadonlyArray<FakeCheckRun>;
+	combinedStatus?: FakeCombinedStatus;
 	graphqlResult?: unknown;
 }): { octokit: Octokit; merge: jest.Mock; graphql: jest.Mock } {
 	const pr = opts.pr ?? makePrResponse("<!-- declared-direction: add passwordless auth -->");
@@ -36,6 +42,9 @@ function makeFakeOctokit(opts: {
 	const listFiles = jest.fn(async () => ({ data: opts.files ?? [{ filename: "src/auth.ts" }] }));
 	const list = jest.fn(async () => ({ data: opts.listPrs ?? [pr] }));
 	const listForRef = jest.fn(async () => ({ data: opts.checkRuns ?? [{ status: "completed", conclusion: "success" }] }));
+	const getCombinedStatusForRef = jest.fn(async () => ({
+		data: opts.combinedStatus ?? { state: "success", statuses: [] },
+	}));
 	const graphql = jest.fn(async () => opts.graphqlResult ?? { revertPullRequest: { pullRequest: { url: "https://github.com/org/repo/pull/8" } } });
 
 	const paginate = jest.fn(async (method: (p: unknown) => Promise<{ data: unknown }>, params: unknown) => {
@@ -44,7 +53,7 @@ function makeFakeOctokit(opts: {
 	});
 
 	const octokit = {
-		rest: { pulls: { get, merge, listFiles, list }, checks: { listForRef } },
+		rest: { pulls: { get, merge, listFiles, list }, checks: { listForRef }, repos: { getCombinedStatusForRef } },
 		paginate,
 		graphql,
 	} as unknown as Octokit;
@@ -100,6 +109,26 @@ describe("OctokitGitHubClient", () => {
 			const client = new OctokitGitHubClient(octokit);
 			const payload = await client.getPullRequest("org", "repo", 7);
 			expect(payload.ciStatus).toBe("failure");
+		});
+
+		it("falls back to the legacy commit status API when there are no check runs", async () => {
+			const { octokit } = makeFakeOctokit({
+				checkRuns: [],
+				combinedStatus: { state: "failure", statuses: [{ state: "failure" }] },
+			});
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.ciStatus).toBe("failure");
+		});
+
+		it("reports pending from a legacy commit status with no check runs", async () => {
+			const { octokit } = makeFakeOctokit({
+				checkRuns: [],
+				combinedStatus: { state: "pending", statuses: [{ state: "pending" }] },
+			});
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.ciStatus).toBe("pending");
 		});
 	});
 

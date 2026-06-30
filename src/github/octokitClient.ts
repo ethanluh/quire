@@ -113,11 +113,21 @@ export class OctokitGitHubClient implements GitHubClient {
 		repo: string,
 		ref: string,
 	): Promise<RawPRPayload["ciStatus"]> {
-		const checkRuns = await this.octokit.paginate(this.octokit.rest.checks.listForRef, { owner, repo, ref });
-		if (checkRuns.length === 0) return "unknown";
+		// CI can be reported via either the Checks API (GitHub Actions, most modern
+		// integrations) or the legacy Commit Status API (third-party CI predating
+		// Checks) — read both, since trusting only one silently hides the other.
+		const [checkRuns, combinedStatus] = await Promise.all([
+			this.octokit.paginate(this.octokit.rest.checks.listForRef, { owner, repo, ref }),
+			this.octokit.rest.repos.getCombinedStatusForRef({ owner, repo, ref }).then((r) => r.data),
+		]);
+
+		if (checkRuns.length === 0 && combinedStatus.statuses.length === 0) return "unknown";
 		if (checkRuns.some((run) => run.status !== "completed")) return "pending";
+		if (combinedStatus.state === "pending") return "pending";
+
 		const failed = new Set(["failure", "timed_out", "cancelled", "action_required", "stale"]);
 		if (checkRuns.some((run) => run.conclusion !== null && failed.has(run.conclusion))) return "failure";
+		if (combinedStatus.state === "failure") return "failure";
 		return "success";
 	}
 }
