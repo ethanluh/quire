@@ -27,9 +27,14 @@ outcome. A PR checked against three active criteria produces three rows.
 | --- | --- |
 | `prId` | the PR this decision was made for |
 | `criterionName` | which gate criterion ran (`buildFailure`, `outOfScope`, `duplicate`, ...) |
-| `mode` | the criterion's configured mode at evaluation time (`enforce` \| `shadow`) — `off` criteria are never logged |
+| `mode` | the criterion's configured mode at evaluation time (`enforce` \| `shadow`) |
 | `triggered` | whether the criterion's check matched this PR |
 | `recordedAt` | ISO 8601 timestamp |
+
+`GateMode` itself has a third value, `off`, but it never appears in this log:
+an `off` criterion isn't evaluated against the PR at all, so there is no
+outcome to record. This is by design, not an omission — `off` criteria are
+excluded upstream in `runGate`, before any `GateDecisionLog` row is built.
 
 Phase 0 derives from this log:
 - **Keep rate** — fraction of PRs with no `triggered: true` row at `mode: "enforce"`.
