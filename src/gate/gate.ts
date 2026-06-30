@@ -2,7 +2,6 @@ import type { PullRequest } from "../types/core.js";
 import type { GateConfig, GateResult } from "../types/gate.js";
 import type { AuditStore } from "./auditStore.js";
 import * as buildFailure from "./criteria/buildFailure.js";
-import * as testFailure from "./criteria/testFailure.js";
 import * as outOfScope from "./criteria/outOfScope.js";
 import * as duplicate from "./criteria/duplicate.js";
 
@@ -11,14 +10,16 @@ interface CriterionCheck {
 	run(pr: PullRequest, config: GateConfig, existing: ReadonlyArray<PullRequest>): { triggered: boolean; reason: string };
 }
 
+// "buildFailure" covers the PR's whole CI signal (pr.ciStatus). There used to be a
+// separate "testFailure" criterion, but it checked the exact same field, so the two
+// could never actually be configured with independent confidence levels — one always
+// shadowed the other. Collapsed into a single criterion that matches what the data
+// model can actually distinguish; split it back out if/when CI reports build and test
+// status separately.
 const CRITERIA: ReadonlyArray<CriterionCheck> = [
 	{
 		name: "buildFailure",
 		run: (pr) => buildFailure.check(pr),
-	},
-	{
-		name: "testFailure",
-		run: (pr) => testFailure.check(pr),
 	},
 	{
 		name: "outOfScope",
@@ -36,6 +37,12 @@ export function runGate(
 	auditStore: AuditStore,
 	existingPrs: ReadonlyArray<PullRequest> = [],
 ): GateResult {
+	let rejection: { criterionName: string; reason: string } | undefined;
+	let shadowed: { criterionName: string; reason: string } | undefined;
+
+	// Evaluate every criterion rather than stopping at the first match, so a PR that
+	// trips more than one shadow-mode criterion gets every hit recorded in the audit
+	// store — not just whichever criterion happens to be listed first.
 	for (const criterion of CRITERIA) {
 		const configEntry = config.criteria.find((c) => c.name === criterion.name);
 		const mode = configEntry?.mode ?? "off";
@@ -45,12 +52,18 @@ export function runGate(
 		if (!triggered) continue;
 
 		if (mode === "enforce") {
-			return { prId: pr.id, outcome: { result: "reject", criterionName: criterion.name, reason } };
-		}
-		if (mode === "shadow") {
+			rejection ??= { criterionName: criterion.name, reason };
+		} else if (mode === "shadow") {
 			auditStore.add(pr, criterion.name, reason);
-			return { prId: pr.id, outcome: { result: "shadow", criterionName: criterion.name, reason } };
+			shadowed ??= { criterionName: criterion.name, reason };
 		}
+	}
+
+	if (rejection !== undefined) {
+		return { prId: pr.id, outcome: { result: "reject", ...rejection } };
+	}
+	if (shadowed !== undefined) {
+		return { prId: pr.id, outcome: { result: "shadow", ...shadowed } };
 	}
 	return { prId: pr.id, outcome: { result: "pass" } };
 }
