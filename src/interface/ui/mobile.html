@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Quire</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: system-ui, sans-serif; background: #0f1117; color: #e2e8f0;
+    display: flex; flex-direction: column; height: 100dvh; overflow: hidden;
+  }
+
+  header {
+    flex: 0 0 auto; padding: 12px 16px; border-bottom: 1px solid #1e2533;
+    display: flex; align-items: center; gap: 10px;
+  }
+  header h1 { font-size: 16px; font-weight: 600; letter-spacing: 0.04em; }
+  header .subtitle { font-size: 11px; color: #64748b; flex: 1; }
+  header a { font-size: 12px; color: #818cf8; text-decoration: none; }
+
+  main { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .pane { display: none; padding: 16px; height: 100%; }
+  .pane.active { display: flex; flex-direction: column; }
+
+  /* --- Review: swipeable card stack --- */
+  #pane-review { padding: 16px 0 0; }
+  .stack { position: relative; flex: 1 1 auto; min-height: 0; margin: 0 16px; }
+  .stack-card {
+    position: absolute; inset: 0; background: #161b27; border: 1px solid #1e2533; border-radius: 16px;
+    padding: 20px; display: flex; flex-direction: column; overflow-y: auto;
+    touch-action: none; will-change: transform; user-select: none;
+  }
+  .stack-card.flagged { border-left: 4px solid #ef4444; }
+  .stack-card.clean { border-left: 4px solid #22c55e; }
+  .stack-card.dragging { transition: none; }
+  .stack-card.snap-back { transition: transform 0.25s ease-out; }
+  .stack-card.fly { transition: transform 0.3s ease-in, opacity 0.3s ease-in; }
+
+  .card-direction { font-size: 17px; font-weight: 600; line-height: 1.4; margin-bottom: 12px; }
+  .card-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .badge { font-size: 11px; padding: 3px 9px; border-radius: 12px; font-weight: 500; }
+  .badge-blast { background: #1e2533; color: #94a3b8; }
+  .badge-flag { background: #2d1f0e; color: #f59e0b; }
+  .badge-drift-clean { background: #0d2016; color: #22c55e; }
+  .badge-drift-flagged { background: #2d0d0d; color: #ef4444; }
+
+  .drift-signals { margin-top: 8px; padding: 10px 12px; background: #1a1020; border-radius: 6px; font-size: 12px; color: #e879f9; }
+  .drift-signals ul { padding-left: 16px; margin-top: 4px; }
+  .drift-signals li { margin-top: 3px; }
+  .residual { margin-top: 10px; font-size: 11px; color: #475569; font-style: italic; }
+
+  .stamp {
+    position: absolute; top: 18px; padding: 6px 14px; font-size: 16px; font-weight: 800;
+    letter-spacing: 0.08em; border-radius: 8px; border: 3px solid; opacity: 0; pointer-events: none;
+  }
+  .stamp-accept { right: 16px; color: #22c55e; border-color: #22c55e; transform: rotate(12deg); }
+  .stamp-reject { left: 16px; color: #ef4444; border-color: #ef4444; transform: rotate(-12deg); }
+  .stamp-defer  { left: 50%; bottom: 18px; top: auto; transform: translateX(-50%); color: #6366f1; border-color: #6366f1; }
+
+  .stack-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: #475569; font-size: 14px; }
+
+  .gesture-hints { flex: 0 0 auto; display: flex; justify-content: space-between; padding: 14px 24px 6px; font-size: 11px; color: #475569; }
+
+  .tap-gestures { flex: 0 0 auto; display: flex; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }
+  .btn { flex: 1; padding: 13px 0; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .btn-accept { background: #22c55e; color: #000; }
+  .btn-defer  { background: #6366f1; color: #fff; }
+  .btn-reject { background: #ef4444; color: #fff; }
+
+  /* --- Shelf / Queue lists --- */
+  .list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+  .list-card { background: #161b27; border: 1px solid #1e2533; border-radius: 12px; padding: 14px 16px; }
+  .list-card .card-direction { font-size: 14px; margin-bottom: 8px; }
+  .list-card .btn { padding: 9px 0; font-size: 13px; margin-top: 8px; }
+
+  .queue-entry { background: #161b27; border: 1px solid #1e2533; border-radius: 10px; padding: 12px 14px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+  .queue-entry .entry-id { font-family: monospace; color: #94a3b8; font-size: 10px; }
+  .status-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+  .status-queued  { background: #1e2533; color: #94a3b8; }
+  .status-landing { background: #2d1f0e; color: #f59e0b; }
+  .status-landed  { background: #0d2016; color: #22c55e; }
+
+  .ingest-form textarea {
+    width: 100%; height: 40vh; background: #161b27; border: 1px solid #1e2533; border-radius: 10px;
+    color: #e2e8f0; font-family: monospace; font-size: 12px; padding: 12px; resize: vertical;
+  }
+  .ingest-form .btn-ingest { margin-top: 10px; width: 100%; }
+  .result-msg { margin-top: 10px; font-size: 13px; color: #22c55e; }
+  .result-msg.error { color: #ef4444; }
+
+  .empty { color: #475569; font-size: 14px; padding: 40px 0; text-align: center; }
+
+  /* --- Bottom tab bar --- */
+  nav.tabbar {
+    flex: 0 0 auto; display: flex; border-top: 1px solid #1e2533; background: #11141d;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  nav.tabbar .tab {
+    flex: 1; text-align: center; padding: 10px 0 8px; font-size: 11px; color: #64748b;
+    border-top: 2px solid transparent; cursor: pointer;
+  }
+  nav.tabbar .tab .icon { display: block; font-size: 18px; margin-bottom: 2px; }
+  nav.tabbar .tab.active { color: #e2e8f0; border-top-color: #6366f1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Quire</h1>
+  <span class="subtitle">Mobile triage</span>
+  <a href="index.html?desktop=1">Desktop view</a>
+</header>
+
+<main>
+  <div id="pane-review" class="pane active">
+    <div class="stack" id="stack"></div>
+    <div class="gesture-hints"><span>&larr; reject</span><span>defer &darr;</span><span>accept &rarr;</span></div>
+    <div class="tap-gestures">
+      <button class="btn btn-reject" id="btn-tap-reject">Reject</button>
+      <button class="btn btn-defer" id="btn-tap-defer">Defer</button>
+      <button class="btn btn-accept" id="btn-tap-accept">Accept</button>
+    </div>
+  </div>
+
+  <div id="pane-shelf" class="pane">
+    <div class="list" id="shelf-list"><div class="empty">Shelf is empty.</div></div>
+  </div>
+
+  <div id="pane-queue" class="pane">
+    <div class="list" id="queue-list" style="flex:1"><div class="empty">Merge queue is empty.</div></div>
+    <button class="btn btn-accept" style="margin-top:14px" id="btn-process">Process next</button>
+  </div>
+
+  <div id="pane-ingest" class="pane">
+    <div class="ingest-form">
+      <p style="font-size:12px;color:#64748b;margin-bottom:10px">Paste a PR payload (or array of payloads) as JSON:</p>
+      <textarea id="ingest-payload" placeholder='{"id":"pr-1","repoOwner":"org","repoName":"repo","number":1,"declaredDirection":"add passwordless auth","diff":{"raw":"...","hunks":[]},"ciStatus":"success"}'></textarea>
+      <button class="btn btn-ingest" id="btn-ingest">Ingest</button>
+      <div id="ingest-result" class="result-msg" style="display:none"></div>
+    </div>
+  </div>
+</main>
+
+<nav class="tabbar">
+  <div class="tab active" data-tab="review"><span class="icon">&#128203;</span>Review</div>
+  <div class="tab" data-tab="shelf"><span class="icon">&#128230;</span>Shelf</div>
+  <div class="tab" data-tab="queue"><span class="icon">&#9202;</span>Queue</div>
+  <div class="tab" data-tab="ingest"><span class="icon">&#10133;</span>Ingest</div>
+</nav>
+
+<script>
+const tabs = document.querySelectorAll('.tab');
+tabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    tabs.forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
+    document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'review') loadReview();
+    if (tab.dataset.tab === 'shelf') loadShelf();
+    if (tab.dataset.tab === 'queue') loadQueue();
+  });
+});
+
+async function api(method, path, body, extraHeaders) {
+  const opts = { method, headers: { 'Content-Type': 'application/json', ...(extraHeaders || {}) } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function driftBadge(drift) {
+  if (drift.status === 'clean') return '<span class="badge badge-drift-clean">Clean</span>';
+  return '<span class="badge badge-drift-flagged">Drift flagged</span>';
+}
+
+function renderSignals(drift) {
+  if (drift.status !== 'flagged') return '';
+  const items = drift.signals.map(s => {
+    if (s.kind === 'effectList') return `Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
+    if (s.kind === 'footprintAnomaly') return `Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
+    return escapeHtml(s.description);
+  });
+  return `<div class="drift-signals"><strong>Drift signals</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
+}
+
+function cardBodyHtml(card) {
+  const flags = card.flags.map(f => `<span class="badge badge-flag">${escapeHtml(f)}</span>`).join('');
+  return `<div class="card-direction">${escapeHtml(card.directionSummary)}</div>
+    <div class="card-meta">
+      <span class="badge badge-blast">Blast radius: ${card.blastRadius} files</span>
+      ${driftBadge(card.drift)} ${flags}
+    </div>
+    ${renderSignals(card.drift)}
+    <div class="residual">${escapeHtml(card.residualDisclosure)}</div>`;
+}
+
+// --- Review: swipeable stack ---
+const stackEl = document.getElementById('stack');
+let reviewCards = [];
+const STACK_DEPTH = 3;
+const SWIPE_X = 110;
+const SWIPE_Y = 100;
+
+async function loadReview() {
+  reviewCards = await api('GET', '/bundles');
+  renderStack();
+}
+
+function renderStack() {
+  stackEl.innerHTML = '';
+  if (!reviewCards.length) {
+    stackEl.innerHTML = '<div class="stack-empty">No bundles in review queue.</div>';
+    return;
+  }
+  const visible = reviewCards.slice(0, STACK_DEPTH).reverse();
+  visible.forEach((card, i) => {
+    const depthFromTop = visible.length - 1 - i;
+    const el = document.createElement('div');
+    el.className = 'stack-card ' + (card.drift.status === 'flagged' ? 'flagged' : 'clean');
+    el.style.transform = `translateY(${depthFromTop * 8}px) scale(${1 - depthFromTop * 0.04})`;
+    el.style.zIndex = String(i);
+    el.innerHTML = cardBodyHtml(card) +
+      '<div class="stamp stamp-accept">ACCEPT</div>' +
+      '<div class="stamp stamp-reject">REJECT</div>' +
+      '<div class="stamp stamp-defer">DEFER</div>';
+    if (depthFromTop === 0) attachDrag(el, card);
+    stackEl.appendChild(el);
+  });
+}
+
+function attachDrag(el, card) {
+  let startX = 0, startY = 0, dx = 0, dy = 0, dragging = false;
+  const stampA = el.querySelector('.stamp-accept');
+  const stampR = el.querySelector('.stamp-reject');
+  const stampD = el.querySelector('.stamp-defer');
+
+  function onMove(e) {
+    if (!dragging) return;
+    dx = e.clientX - startX;
+    dy = e.clientY - startY;
+    const rotate = dx / 18;
+    el.style.transform = `translate(${dx}px, ${dy}px) rotate(${rotate}deg)`;
+    stampA.style.opacity = String(Math.min(Math.max(dx / SWIPE_X, 0), 1));
+    stampR.style.opacity = String(Math.min(Math.max(-dx / SWIPE_X, 0), 1));
+    stampD.style.opacity = dy > Math.abs(dx) ? String(Math.min(Math.max(dy / SWIPE_Y, 0), 1)) : '0';
+  }
+
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    el.classList.remove('dragging');
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+
+    if (dy > SWIPE_Y && dy > Math.abs(dx)) {
+      commit(el, card, 'defer', `translate(${dx}px, 600px) rotate(0deg)`);
+    } else if (dx > SWIPE_X) {
+      commit(el, card, 'accept', `translate(900px, ${dy}px) rotate(20deg)`);
+    } else if (dx < -SWIPE_X) {
+      commit(el, card, 'reject', `translate(-900px, ${dy}px) rotate(-20deg)`);
+    } else {
+      el.classList.add('snap-back');
+      el.style.transform = 'translate(0,0) rotate(0deg)';
+      stampA.style.opacity = '0';
+      stampR.style.opacity = '0';
+      stampD.style.opacity = '0';
+    }
+  }
+
+  el.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    el.classList.add('dragging');
+    el.setPointerCapture(e.pointerId);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
+}
+
+function commit(el, card, action, flyTransform) {
+  el.classList.add('fly');
+  el.style.transform = flyTransform;
+  el.style.opacity = '0';
+  reviewCards = reviewCards.filter(c => c.bundleId !== card.bundleId);
+  setTimeout(renderStack, 300);
+  api('POST', `/bundles/${card.bundleId}/gesture`, { action }).then(() => {
+    if (action === 'defer') loadShelf();
+  });
+}
+
+function tapGesture(action) {
+  if (!reviewCards.length) return;
+  const card = reviewCards[0];
+  const el = stackEl.querySelector('.stack-card:last-child');
+  if (!el) return;
+  const flyTransform = action === 'accept' ? 'translate(900px, 0) rotate(20deg)'
+    : action === 'reject' ? 'translate(-900px, 0) rotate(-20deg)'
+    : 'translate(0, 600px) rotate(0deg)';
+  commit(el, card, action, flyTransform);
+}
+
+document.getElementById('btn-tap-accept').addEventListener('click', () => tapGesture('accept'));
+document.getElementById('btn-tap-defer').addEventListener('click', () => tapGesture('defer'));
+document.getElementById('btn-tap-reject').addEventListener('click', () => tapGesture('reject'));
+
+// --- Shelf ---
+async function loadShelf() {
+  const cards = await api('GET', '/shelf');
+  const el = document.getElementById('shelf-list');
+  el.innerHTML = cards.length ? cards.map(c => `<div class="list-card">
+    ${cardBodyHtml(c)}
+    <button class="btn btn-accept" onclick="promote('${escapeHtml(c.bundleId)}')">Unshelf</button>
+  </div>`).join('') : '<div class="empty">Shelf is empty.</div>';
+}
+
+async function promote(bundleId) {
+  await api('DELETE', `/shelf/${bundleId}`);
+  loadShelf();
+  loadReview();
+}
+
+// --- Queue ---
+async function loadQueue() {
+  const entries = await api('GET', '/queue');
+  const el = document.getElementById('queue-list');
+  if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
+  el.innerHTML = entries.map(e => `<div class="queue-entry">
+    <div><div>${escapeHtml(e.bundle.direction)}</div><div class="entry-id">${escapeHtml(e.bundleId)}</div></div>
+    <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+  </div>`).join('');
+}
+
+document.getElementById('btn-process').addEventListener('click', async () => {
+  await api('POST', '/queue/process');
+  loadQueue();
+});
+
+// --- Ingest ---
+document.getElementById('btn-ingest').addEventListener('click', async () => {
+  const raw = document.getElementById('ingest-payload').value.trim();
+  const el = document.getElementById('ingest-result');
+  try {
+    const body = JSON.parse(raw);
+    const result = await api('POST', '/prs/ingest', body);
+    el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
+    el.className = 'result-msg';
+    el.style.display = 'block';
+    loadReview();
+  } catch (e) {
+    el.textContent = 'Error: ' + e.message;
+    el.className = 'result-msg error';
+    el.style.display = 'block';
+  }
+});
+
+loadReview();
+</script>
+</body>
+</html>

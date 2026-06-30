@@ -1,11 +1,11 @@
 import express from "express";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AuditStore } from "../gate/auditStore.js";
-import { MergeQueue } from "../queue/mergeQueue.js";
-import { StubGitHubClient } from "../github/stubClient.js";
-import { StubLlmProvider } from "../drift/effectList/stubProvider.js";
-import { TypeScriptAnalyzer } from "../drift/footprint/typescript.js";
+import { AuditStore } from "../../engine/gate/auditStore.js";
+import { MergeQueue } from "../../engine/queue/mergeQueue.js";
+import { StubGitHubClient } from "../../engine/github/stubClient.js";
+import { StubLlmProvider } from "../../engine/drift/effectList/stubProvider.js";
+import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
 import { prsRouter } from "./routes/prs.js";
 import { bundlesRouter } from "./routes/bundles.js";
@@ -15,10 +15,10 @@ import { shelfRouter } from "./routes/shelf.js";
 import { auditRouter } from "./routes/audit.js";
 import { adminRouter } from "./routes/admin.js";
 import { errorHandler } from "./middleware/errors.js";
-import type { PipelineConfig } from "../pipeline/pipeline.js";
+import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "../../data");
+const DATA_DIR = join(__dirname, "../../../data");
 const QUEUE_PATH = join(DATA_DIR, "queue.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
 
@@ -40,7 +40,7 @@ async function main(): Promise<void> {
 	app.use(express.json());
 
 	// Serve static UI
-	app.use(express.static(join(__dirname, "../../src/ui")));
+	app.use(express.static(join(__dirname, "../ui")));
 
 	const auditStore = new AuditStore();
 	const github = new StubGitHubClient();

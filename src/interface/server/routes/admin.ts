@@ -1,8 +1,8 @@
 import { Router } from "express";
-import type { AuditStore } from "../../gate/auditStore.js";
-import type { MergeQueue } from "../../queue/mergeQueue.js";
+import type { AuditStore } from "../../../engine/gate/auditStore.js";
+import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { ServerState } from "../state.js";
-import { truncateNdjson } from "../../instrumentation/store.js";
+import { truncateNdjson } from "../../../engine/instrumentation/store.js";
 import { localOnly } from "../middleware/localOnly.js";
 import { requireAdminHeader } from "../middleware/requireAdminHeader.js";
 

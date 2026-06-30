@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import express from "express";
 import type { Server } from "node:http";
-import { adminRouter } from "../../src/server/routes/admin.js";
-import { createServerState } from "../../src/server/state.js";
-import { AuditStore } from "../../src/gate/auditStore.js";
-import { MergeQueue } from "../../src/queue/mergeQueue.js";
-import { StubGitHubClient } from "../../src/github/stubClient.js";
-import type { PullRequest, Bundle, ReviewCard } from "../../src/types/core.js";
+import { adminRouter } from "../../src/interface/server/routes/admin.js";
+import { createServerState } from "../../src/interface/server/state.js";
+import { AuditStore } from "../../src/engine/gate/auditStore.js";
+import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import type { PullRequest, Bundle, ReviewCard } from "../../src/engine/types/core.js";
 
 function makePR(): PullRequest {
 	return {

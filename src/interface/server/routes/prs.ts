@@ -1,12 +1,12 @@
 import { Router } from "express";
-import type { LlmProvider } from "../../drift/effectList/provider.js";
-import type { StaticAnalyzer } from "../../drift/footprint/analyzer.js";
-import type { AuditStore } from "../../gate/auditStore.js";
-import type { MergeQueue } from "../../queue/mergeQueue.js";
+import type { LlmProvider } from "../../../engine/drift/effectList/provider.js";
+import type { StaticAnalyzer } from "../../../engine/drift/footprint/analyzer.js";
+import type { AuditStore } from "../../../engine/gate/auditStore.js";
+import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { ServerState } from "../state.js";
-import { validateIncomingPayload, normalizePR } from "../../ingest/ingest.js";
-import { orchestratePipeline } from "../../pipeline/pipeline.js";
-import type { PipelineConfig } from "../../pipeline/pipeline.js";
+import { validateIncomingPayload, normalizePR } from "../../../engine/ingest/ingest.js";
+import { orchestratePipeline } from "../../../engine/pipeline/pipeline.js";
+import type { PipelineConfig } from "../../../engine/pipeline/pipeline.js";
 
 export function prsRouter(
 	state: ServerState,

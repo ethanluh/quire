@@ -76,6 +76,7 @@
 <header>
   <h1>Quire</h1>
   <span class="subtitle">Direction triage for swarm PRs</span>
+  <a class="btn btn-defer" id="link-mobile" href="mobile.html" style="text-decoration:none;margin-left:auto">Mobile view</a>
   <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
 </header>
 
@@ -259,6 +260,11 @@ clearAllBtn.addEventListener('click', async () => {
 });
 
 loadReview();
+
+// Narrow viewports get the touch-gesture mobile view by default; ?desktop=1 opts out.
+if (window.innerWidth <= 700 && !location.search.includes('desktop=1')) {
+  location.replace('mobile.html');
+}
 </script>
 </body>
 </html>
