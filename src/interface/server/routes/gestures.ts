@@ -12,25 +12,20 @@ const GestureSchema = z.object({
 });
 
 // Posted per PR in the bundle (not once per bundle) so the swarm agent that authored
-// each PR sees the verdict directly on its own PR. A single failed post must not sink
-// the others, since the gesture itself has already been applied to local state.
-async function postCardToMembers(
+// each PR sees the verdict directly on its own PR. Fire-and-forget: the gesture has
+// already been applied to local state by the time this runs, so a comment failure
+// must never surface as a failed response for an action that already succeeded.
+function postCardToMembers(
 	github: GitHubClient,
 	action: GestureAction,
 	bundle: Bundle,
 	card: ReviewCard,
-): Promise<void> {
-	await Promise.all(
-		bundle.members.map(async (pr) => {
-			try {
-				await github.postReviewCardComment(pr.repoOwner, pr.repoName, pr.number, action, card);
-			} catch (err) {
-				console.error(
-					`Failed to post review card comment to ${pr.repoOwner}/${pr.repoName}#${pr.number}: ${String(err)}`,
-				);
-			}
-		}),
-	);
+): void {
+	for (const pr of bundle.members) {
+		github.postReviewCardComment(pr.repoOwner, pr.repoName, pr.number, action, card).catch((err: unknown) => {
+			console.error(`Failed to post review card comment to ${pr.repoOwner}/${pr.repoName}#${pr.number}:`, err);
+		});
+	}
 }
 
 export function gesturesRouter(
@@ -61,19 +56,19 @@ export function gesturesRouter(
 					await queue.enqueue(bundle); // enqueues, does not merge (INV-5)
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
-					await postCardToMembers(github, action, bundle, card);
+					postCardToMembers(github, action, bundle, card);
 					res.json({ status: "queued", bundleId });
 				} else if (action === "reject") {
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
-					await postCardToMembers(github, action, bundle, card);
+					postCardToMembers(github, action, bundle, card);
 					res.json({ status: "rejected", bundleId });
 				} else {
 					// defer
 					state.shelf.set(bundleId, card);
 					state.cards.delete(bundleId);
 					await logDefer(deferLogPath, bundleId, card);
-					await postCardToMembers(github, action, bundle, card);
+					postCardToMembers(github, action, bundle, card);
 					res.json({ status: "deferred", bundleId, shelfPosition: state.shelf.size });
 				}
 			} catch (err) {
