@@ -1,0 +1,70 @@
+import express from "express";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { AuditStore } from "../gate/auditStore.js";
+import { MergeQueue } from "../queue/mergeQueue.js";
+import { StubGitHubClient } from "../../tests/mocks/github.js";
+import { StubLlmProvider } from "../../tests/mocks/llmProvider.js";
+import { TypeScriptAnalyzer } from "../drift/footprint/typescript.js";
+import { createServerState } from "./state.js";
+import { prsRouter } from "./routes/prs.js";
+import { bundlesRouter } from "./routes/bundles.js";
+import { gesturesRouter } from "./routes/gestures.js";
+import { queueRouter } from "./routes/queue.js";
+import { shelfRouter } from "./routes/shelf.js";
+import { auditRouter } from "./routes/audit.js";
+import { errorHandler } from "./middleware/errors.js";
+import type { PipelineConfig } from "../pipeline/pipeline.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = join(__dirname, "../../data");
+const QUEUE_PATH = join(DATA_DIR, "queue.json");
+const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
+
+const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
+
+const pipelineConfig: PipelineConfig = {
+	gate: {
+		criteria: [
+			{ name: "buildFailure", mode: "enforce" },
+			{ name: "outOfScope", mode: "off" },
+			{ name: "duplicate", mode: "shadow" },
+		],
+	},
+	bundle: { similarityThreshold: 0.75 },
+};
+
+async function main(): Promise<void> {
+	const app = express();
+	app.use(express.json());
+
+	// Serve static UI
+	app.use(express.static(join(__dirname, "../../src/ui")));
+
+	const auditStore = new AuditStore();
+	const github = new StubGitHubClient();
+	const queue = new MergeQueue(QUEUE_PATH, github);
+	await queue.load();
+
+	const provider = new StubLlmProvider();
+	const analyzer = new TypeScriptAnalyzer();
+	const state = createServerState();
+
+	app.use("/prs", prsRouter(state, pipelineConfig, provider, analyzer, auditStore, queue));
+	app.use("/bundles", bundlesRouter(state));
+	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH));
+	app.use("/queue", queueRouter(queue));
+	app.use("/shelf", shelfRouter(state));
+	app.use("/audit", auditRouter(auditStore));
+
+	app.use(errorHandler);
+
+	app.listen(PORT, () => {
+		console.log(`Quire running on http://localhost:${PORT}`);
+	});
+}
+
+main().catch((err) => {
+	console.error(err);
+	process.exit(1);
+});
