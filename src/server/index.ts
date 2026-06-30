@@ -1,9 +1,12 @@
 import express from "express";
+import { Octokit } from "@octokit/rest";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AuditStore } from "../gate/auditStore.js";
 import { MergeQueue } from "../queue/mergeQueue.js";
+import type { GitHubClient } from "../github/client.js";
 import { StubGitHubClient } from "../github/stubClient.js";
+import { OctokitGitHubClient } from "../github/octokitClient.js";
 import { StubLlmProvider } from "../drift/effectList/stubProvider.js";
 import { TypeScriptAnalyzer } from "../drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
@@ -42,7 +45,10 @@ async function main(): Promise<void> {
 	app.use(express.static(join(__dirname, "../../src/ui")));
 
 	const auditStore = new AuditStore();
-	const github = new StubGitHubClient();
+	const githubToken = process.env["GITHUB_TOKEN"];
+	const github: GitHubClient = githubToken !== undefined
+		? new OctokitGitHubClient(new Octokit({ auth: githubToken }))
+		: new StubGitHubClient();
 	const queue = new MergeQueue(QUEUE_PATH, github);
 	await queue.load();
 
