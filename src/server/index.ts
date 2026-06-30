@@ -13,6 +13,7 @@ import { gesturesRouter } from "./routes/gestures.js";
 import { queueRouter } from "./routes/queue.js";
 import { shelfRouter } from "./routes/shelf.js";
 import { auditRouter } from "./routes/audit.js";
+import { adminRouter } from "./routes/admin.js";
 import { errorHandler } from "./middleware/errors.js";
 import type { PipelineConfig } from "../pipeline/pipeline.js";
 
@@ -56,6 +57,7 @@ async function main(): Promise<void> {
 	app.use("/queue", queueRouter(queue));
 	app.use("/shelf", shelfRouter(state));
 	app.use("/audit", auditRouter(auditStore));
+	app.use("/admin", adminRouter(state, auditStore, queue, DEFER_LOG_PATH));
 
 	app.use(errorHandler);
 
