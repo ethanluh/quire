@@ -291,8 +291,28 @@ function attachDrag(el, card) {
 
   function onMove(e) {
     if (!dragging) return;
-    dx = e.clientX - startX;
-    dy = e.clientY - startY;
+    const rawDx = e.clientX - startX;
+    const rawDy = e.clientY - startY;
+
+    // Restrict the card to one of three axes — left, right, or down —
+    // instead of following the raw 2D finger position. Whichever axis
+    // dominates the drag wins; the other axis is pinned to 0, and an
+    // upward drag is clamped to 0 rather than allowed negative.
+    //
+    // A real downward thumb swipe drifts sideways toward whichever hand
+    // is holding the phone (bottom-right for one-handed right-handed use,
+    // bottom-left for left-handed), so the down axis gets a wider cone —
+    // 60 degrees off vertical rather than 45 — applied symmetrically so
+    // neither hand is favored over the other.
+    const DOWN_HALF_ANGLE_RATIO = 1 / Math.sqrt(3); // tan(30deg): cone is 60deg off vertical on each side
+    if (rawDy > Math.abs(rawDx) * DOWN_HALF_ANGLE_RATIO) {
+      dx = 0;
+      dy = Math.max(0, rawDy);
+    } else {
+      dx = rawDx;
+      dy = 0;
+    }
+
     const rotate = dx / 18;
     el.style.transform = `translate(${dx}px, ${dy}px) rotate(${rotate}deg)`;
 
@@ -301,7 +321,7 @@ function attachDrag(el, card) {
     // fully off. No partial/fading opacity — that's what let two stamps
     // appear at once on a diagonal drag.
     let active = null;
-    if (dy > STAMP_DEADZONE && dy > Math.abs(dx)) {
+    if (dy > STAMP_DEADZONE) {
       active = 'defer';
     } else if (dx > STAMP_DEADZONE) {
       active = 'accept';
