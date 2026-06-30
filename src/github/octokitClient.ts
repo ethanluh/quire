@@ -53,7 +53,19 @@ export class OctokitGitHubClient implements GitHubClient {
 
 	async listOpenPullRequests(owner: string, repo: string): Promise<ReadonlyArray<RawPRPayload>> {
 		const prs = await this.octokit.paginate(this.octokit.rest.pulls.list, { owner, repo, state: "open" });
-		return Promise.all(prs.map((pr) => this.toRawPRPayload(owner, repo, pr)));
+		const results = await Promise.allSettled(prs.map((pr) => this.toRawPRPayload(owner, repo, pr)));
+
+		const payloads: RawPRPayload[] = [];
+		for (const [i, result] of results.entries()) {
+			if (result.status === "fulfilled") {
+				payloads.push(result.value);
+			} else {
+				// One PR's failure (e.g. a missing declared-direction marker) must not
+				// take down ingestion for every other open PR in the same repo.
+				console.error(`Skipping ${owner}/${repo}#${prs[i]?.number}: ${String(result.reason)}`);
+			}
+		}
+		return payloads;
 	}
 
 	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {

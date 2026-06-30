@@ -116,6 +116,18 @@ describe("OctokitGitHubClient", () => {
 				"add rate limiting",
 			]);
 		});
+
+		it("skips a PR that fails to map instead of failing the whole batch", async () => {
+			const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+			const good = makePrResponse("<!-- declared-direction: add passwordless auth -->", { id: 1, number: 5 });
+			const bad = makePrResponse("no marker here", { id: 2, number: 6 });
+			const { octokit } = makeFakeOctokit({ listPrs: [good, bad] });
+			const client = new OctokitGitHubClient(octokit);
+			const payloads = await client.listOpenPullRequests("org", "repo");
+			expect(payloads.map((p) => p.number)).toEqual([5]);
+			expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("org/repo#6"));
+			errorSpy.mockRestore();
+		});
 	});
 
 	describe("mergePullRequest", () => {

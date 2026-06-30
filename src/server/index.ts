@@ -46,9 +46,11 @@ async function main(): Promise<void> {
 
 	const auditStore = new AuditStore();
 	const githubToken = process.env["GITHUB_TOKEN"];
-	const github: GitHubClient = githubToken !== undefined
+	const useRealGithub = githubToken !== undefined && githubToken !== "";
+	const github: GitHubClient = useRealGithub
 		? new OctokitGitHubClient(new Octokit({ auth: githubToken }))
 		: new StubGitHubClient();
+	console.log(useRealGithub ? "GitHub client: octokit (GITHUB_TOKEN set)" : "GitHub client: stub (GITHUB_TOKEN not set)");
 	const queue = new MergeQueue(QUEUE_PATH, github);
 	await queue.load();
 
