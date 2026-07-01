@@ -1,5 +1,6 @@
 import type { Diff } from "../../types/core.js";
 import type { LlmProvider } from "./provider.js";
+import { stripCodeFence } from "./stripCodeFence.js";
 
 const SYSTEM_PROMPT = `You are a code analyst. You will be given a code diff.
 List every distinct product-level effect this diff has, as short independent clauses.
@@ -25,7 +26,7 @@ export async function extractEffects(
 	]);
 
 	try {
-		const parsed: unknown = JSON.parse(response);
+		const parsed: unknown = JSON.parse(stripCodeFence(response));
 		if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
 			return parsed as string[];
 		}

@@ -25,6 +25,17 @@ function makeBundle(members: ReadonlyArray<PullRequest>): Bundle {
 	return { id: "bundle-1", direction: "add passwordless auth", effectSummary: "adds OTP-based login", members };
 }
 
+describe("matchEffectsToDirection — parses a fenced response", () => {
+	it("parses a JSON array response wrapped in a markdown code fence", async () => {
+		const provider = new StubLlmProvider();
+		provider.queueCompletion('```json\n[{"clause": "adds OTP login", "matchedDirection": true}]\n```');
+
+		const result = await matchEffectsToDirection(["adds OTP login"], "add passwordless auth", provider);
+
+		expect(result).toEqual([{ clause: "adds OTP login", matchedDirection: true }]);
+	});
+});
+
 describe("matchEffectsToDirection — parse-failure fallback (INV-3)", () => {
 	it("treats every clause as an orphan when the response is not parseable JSON", async () => {
 		const provider = new StubLlmProvider();

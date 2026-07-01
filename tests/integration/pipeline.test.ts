@@ -13,6 +13,7 @@ import type {
 	DriftScreenLog,
 } from "../../src/engine/types/instrumentation.js";
 import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "../../src/engine/drift/effectList/provider.js";
+import { LlmApiError } from "../../src/engine/drift/effectList/httpRetry.js";
 
 class FlakyProvider implements LlmProvider {
 	private readonly inner = new StubLlmProvider();
@@ -27,7 +28,9 @@ class FlakyProvider implements LlmProvider {
 
 	async complete(messages: ReadonlyArray<LlmMessage>, opts?: LlmCallOptions): Promise<string> {
 		if (messages.some((m) => m.content.includes("FAIL_EXTRACTION_MARKER"))) {
-			throw new Error("provider timeout");
+			// Real providers throw LlmApiError, not a plain Error — drive the real shape
+			// through orchestratePipeline() so its error handling is actually exercised.
+			throw new LlmApiError("Test", 503, "provider timeout");
 		}
 		return this.inner.complete(messages, opts);
 	}
