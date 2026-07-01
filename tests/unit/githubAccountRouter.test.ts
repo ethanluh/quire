@@ -12,7 +12,7 @@ import { OctokitGitHubClient } from "../../src/engine/github/octokitClient.js";
 import { InvalidTokenError } from "../../src/engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../src/engine/github/verifyToken.js";
 import type { RepoSummary } from "../../src/engine/github/repos.js";
-import type { RawPRPayload } from "../../src/engine/github/client.js";
+import type { ListOpenPullRequestsResult, RawPRPayload } from "../../src/engine/github/client.js";
 import { createServerState } from "../../src/interface/server/state.js";
 import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
@@ -70,10 +70,10 @@ class SequencedGitHubClient extends StubGitHubClient {
 	constructor(private readonly responses: ReadonlyArray<ReadonlyArray<RawPRPayload>>) {
 		super();
 	}
-	override async listOpenPullRequests(): Promise<ReadonlyArray<RawPRPayload>> {
-		const response = this.responses[this.call] ?? [];
+	override async listOpenPullRequests(): Promise<ListOpenPullRequestsResult> {
+		const payloads = this.responses[this.call] ?? [];
 		this.call++;
-		return response;
+		return { payloads, skipped: [] };
 	}
 }
 
@@ -348,6 +348,44 @@ describe("githubAccountRouter", () => {
 		expect(state.bundles.size).toBe(1);
 		const [card] = [...state.cards.values()];
 		expect(card?.directionSummary).toBe("add passwordless auth");
+	});
+
+	it("surfaces PRs the GitHub client couldn't ingest instead of a silent empty queue", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+		// Simulates what OctokitGitHubClient does for real PRs lacking a declared-direction
+		// marker: still counted, but excluded from ingestion and reported as skipped.
+		class PartiallySkippingGitHubClient extends StubGitHubClient {
+			override async listOpenPullRequests(): Promise<ListOpenPullRequestsResult> {
+				return {
+					payloads: [],
+					skipped: [{ number: 12, reason: "org/repo#12 has no <!-- declared-direction: ... --> marker in its body" }],
+				};
+			}
+		}
+		const { state } = setup(
+			async () => ({ login: "octocat", scopes: [] }),
+			undefined,
+			undefined,
+			new PartiallySkippingGitHubClient(),
+			new StubLlmProvider(),
+			{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(
+			server,
+			"POST",
+			"/account/github/repos/select",
+			{ owner: "octocat", name: "hello-world" },
+			ADMIN_HEADERS,
+		);
+
+		expect(status).toBe(200);
+		expect(body["bundlesCreated"]).toBe(0);
+		expect(body["skipped"]).toEqual([
+			{ number: 12, reason: expect.stringContaining("declared-direction") },
+		]);
+		expect(state.cards.size).toBe(0);
 	});
 
 	it("selecting a repo with no open PRs leaves the review queue empty", async () => {

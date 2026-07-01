@@ -1,5 +1,5 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
-import type { GitHubClient, RawPRPayload } from "./client.js";
+import type { GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
 
 export interface PostedReviewCardComment {
 	owner: string;
@@ -26,11 +26,12 @@ export class StubGitHubClient implements GitHubClient {
 		return fixture;
 	}
 
-	async listOpenPullRequests(owner: string, repo: string): Promise<ReadonlyArray<RawPRPayload>> {
+	async listOpenPullRequests(owner: string, repo: string): Promise<ListOpenPullRequestsResult> {
 		const prefix = `${owner}/${repo}/`;
-		return [...this.prFixtures.entries()]
+		const payloads = [...this.prFixtures.entries()]
 			.filter(([k]) => k.startsWith(prefix))
 			.map(([, v]) => v);
+		return { payloads, skipped: [] };
 	}
 
 	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {

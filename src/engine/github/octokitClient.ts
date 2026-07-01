@@ -1,7 +1,7 @@
 import type { Octokit } from "@octokit/rest";
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import { formatReviewCardComment } from "../review/comment.js";
-import type { GitHubClient, RawPRPayload } from "./client.js";
+import type { GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
 
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
 // declares direction in an HTML comment so it renders invisibly in the PR body.
@@ -82,23 +82,28 @@ export class OctokitGitHubClient implements GitHubClient {
 		return this.toRawPRPayload(owner, repo, pr);
 	}
 
-	async listOpenPullRequests(owner: string, repo: string): Promise<ReadonlyArray<RawPRPayload>> {
+	async listOpenPullRequests(owner: string, repo: string): Promise<ListOpenPullRequestsResult> {
 		const prs = await this.octokit.paginate(this.octokit.rest.pulls.list, { owner, repo, state: "open" });
 		const results = await mapWithConcurrency(prs, MAX_CONCURRENT_PR_FETCHES, (pr) =>
 			this.toRawPRPayload(owner, repo, pr),
 		);
 
 		const payloads: RawPRPayload[] = [];
+		const skipped: { number: number; reason: string }[] = [];
 		for (const [i, result] of results.entries()) {
 			if (result.status === "fulfilled") {
 				payloads.push(result.value);
 			} else {
 				// One PR's failure (e.g. a missing declared-direction marker) must not
-				// take down ingestion for every other open PR in the same repo.
-				console.error(`Skipping ${owner}/${repo}#${prs[i]?.number}: ${String(result.reason)}`);
+				// take down ingestion for every other open PR in the same repo — but the
+				// caller still needs to know it happened instead of seeing an empty queue
+				// with no explanation.
+				const reason = String(result.reason);
+				console.error(`Skipping ${owner}/${repo}#${prs[i]?.number}: ${reason}`);
+				skipped.push({ number: prs[i]?.number ?? -1, reason });
 			}
 		}
-		return payloads;
+		return { payloads, skipped };
 	}
 
 	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {

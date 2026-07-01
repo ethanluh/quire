@@ -469,8 +469,25 @@ async function loadRepos(selectedRepo) {
 document.getElementById('repo-search').addEventListener('input', renderRepoList);
 
 async function selectRepo(owner, name) {
-  await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
+  const resultEl = document.getElementById('account-result');
+  const result = await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
+  if (result.error) {
+    resultEl.textContent = 'Error: ' + result.error;
+    resultEl.className = 'result-msg error';
+  } else {
+    const skipped = result.skipped || [];
+    const parts = [`Selected ${owner}/${name}.`, `${result.bundlesCreated || 0} bundle(s) created.`];
+    if (skipped.length) {
+      // Most commonly: the PR body has no <!-- declared-direction: ... --> marker
+      // (INV-1's fail-closed case) — surfaced so an empty/short queue isn't a silent mystery.
+      parts.push(`${skipped.length} PR(s) could not be ingested (e.g. missing declared-direction marker) and were skipped.`);
+    }
+    resultEl.textContent = parts.join(' ');
+    resultEl.className = 'result-msg';
+  }
+  resultEl.style.display = 'block';
   loadAccount();
+  loadReview();
 }
 
 // Theme: "paper" (light, default) and "ink" (dark) — same tokens, see styles/tokens.css.

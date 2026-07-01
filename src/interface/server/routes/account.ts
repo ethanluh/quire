@@ -110,7 +110,7 @@ export function githubAccountRouter(
 				// throws (network/API/token failure), the account stays pointed at whatever
 				// repo was already selected — with its queue intact — instead of "selecting"
 				// a repo whose PRs never actually made it onto the queue.
-				const rawPRs = await clientHolder.listOpenPullRequests(owner, name);
+				const { payloads: rawPRs, skipped } = await clientHolder.listOpenPullRequests(owner, name);
 				const prs = rawPRs.map((raw) => normalizePR(rawPRPayloadToIncomingPR(raw)));
 
 				// Re-populates the queue for the newly selected repo: drop bundles left over
@@ -124,7 +124,10 @@ export function githubAccountRouter(
 				account = { ...account, selectedRepo: { owner, name } };
 				await saveAccount(accountPath, account);
 
-				res.json({ selected: account.selectedRepo, ...summary });
+				// Disclose PRs that exist but couldn't be ingested (most commonly: no
+				// declared-direction marker, INV-1's fail-closed case) instead of leaving an
+				// empty/short queue with no explanation (INV-6).
+				res.json({ selected: account.selectedRepo, ...summary, skipped });
 			} catch (err) {
 				next(err);
 			}

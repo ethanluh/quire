@@ -144,23 +144,27 @@ describe("OctokitGitHubClient", () => {
 			const prB = makePrResponse("<!-- declared-direction: add rate limiting -->", { id: 2, number: 6 });
 			const { octokit } = makeFakeOctokit({ listPrs: [prA, prB] });
 			const client = new OctokitGitHubClient(octokit);
-			const payloads = await client.listOpenPullRequests("org", "repo");
+			const { payloads, skipped } = await client.listOpenPullRequests("org", "repo");
 			expect(payloads.map((p) => p.number)).toEqual([5, 6]);
 			expect(payloads.map((p) => p.declaredDirection)).toEqual([
 				"add passwordless auth",
 				"add rate limiting",
 			]);
+			expect(skipped).toEqual([]);
 		});
 
-		it("skips a PR that fails to map instead of failing the whole batch", async () => {
+		it("skips a PR that fails to map instead of failing the whole batch, and reports it as skipped", async () => {
 			const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
 			const good = makePrResponse("<!-- declared-direction: add passwordless auth -->", { id: 1, number: 5 });
 			const bad = makePrResponse("no marker here", { id: 2, number: 6 });
 			const { octokit } = makeFakeOctokit({ listPrs: [good, bad] });
 			const client = new OctokitGitHubClient(octokit);
-			const payloads = await client.listOpenPullRequests("org", "repo");
+			const { payloads, skipped } = await client.listOpenPullRequests("org", "repo");
 			expect(payloads.map((p) => p.number)).toEqual([5]);
 			expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("org/repo#6"));
+			expect(skipped).toEqual([
+				{ number: 6, reason: expect.stringContaining("no <!-- declared-direction: ... --> marker") },
+			]);
 			errorSpy.mockRestore();
 		});
 
@@ -170,7 +174,7 @@ describe("OctokitGitHubClient", () => {
 			);
 			const { octokit } = makeFakeOctokit({ listPrs: prs });
 			const client = new OctokitGitHubClient(octokit);
-			const payloads = await client.listOpenPullRequests("org", "repo");
+			const { payloads } = await client.listOpenPullRequests("org", "repo");
 			expect(payloads.map((p) => p.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
 		});
 	});
