@@ -654,7 +654,7 @@ describe("githubAccountRouter", () => {
 			expect(status).toBe(403);
 		});
 
-		it("returns a fresh authorize URL with a new state on each call", async () => {
+		it("reuses the same pending state across repeated /oauth/start calls (idempotent against a double-click or a second tab)", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
 			setup(
 				async () => ({ login: "octocat", scopes: [] }),
@@ -669,6 +669,56 @@ describe("githubAccountRouter", () => {
 			await new Promise((resolve) => server.once("listening", resolve));
 
 			const first = await startOAuth(server);
+			const second = await startOAuth(server);
+
+			expect(first).toBe(second);
+		});
+
+		it("does not orphan a legitimate flow when /oauth/start is called twice before the callback returns (double-click / second-tab regression)", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const exchangeCodeForToken = jest.fn(async () => ({ accessToken: "oauth-access-token" }));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(exchangeCodeForToken),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			// Simulates a double-click or a second tab firing /oauth/start again before the
+			// first attempt's browser has navigated to GitHub and back.
+			const firstState = await startOAuth(server);
+			await startOAuth(server);
+
+			const { status, location } = await callRedirect(
+				server,
+				`/account/github/oauth/callback?code=good-code&state=${firstState}`,
+			);
+
+			expect(status).toBe(302);
+			expect(location).toBe("/?account=connected");
+		});
+
+		it("mints a fresh state once the previous flow has been consumed", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const first = await startOAuth(server);
+			await callRedirect(server, `/account/github/oauth/callback?code=good-code&state=${first}`);
 			const second = await startOAuth(server);
 
 			expect(first).not.toBe(second);

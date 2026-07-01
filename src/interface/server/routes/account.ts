@@ -55,6 +55,15 @@ function buildClientForFallback(fallbackToken: string | undefined): OctokitGitHu
 		: new StubGitHubClient();
 }
 
+function buildConnectedAccount(identity: VerifiedTokenIdentity, token: string): ConnectedAccount {
+	return {
+		login: identity.login,
+		token,
+		scopes: identity.scopes,
+		connectedAt: new Date().toISOString(),
+	};
+}
+
 function isBundleForRepo(bundle: Bundle, owner: string, name: string): boolean {
 	return bundle.members.length > 0 && bundle.members.every((m) => m.repoOwner === owner && m.repoName === name);
 }
@@ -165,12 +174,7 @@ export function githubAccountRouter(
 			const { token } = req.body as z.infer<typeof ConnectSchema>;
 			const identity = await verifyToken(token);
 
-			account = {
-				login: identity.login,
-				token,
-				scopes: identity.scopes,
-				connectedAt: new Date().toISOString(),
-			};
+			account = buildConnectedAccount(identity, token);
 			await saveAccount(accountPath, account);
 			clientHolder.setClient(new OctokitGitHubClient(new Octokit({ auth: token })));
 
@@ -197,9 +201,13 @@ export function githubAccountRouter(
 
 	if (oauth !== undefined) {
 		router.post("/oauth/start", localOnly, requireAdminHeader, (_req, res) => {
-			const nonce = randomBytes(32).toString("hex");
-			pendingOAuth = { state: nonce, expiresAt: Date.now() + OAUTH_STATE_TTL_MS };
-			res.json({ authorizeUrl: oauth.buildAuthorizeUrl(oauth.config, oauth.redirectUri, nonce) });
+			// Idempotent while a flow is still pending: a double-click before the page
+			// navigates away, or a second tab, reuses the same nonce instead of minting a
+			// fresh one that would silently orphan the first flow's eventual callback.
+			if (pendingOAuth === undefined || Date.now() >= pendingOAuth.expiresAt) {
+				pendingOAuth = { state: randomBytes(32).toString("hex"), expiresAt: Date.now() + OAUTH_STATE_TTL_MS };
+			}
+			res.json({ authorizeUrl: oauth.buildAuthorizeUrl(oauth.config, oauth.redirectUri, pendingOAuth.state) });
 		});
 
 		router.get("/oauth/callback", localOnly, async (req, res) => {
@@ -224,12 +232,7 @@ export function githubAccountRouter(
 				const { accessToken } = await oauth.exchangeCodeForToken(oauth.config, code, oauth.redirectUri);
 				const identity = await verifyToken(accessToken);
 
-				account = {
-					login: identity.login,
-					token: accessToken,
-					scopes: identity.scopes,
-					connectedAt: new Date().toISOString(),
-				};
+				account = buildConnectedAccount(identity, accessToken);
 				await saveAccount(accountPath, account);
 				clientHolder.setClient(new OctokitGitHubClient(new Octokit({ auth: accessToken })));
 

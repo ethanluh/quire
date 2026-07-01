@@ -419,6 +419,7 @@ async function loadAccount() {
       : 'Not connected. Connecting is only available from the machine running Quire.';
     accountConnectForm.style.display = isLocalUi ? 'block' : 'none';
     oauthConnectBtn.style.display = isLocalUi && status.oauthAvailable ? 'inline-block' : 'none';
+    oauthConnectBtn.disabled = false;
     accountDisconnectBtn.style.display = 'none';
     repoPanel.style.display = 'none';
   }
@@ -432,10 +433,11 @@ function showAccountResult(message, isError) {
 }
 
 function openPatModal() {
+  const tokenInput = document.getElementById('account-token');
   document.getElementById('pat-modal-result').style.display = 'none';
-  document.getElementById('account-token').value = '';
+  tokenInput.value = '';
   patModalBackdrop.style.display = 'flex';
-  document.getElementById('account-token').focus();
+  tokenInput.focus();
 }
 
 function closePatModal() {
@@ -469,9 +471,14 @@ document.getElementById('btn-account-connect').addEventListener('click', async (
 });
 
 oauthConnectBtn.addEventListener('click', async () => {
+  // Disabled for the round trip to /oauth/start so a fast double-click can't fire it
+  // twice before location.href navigates away — the server is idempotent either way,
+  // but there's no reason to rely on that alone.
+  oauthConnectBtn.disabled = true;
   const result = await api('POST', '/account/github/oauth/start', undefined, { 'X-Quire-Admin': '1' });
   if (result.error) {
     showAccountResult('Error: ' + result.error, true);
+    oauthConnectBtn.disabled = false;
     return;
   }
   location.href = result.authorizeUrl;
