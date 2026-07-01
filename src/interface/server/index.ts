@@ -79,7 +79,7 @@ async function main(): Promise<void> {
 
 	app.use("/prs", prsRouter(state, pipelineConfig, provider, analyzer, auditStore, queue));
 	app.use("/bundles", bundlesRouter(state));
-	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH));
+	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github));
 	app.use("/queue", queueRouter(queue));
 	app.use("/shelf", shelfRouter(state));
 	app.use("/audit", auditRouter(auditStore));

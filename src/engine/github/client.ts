@@ -1,3 +1,5 @@
+import type { GestureAction, ReviewCard } from "../types/core.js";
+
 export interface RawPRPayload {
 	id: string;
 	number: number;
@@ -16,4 +18,11 @@ export interface GitHubClient {
 	listOpenPullRequests(owner: string, repo: string): Promise<ReadonlyArray<RawPRPayload>>;
 	mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void>;
 	revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string>;
+	postReviewCardComment(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		action: GestureAction,
+		card: ReviewCard,
+	): Promise<void>;
 }
