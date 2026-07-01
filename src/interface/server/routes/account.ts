@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { Octokit } from "@octokit/rest";
@@ -9,6 +10,8 @@ import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
+import type { OAuthConfig } from "../../../engine/github/oauth.js";
+import { OAuthExchangeError } from "../../../engine/github/oauth.js";
 import { rawPRPayloadToIncomingPR } from "../../../engine/github/toIncomingPR.js";
 import { normalizePR } from "../../../engine/ingest/ingest.js";
 import type { Bundle } from "../../../engine/types/core.js";
@@ -27,6 +30,39 @@ const SelectRepoSchema = z.object({
 	owner: z.string().min(1),
 	name: z.string().min(1),
 });
+
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+export interface OAuthDeps {
+	config: OAuthConfig;
+	buildAuthorizeUrl: (config: OAuthConfig, redirectUri: string, state: string) => string;
+	exchangeCodeForToken: (config: OAuthConfig, code: string, redirectUri: string) => Promise<{ accessToken: string }>;
+	redirectUri: string;
+}
+
+// Rendered by the OAuth callback in place of a redirect, so the connect flow can run in a
+// popup: it posts the result back to the tab that opened it (checked there against
+// window.location.origin) rather than bouncing the main tab through a full navigation.
+function renderOAuthResultPage(status: "connected" | "error", login: string | undefined, reason: string | undefined): string {
+	const payload = JSON.stringify({ source: "quire-oauth", status, login, reason });
+	const message =
+		status === "connected"
+			? `Connected as ${login ?? ""}. You can close this window.`
+			: `GitHub connection failed: ${reason ?? "unknown error"}`;
+	const closeScript = status === "connected" ? "setTimeout(() => window.close(), 1200);" : "";
+	return `<!doctype html>
+<html>
+<body>
+<script>
+if (window.opener) {
+	window.opener.postMessage(${payload}, window.location.origin);
+}
+${closeScript}
+</script>
+<p>${message.replace(/</g, "&lt;")}</p>
+</body>
+</html>`;
+}
 
 function buildClientForFallback(fallbackToken: string | undefined): OctokitGitHubClient | StubGitHubClient {
 	return fallbackToken !== undefined && fallbackToken !== ""
@@ -62,13 +98,20 @@ export function githubAccountRouter(
 	initialAccount: ConnectedAccount | undefined,
 	state: ServerState,
 	deps: PipelineDeps,
+	oauth: OAuthDeps | undefined,
 ): Router {
 	const router = Router();
 	let account = initialAccount;
 
+	interface PendingOAuthState {
+		state: string;
+		expiresAt: number;
+	}
+	let pendingOAuth: PendingOAuthState | undefined;
+
 	router.get("/status", (_req, res) => {
 		if (account === undefined) {
-			res.json({ connected: false });
+			res.json({ connected: false, oauthAvailable: oauth !== undefined });
 			return;
 		}
 		res.json({
@@ -77,6 +120,7 @@ export function githubAccountRouter(
 			scopes: account.scopes,
 			connectedAt: account.connectedAt,
 			selectedRepo: account.selectedRepo,
+			oauthAvailable: oauth !== undefined,
 		});
 	});
 
@@ -165,6 +209,55 @@ export function githubAccountRouter(
 			next(err);
 		}
 	});
+
+	if (oauth !== undefined) {
+		router.post("/oauth/start", localOnly, requireAdminHeader, (_req, res) => {
+			const nonce = randomBytes(32).toString("hex");
+			pendingOAuth = { state: nonce, expiresAt: Date.now() + OAUTH_STATE_TTL_MS };
+			res.json({ authorizeUrl: oauth.buildAuthorizeUrl(oauth.config, oauth.redirectUri, nonce) });
+		});
+
+		router.get("/oauth/callback", localOnly, async (req, res) => {
+			const { code, state: returnedState } = req.query;
+			const pending = pendingOAuth;
+			// Consumed before the exchange awaits, so a concurrent double-submit of the same
+			// code+state can't both pass this check — only the first request still sees it.
+			pendingOAuth = undefined;
+
+			if (
+				pending === undefined ||
+				typeof code !== "string" ||
+				typeof returnedState !== "string" ||
+				returnedState !== pending.state ||
+				Date.now() >= pending.expiresAt
+			) {
+				res.status(400).type("html").send(renderOAuthResultPage("error", undefined, "the connection request expired or was invalid"));
+				return;
+			}
+
+			try {
+				const { accessToken } = await oauth.exchangeCodeForToken(oauth.config, code, oauth.redirectUri);
+				const identity = await verifyToken(accessToken);
+
+				account = {
+					login: identity.login,
+					token: accessToken,
+					scopes: identity.scopes,
+					connectedAt: new Date().toISOString(),
+				};
+				await saveAccount(accountPath, account);
+				clientHolder.setClient(new OctokitGitHubClient(new Octokit({ auth: accessToken })));
+
+				res.type("html").send(renderOAuthResultPage("connected", account.login, undefined));
+			} catch (err) {
+				const reason =
+					err instanceof OAuthExchangeError || err instanceof InvalidTokenError
+						? err.message
+						: "GitHub connection failed unexpectedly";
+				res.status(502).type("html").send(renderOAuthResultPage("error", undefined, reason));
+			}
+		});
+	}
 
 	return router;
 }

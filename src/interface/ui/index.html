@@ -215,6 +215,7 @@
       <p>Connect a GitHub account so Quire can merge and revert PRs on its behalf. Paste a <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">personal access token</a> with repo access.</p>
       <input type="password" id="account-token" placeholder="ghp_..." autocomplete="off">
       <button class="btn btn-accept" style="margin-top:12px" id="btn-account-connect">Connect</button>
+      <button class="btn btn-defer" style="margin-top:8px; display:none" id="btn-account-connect-oauth">Sign in with GitHub</button>
     </div>
     <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
     <div id="account-result" class="result-msg" style="display:none"></div>
@@ -376,6 +377,7 @@ const accountConnectForm = document.getElementById('account-connect-form');
 const accountDisconnectBtn = document.getElementById('btn-account-disconnect');
 
 const repoPanel = document.getElementById('repo-panel');
+const oauthConnectBtn = document.getElementById('btn-account-connect-oauth');
 
 async function loadAccount() {
   const statusEl = document.getElementById('account-status');
@@ -397,25 +399,54 @@ async function loadAccount() {
       ? 'Not connected.'
       : 'Not connected. Connecting is only available from the machine running Quire.';
     accountConnectForm.style.display = isLocalUi ? 'block' : 'none';
+    oauthConnectBtn.style.display = isLocalUi && status.oauthAvailable ? 'inline-block' : 'none';
     accountDisconnectBtn.style.display = 'none';
     repoPanel.style.display = 'none';
   }
 }
 
+function showAccountResult(message, isError) {
+  const resultEl = document.getElementById('account-result');
+  resultEl.textContent = message;
+  resultEl.className = isError ? 'result-msg error' : 'result-msg';
+  resultEl.style.display = 'block';
+}
+
 document.getElementById('btn-account-connect').addEventListener('click', async () => {
   const tokenInput = document.getElementById('account-token');
   const token = tokenInput.value.trim();
-  const resultEl = document.getElementById('account-result');
   if (!token) return;
   const result = await api('POST', '/account/github/connect', { token }, { 'X-Quire-Admin': '1' });
   if (result.error) {
-    resultEl.textContent = 'Error: ' + result.error;
-    resultEl.className = 'result-msg error';
-    resultEl.style.display = 'block';
+    showAccountResult('Error: ' + result.error, true);
     return;
   }
   tokenInput.value = '';
   loadAccount();
+});
+
+oauthConnectBtn.addEventListener('click', async () => {
+  const result = await api('POST', '/account/github/oauth/start', undefined, { 'X-Quire-Admin': '1' });
+  if (result.error) {
+    showAccountResult('Error: ' + result.error, true);
+    return;
+  }
+  const popup = window.open(result.authorizeUrl, 'quire-github-oauth', 'width=600,height=700');
+  if (!popup) {
+    showAccountResult('Could not open the GitHub sign-in popup — check your browser’s popup blocker.', true);
+  }
+});
+
+// The OAuth callback runs in the popup and posts its result back here rather than
+// navigating the main tab, so the connect flow never leaves the Quire page it started on.
+window.addEventListener('message', (event) => {
+  if (event.origin !== location.origin) return;
+  if (!event.data || event.data.source !== 'quire-oauth') return;
+  if (event.data.status === 'connected') {
+    loadAccount();
+  } else {
+    showAccountResult('GitHub connection failed: ' + (event.data.reason || 'unknown error'), true);
+  }
 });
 
 accountDisconnectBtn.addEventListener('click', async () => {
