@@ -19,7 +19,7 @@ export function adminRouter(
 			state.bundles.clear();
 			state.cards.clear();
 			state.shelf.clear();
-			auditStore.clear();
+			await auditStore.clear();
 			await queue.clear();
 			await Promise.all(ndjsonLogPaths.map((path) => truncateNdjson(path)));
 			res.json({ status: "reset" });

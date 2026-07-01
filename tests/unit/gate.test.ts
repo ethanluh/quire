@@ -25,39 +25,39 @@ describe("runGate", () => {
 
 	beforeEach(() => { audit = new AuditStore(); });
 
-	it("passes a PR with no criteria configured", () => {
+	it("passes a PR with no criteria configured", async () => {
 		const config: GateConfig = { criteria: [] };
-		const result = runGate(makePR(), config, audit);
+		const result = await runGate(makePR(), config, audit);
 		expect(result.outcome.result).toBe("pass");
 	});
 
-	it("enforces buildFailure for a failing PR", () => {
+	it("enforces buildFailure for a failing PR", async () => {
 		const config: GateConfig = { criteria: [{ name: "buildFailure", mode: "enforce" }] };
-		const result = runGate(makePR({ ciStatus: "failure" }), config, audit);
+		const result = await runGate(makePR({ ciStatus: "failure" }), config, audit);
 		expect(result.outcome.result).toBe("reject");
 	});
 
-	it("shadows (not rejects) in shadow mode", () => {
+	it("shadows (not rejects) in shadow mode", async () => {
 		const config: GateConfig = { criteria: [{ name: "buildFailure", mode: "shadow" }] };
-		const result = runGate(makePR({ ciStatus: "failure" }), config, audit);
+		const result = await runGate(makePR({ ciStatus: "failure" }), config, audit);
 		expect(result.outcome.result).toBe("shadow");
 		expect(audit.list()).toHaveLength(1);
 	});
 
-	it("skips the criterion in off mode", () => {
+	it("skips the criterion in off mode", async () => {
 		const config: GateConfig = { criteria: [{ name: "buildFailure", mode: "off" }] };
-		const result = runGate(makePR({ ciStatus: "failure" }), config, audit);
+		const result = await runGate(makePR({ ciStatus: "failure" }), config, audit);
 		expect(result.outcome.result).toBe("pass");
 	});
 
-	it("rejects duplicate PRs in enforce mode", () => {
+	it("rejects duplicate PRs in enforce mode", async () => {
 		const config: GateConfig = { criteria: [{ name: "duplicate", mode: "enforce" }] };
 		const existing = [makePR({ id: "pr-0" })];
-		const result = runGate(makePR({ id: "pr-1" }), config, audit, existing);
+		const result = await runGate(makePR({ id: "pr-1" }), config, audit, existing);
 		expect(result.outcome.result).toBe("reject");
 	});
 
-	it("records a per-criterion decision only for criteria not in off mode", () => {
+	it("records a per-criterion decision only for criteria not in off mode", async () => {
 		const config: GateConfig = {
 			criteria: [
 				{ name: "buildFailure", mode: "enforce" },
@@ -65,7 +65,7 @@ describe("runGate", () => {
 				{ name: "duplicate", mode: "shadow" },
 			],
 		};
-		const result = runGate(makePR({ ciStatus: "failure" }), config, audit);
+		const result = await runGate(makePR({ ciStatus: "failure" }), config, audit);
 		expect(result.decisions).toHaveLength(2);
 		const byName = Object.fromEntries(result.decisions.map((d) => [d.criterionName, d]));
 		expect(byName["buildFailure"]).toMatchObject({ mode: "enforce", triggered: true });

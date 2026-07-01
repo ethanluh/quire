@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from "@jest/globals";
+import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { orchestratePipeline } from "../../src/engine/pipeline/pipeline.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
@@ -166,5 +169,34 @@ describe("orchestratePipeline — integration", () => {
 
 		expect(result.error).toBeUndefined();
 		expect(result.cards.length).toBe(1);
+	});
+
+	describe("gate-loop failure handling", () => {
+		let dir: string;
+
+		afterEach(async () => {
+			if (dir) await rm(dir, { recursive: true, force: true });
+		});
+
+		it("returns partial gate results with an error instead of throwing when the audit write fails", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-pipeline-"));
+			// A file where a directory component is expected forces the audit write's
+			// mkdir to fail, simulating a disk error during a shadow-mode audit write.
+			const blockerPath = join(dir, "blocker");
+			await writeFile(blockerPath, "not a directory", "utf8");
+			const brokenAuditStore = new AuditStore(join(blockerPath, "audit.ndjson"));
+
+			const config: PipelineConfig = {
+				gate: { criteria: [{ name: "buildFailure", mode: "shadow" }] },
+				bundle: { similarityThreshold: 0.75 },
+			};
+			const prs = [makePR("pr-1", "add passwordless auth", { ciStatus: "failure" })];
+
+			const result = await orchestratePipeline(prs, config, stub, analyzer, brokenAuditStore);
+
+			expect(result.error).toBeTruthy();
+			expect(result.cards).toHaveLength(0);
+			expect(result.bundles).toHaveLength(0);
+		});
 	});
 });

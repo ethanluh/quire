@@ -1,4 +1,6 @@
 import type { Octokit } from "@octokit/rest";
+import type { GestureAction, ReviewCard } from "../types/core.js";
+import { formatReviewCardComment } from "../review/comment.js";
 import type { GitHubClient, RawPRPayload } from "./client.js";
 
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
@@ -78,6 +80,21 @@ export class OctokitGitHubClient implements GitHubClient {
 			pullRequestId: pr.node_id,
 		});
 		return result.revertPullRequest.pullRequest.url;
+	}
+
+	async postReviewCardComment(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		action: GestureAction,
+		card: ReviewCard,
+	): Promise<void> {
+		await this.octokit.rest.issues.createComment({
+			owner,
+			repo,
+			issue_number: prNumber,
+			body: formatReviewCardComment(action, card),
+		});
 	}
 
 	private async toRawPRPayload(owner: string, repo: string, pr: PullRequestRef): Promise<RawPRPayload> {

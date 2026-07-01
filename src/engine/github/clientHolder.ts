@@ -1,3 +1,4 @@
+import type { GestureAction, ReviewCard } from "../types/core.js";
 import type { GitHubClient, RawPRPayload } from "./client.js";
 
 // MergeQueue is constructed once at startup holding a reference to a GitHubClient.
@@ -30,5 +31,15 @@ export class GitHubClientHolder implements GitHubClient {
 
 	revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string> {
 		return this.current.revertPullRequest(owner, repo, prNumber);
+	}
+
+	postReviewCardComment(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		action: GestureAction,
+		card: ReviewCard,
+	): Promise<void> {
+		return this.current.postReviewCardComment(owner, repo, prNumber, action, card);
 	}
 }

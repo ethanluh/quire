@@ -2,7 +2,7 @@ import express from "express";
 import { Octokit } from "@octokit/rest";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AuditStore } from "../../engine/gate/auditStore.js";
+import { loadAuditStore } from "../../engine/gate/auditStore.js";
 import { MergeQueue } from "../../engine/queue/mergeQueue.js";
 import type { GitHubClient } from "../../engine/github/client.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
@@ -32,6 +32,7 @@ const QUEUE_PATH = join(DATA_DIR, "queue.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
 const GATE_LOG_PATH = join(DATA_DIR, "instrumentation/gate-decisions.ndjson");
 const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjson");
+const AUDIT_LOG_PATH = join(DATA_DIR, "instrumentation/audit.ndjson");
 const ACCOUNT_PATH = join(DATA_DIR, "github-account.json");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
@@ -54,7 +55,7 @@ async function main(): Promise<void> {
 	// Serve static UI
 	app.use(express.static(join(__dirname, "../ui")));
 
-	const auditStore = new AuditStore();
+	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
 	const githubToken = process.env["GITHUB_TOKEN"];
 	const connectedAccount = await loadAccount(ACCOUNT_PATH);
 
@@ -88,7 +89,7 @@ async function main(): Promise<void> {
 		prsRouter(state, pipelineConfig, provider, analyzer, auditStore, queue, instrumentationSink),
 	);
 	app.use("/bundles", bundlesRouter(state));
-	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH));
+	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github));
 	app.use("/queue", queueRouter(queue));
 	app.use("/shelf", shelfRouter(state));
 	app.use("/audit", auditRouter(auditStore));
