@@ -10,7 +10,7 @@ export function adminRouter(
 	state: ServerState,
 	auditStore: AuditStore,
 	queue: MergeQueue,
-	deferLogPath: string,
+	ndjsonLogPaths: ReadonlyArray<string>,
 ): Router {
 	const router = Router();
 
@@ -21,7 +21,7 @@ export function adminRouter(
 			state.shelf.clear();
 			auditStore.clear();
 			await queue.clear();
-			await truncateNdjson(deferLogPath);
+			await Promise.all(ndjsonLogPaths.map((path) => truncateNdjson(path)));
 			res.json({ status: "reset" });
 		} catch (err) {
 			next(err);

@@ -26,6 +26,18 @@ export interface PipelineResult {
 	error?: string;
 }
 
+// Instrumentation is documented as an add-on, never a hard dependency: a sink
+// call that throws (disk full, permission error, ...) must not abort the
+// pipeline or discard results the caller has no way to recover.
+async function logSafely(call: (() => Promise<void> | void) | undefined): Promise<void> {
+	if (call === undefined) return;
+	try {
+		await call();
+	} catch (err) {
+		console.error("instrumentation sink error (ignored):", err);
+	}
+}
+
 export async function orchestratePipeline(
 	prs: ReadonlyArray<PullRequest>,
 	config: PipelineConfig,
@@ -44,7 +56,7 @@ export async function orchestratePipeline(
 	for (const pr of prs) {
 		const result = runGate(pr, config.gate, auditStore, passed);
 		for (const decision of result.decisions) {
-			await sink?.logGateDecision?.(decision);
+			await logSafely(() => sink?.logGateDecision?.(decision));
 		}
 		if (result.outcome.result === "pass") {
 			passed.push(pr);
@@ -69,13 +81,15 @@ export async function orchestratePipeline(
 			for (const member of bundle.members) {
 				const verdict = await runCheapScreen(member, bundle, provider, analyzer);
 				driftVerdicts.set(member.id, verdict);
-				await sink?.logDriftScreen?.({
-					bundleId: bundle.id,
-					prId: member.id,
-					signalCount: verdict.status === "flagged" ? verdict.signals.length : 0,
-					flagged: verdict.status === "flagged",
-					recordedAt: new Date().toISOString(),
-				});
+				await logSafely(() =>
+					sink?.logDriftScreen?.({
+						bundleId: bundle.id,
+						prId: member.id,
+						signalCount: verdict.status === "flagged" ? verdict.signals.length : 0,
+						flagged: verdict.status === "flagged",
+						recordedAt: new Date().toISOString(),
+					}),
+				);
 			}
 			cards.push(buildReviewCard(bundle, driftVerdicts));
 		}

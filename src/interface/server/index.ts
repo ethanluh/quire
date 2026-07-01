@@ -92,7 +92,10 @@ async function main(): Promise<void> {
 	app.use("/queue", queueRouter(queue));
 	app.use("/shelf", shelfRouter(state));
 	app.use("/audit", auditRouter(auditStore));
-	app.use("/admin", adminRouter(state, auditStore, queue, DEFER_LOG_PATH));
+	app.use(
+		"/admin",
+		adminRouter(state, auditStore, queue, [DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH]),
+	);
 	app.use(
 		"/account/github",
 		githubAccountRouter(

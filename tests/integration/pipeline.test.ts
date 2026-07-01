@@ -146,4 +146,25 @@ describe("orchestratePipeline — integration", () => {
 			expect.objectContaining({ bundleId: expect.any(String), prId: "pr-1", signalCount: 0, flagged: false }),
 		]);
 	});
+
+	it("does not abort the pipeline when a sink method throws (instrumentation stays non-fatal)", async () => {
+		stub.queueCompletion('["adds OTP login"]');
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		analyzer.setFootprint([]);
+
+		const sink = {
+			logGateDecision: () => {
+				throw new Error("disk full");
+			},
+			logDriftScreen: () => {
+				throw new Error("disk full");
+			},
+		};
+
+		const prs = [makePR("pr-1", "add passwordless auth")];
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore, sink);
+
+		expect(result.error).toBeUndefined();
+		expect(result.cards.length).toBe(1);
+	});
 });
