@@ -38,7 +38,7 @@ function makeCard(bundleId: string): ReviewCard {
 }
 
 function makeBundle(id: string): Bundle {
-	return { id, direction: "add passwordless auth", members: [] };
+	return { id, direction: "add passwordless auth", effectSummary: "adds OTP-based login", members: [] };
 }
 
 async function postReset(

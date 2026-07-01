@@ -14,7 +14,9 @@ export async function runCheapScreen(
 ): Promise<DriftVerdict> {
 	const signals: DriftSignal[] = [];
 
-	const effects = await matchEffectsToDirection(rawClauses, bundle.direction, provider);
+	// Compared against the bundle's extracted-effect evidence, never bundle.direction
+	// (declaredDirection) — that field is a label, not a verdict input (INV-1).
+	const effects = await matchEffectsToDirection(rawClauses, bundle.effectSummary, provider);
 	const orphanClauses = effects
 		.filter((e) => !e.matchedDirection)
 		.map((e) => e.clause);

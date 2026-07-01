@@ -12,6 +12,30 @@ import type {
 	GateDecisionLog,
 	DriftScreenLog,
 } from "../../src/engine/types/instrumentation.js";
+import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "../../src/engine/drift/effectList/provider.js";
+
+class FlakyProvider implements LlmProvider {
+	private readonly inner = new StubLlmProvider();
+
+	get calls(): ReadonlyArray<LlmCall> {
+		return this.inner.calls;
+	}
+
+	queueCompletion(response: string): void {
+		this.inner.queueCompletion(response);
+	}
+
+	async complete(messages: ReadonlyArray<LlmMessage>, opts?: LlmCallOptions): Promise<string> {
+		if (messages.some((m) => m.content.includes("FAIL_EXTRACTION_MARKER"))) {
+			throw new Error("provider timeout");
+		}
+		return this.inner.complete(messages, opts);
+	}
+
+	async embed(text: string): Promise<ReadonlyArray<number>> {
+		return this.inner.embed(text);
+	}
+}
 
 function makePR(id: string, direction: string, overrides: Partial<PullRequest> = {}): PullRequest {
 	return {
@@ -198,5 +222,24 @@ describe("orchestratePipeline — integration", () => {
 			expect(result.cards).toHaveLength(0);
 			expect(result.bundles).toHaveLength(0);
 		});
+	});
+
+	it("a single PR's extraction failure does not discard bundling/cards for the rest (partial-failure contract)", async () => {
+		const provider = new FlakyProvider();
+		provider.queueCompletion('["adds OTP login"]'); // pr-good's extractor
+		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }])); // matcher
+		analyzer.setFootprint([]);
+
+		const prs = [
+			makePR("pr-bad", "add passwordless auth", { diff: { raw: "FAIL_EXTRACTION_MARKER", hunks: [] } }),
+			makePR("pr-good", "add passwordless auth"),
+		];
+
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, provider, analyzer, auditStore);
+
+		expect(result.error).toContain("pr-bad");
+		expect(result.bundles.length).toBe(1);
+		expect(result.bundles[0]?.members.map((m) => m.id)).toEqual(["pr-good"]);
+		expect(result.cards.length).toBe(1);
 	});
 });

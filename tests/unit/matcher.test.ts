@@ -22,7 +22,7 @@ function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
 }
 
 function makeBundle(members: ReadonlyArray<PullRequest>): Bundle {
-	return { id: "bundle-1", direction: "add passwordless auth", members };
+	return { id: "bundle-1", direction: "add passwordless auth", effectSummary: "adds OTP-based login", members };
 }
 
 describe("matchEffectsToDirection — parse-failure fallback (INV-3)", () => {

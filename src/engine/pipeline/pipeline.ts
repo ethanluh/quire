@@ -81,9 +81,18 @@ export async function orchestratePipeline(
 	// losing work the caller has no way to recover.
 	const bundles: Bundle[] = [];
 	const cards: ReviewCard[] = [];
+	let extractionError: string | undefined;
 	try {
-		const { bundles: builtBundles, effectsByPr } = await buildBundles(passed, provider, config.bundle);
+		const { bundles: builtBundles, effectsByPr, extractionFailures } = await buildBundles(
+			passed, provider, config.bundle,
+		);
 		bundles.push(...builtBundles);
+
+		if (extractionFailures.length > 0) {
+			extractionError = `effect extraction failed for ${extractionFailures.length} PR(s): ${extractionFailures
+				.map((f) => `${f.pr.id} (${f.error})`)
+				.join("; ")}`;
+		}
 
 		for (const bundle of bundles) {
 			const driftVerdicts = new Map<string, DriftVerdict>();
@@ -108,5 +117,5 @@ export async function orchestratePipeline(
 		return { cards, bundles, rejected, shadowed, error };
 	}
 
-	return { cards, bundles, rejected, shadowed };
+	return { cards, bundles, rejected, shadowed, ...(extractionError ? { error: extractionError } : {}) };
 }
