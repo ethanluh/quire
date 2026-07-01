@@ -8,6 +8,7 @@ import { createServerState } from "../../src/interface/server/state.js";
 import { bundlesRouter } from "../../src/interface/server/routes/bundles.js";
 import { gesturesRouter } from "../../src/interface/server/routes/gestures.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 import type { Bundle, GestureAction, ReviewCard } from "../../src/engine/types/core.js";
 
@@ -62,6 +63,7 @@ describe("gesturesRouter — review queue removal", () => {
 	let state: ReturnType<typeof createServerState>;
 	let dataDir: string;
 	let github: StubGitHubClient;
+	let decidedStore: DecidedPrStore;
 
 	beforeEach(async () => {
 		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
@@ -69,11 +71,13 @@ describe("gesturesRouter — review queue removal", () => {
 		github = new StubGitHubClient();
 		const queue = new MergeQueue(join(dataDir, "queue.json"), github);
 		await queue.load();
+		decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
+		await decidedStore.load();
 
 		const app = express();
 		app.use(express.json());
 		app.use("/bundles", bundlesRouter(state));
-		app.use("/bundles", gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github));
+		app.use("/bundles", gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore));
 
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, resolve);
@@ -106,6 +110,7 @@ describe("gesturesRouter — review queue removal", () => {
 		const cards = await (await fetch(`${baseUrl}/bundles`)).json();
 		expect(cards).toEqual([]);
 		expect(state.bundles.has("b-1")).toBe(false);
+		expect(decidedStore.isDecided("b-1-pr-1")).toBe(true);
 	});
 
 	it("removes the card from the review queue on reject", async () => {
@@ -116,6 +121,7 @@ describe("gesturesRouter — review queue removal", () => {
 
 		const cards = await (await fetch(`${baseUrl}/bundles`)).json();
 		expect(cards).toEqual([]);
+		expect(decidedStore.isDecided("b-2-pr-1")).toBe(true);
 	});
 
 	it("removes the card from the review queue on defer", async () => {
@@ -127,6 +133,7 @@ describe("gesturesRouter — review queue removal", () => {
 		const cards = await (await fetch(`${baseUrl}/bundles`)).json();
 		expect(cards).toEqual([]);
 		expect(state.shelf.has("b-3")).toBe(true);
+		expect(decidedStore.isDecided("b-3-pr-1")).toBe(true);
 	});
 
 	it("posts a review card comment to each member PR on accept", async () => {
@@ -183,10 +190,12 @@ describe("gesturesRouter — review card comment posting failures", () => {
 		const github = new RejectingGitHubClient();
 		const queue = new MergeQueue(join(dataDir, "queue.json"), github);
 		await queue.load();
+		const decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
+		await decidedStore.load();
 
 		const app = express();
 		app.use(express.json());
-		app.use("/bundles", gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github));
+		app.use("/bundles", gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore));
 
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, resolve);

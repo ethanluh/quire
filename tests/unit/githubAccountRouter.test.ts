@@ -6,7 +6,7 @@ import express from "express";
 import { request as httpRequest } from "node:http";
 import type { Server } from "node:http";
 import { githubAccountRouter } from "../../src/interface/server/routes/account.js";
-import type { OAuthDeps } from "../../src/interface/server/routes/account.js";
+import type { WebhookConfig } from "../../src/interface/server/routes/account.js";
 import type { ConnectedAccount } from "../../src/engine/github/account.js";
 import { GitHubClientHolder } from "../../src/engine/github/clientHolder.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
@@ -14,14 +14,18 @@ import { OctokitGitHubClient } from "../../src/engine/github/octokitClient.js";
 import { InvalidTokenError } from "../../src/engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../src/engine/github/verifyToken.js";
 import type { RepoSummary } from "../../src/engine/github/repos.js";
-import type { RawPRPayload } from "../../src/engine/github/client.js";
+import type { ListOpenPullRequestsResult, RawPRPayload } from "../../src/engine/github/client.js";
 import { OAuthExchangeError } from "../../src/engine/github/oauth.js";
+import type { OAuthConfig, OAuthDeps } from "../../src/engine/github/oauth.js";
+import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { createServerState } from "../../src/interface/server/state.js";
+import type { ServerState } from "../../src/interface/server/state.js";
+import { createAccountState } from "../../src/interface/server/accountState.js";
+import type { RefreshDeps } from "../../src/interface/server/refreshRepoQueue.js";
 import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
-import type { ServerState } from "../../src/interface/server/state.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 import type { PipelineDeps } from "../../src/interface/server/ingestIntoQueue.js";
 
@@ -95,10 +99,10 @@ class SequencedGitHubClient extends StubGitHubClient {
 	constructor(private readonly responses: ReadonlyArray<ReadonlyArray<RawPRPayload>>) {
 		super();
 	}
-	override async listOpenPullRequests(): Promise<ReadonlyArray<RawPRPayload>> {
-		const response = this.responses[this.call] ?? [];
+	override async listOpenPullRequests(): Promise<ListOpenPullRequestsResult> {
+		const payloads = this.responses[this.call] ?? [];
 		this.call++;
-		return response;
+		return { payloads, skipped: [] };
 	}
 }
 
@@ -128,35 +132,37 @@ describe("githubAccountRouter", () => {
 		initialAccount: ConnectedAccount | undefined = undefined,
 		depsOverrides: Partial<Pick<PipelineDeps, "auditStore" | "config">> = {},
 		oauthDeps: OAuthDeps | undefined = undefined,
-	): { accountPath: string; holder: GitHubClientHolder; state: ServerState } {
+		webhookConfig: WebhookConfig | undefined = undefined,
+	): { accountPath: string; holder: GitHubClientHolder; state: ServerState; decidedStore: DecidedPrStore; refreshDeps: RefreshDeps } {
 		const accountPath = join(dir, "github-account.json");
 		const holder = new GitHubClientHolder(client);
 		const state = createServerState();
+		const accountState = createAccountState(initialAccount);
+		const decidedStore = new DecidedPrStore(join(dir, "decided-prs.json"));
 		const deps: PipelineDeps = {
 			config: depsOverrides.config ?? PIPELINE_CONFIG,
 			provider,
 			analyzer: new StubStaticAnalyzer(),
 			auditStore: depsOverrides.auditStore ?? new AuditStore(),
 		};
+		const refreshDeps: RefreshDeps = {
+			accountState,
+			accountPath,
+			clientHolder: holder,
+			oauth: oauthDeps,
+			decidedStore,
+			state,
+			pipelineDeps: deps,
+		};
 		const app = express();
 		app.use(express.json());
 		app.use(
 			"/account/github",
-			githubAccountRouter(
-				accountPath,
-				holder,
-				fallbackToken,
-				verifyToken,
-				listRepos,
-				initialAccount,
-				state,
-				deps,
-				oauthDeps,
-			),
+			githubAccountRouter(refreshDeps, fallbackToken, verifyToken, listRepos, webhookConfig),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
-		return { accountPath, holder, state };
+		return { accountPath, holder, state, decidedStore, refreshDeps };
 	}
 
 	function makeOAuthDeps(
@@ -164,9 +170,10 @@ describe("githubAccountRouter", () => {
 	): OAuthDeps {
 		return {
 			config: { clientId: "client-id", clientSecret: "client-secret" },
-			buildAuthorizeUrl: (config, redirectUri, state) =>
+			buildAuthorizeUrl: (config: OAuthConfig, redirectUri: string, state: string) =>
 				`https://github.com/login/oauth/authorize?client_id=${config.clientId}&redirect_uri=${redirectUri}&state=${state}`,
 			exchangeCodeForToken,
+			refreshAccessToken: async () => ({ accessToken: "refreshed-access-token" }),
 			redirectUri: "http://localhost:3000/account/github/oauth/callback",
 		};
 	}
@@ -882,6 +889,228 @@ describe("githubAccountRouter", () => {
 			expect(location).toContain("account=error");
 			expect(new URLSearchParams(location?.split("?")[1]).get("reason")).toBe("GitHub rejected this token");
 			await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+		});
+	});
+
+	describe("webhook auto-registration", () => {
+		const WEBHOOK_CONFIG: WebhookConfig = { publicUrl: "https://example.ngrok.io", secret: "webhook-secret" };
+
+		it("registers a webhook when selecting a repo and a webhook config is set", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const client = new StubGitHubClient();
+			const { accountPath } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				client,
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+				{},
+				undefined,
+				WEBHOOK_CONFIG,
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(
+				server,
+				"POST",
+				"/account/github/repos/select",
+				{ owner: "octocat", name: "hello-world" },
+				ADMIN_HEADERS,
+			);
+
+			expect(status).toBe(200);
+			expect(body["webhookRegistered"]).toBe(true);
+			expect(body["webhookError"]).toBeUndefined();
+			expect(client.createdWebhooks).toEqual([
+				{ owner: "octocat", repo: "hello-world", url: "https://example.ngrok.io/webhooks/github", id: expect.any(Number) },
+			]);
+
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { selectedRepo?: { webhookId?: number } };
+			expect(persisted.selectedRepo?.webhookId).toEqual(expect.any(Number));
+		});
+
+		it("reports webhookRegistered: false and an error, without failing the request, when webhook creation fails", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			class FailingWebhookClient extends StubGitHubClient {
+				override async createWebhook(): Promise<never> {
+					throw new Error("token lacks admin:repo_hook scope");
+				}
+			}
+			const { status, body } = await (async () => {
+				setup(
+					async () => ({ login: "octocat", scopes: [] }),
+					undefined,
+					undefined,
+					new FailingWebhookClient(),
+					new StubLlmProvider(),
+					{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+					{},
+					undefined,
+					WEBHOOK_CONFIG,
+				);
+				await new Promise((resolve) => server.once("listening", resolve));
+				return call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "hello-world" }, ADMIN_HEADERS);
+			})();
+
+			expect(status).toBe(200);
+			expect(body["webhookRegistered"]).toBe(false);
+			expect(body["webhookError"]).toContain("admin:repo_hook");
+			expect(body["selected"]).toEqual({ owner: "octocat", name: "hello-world" });
+		});
+
+		it("reports webhookRegistered: false with a disabled reason when no webhook config is set", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { body } = await call(
+				server,
+				"POST",
+				"/account/github/repos/select",
+				{ owner: "octocat", name: "hello-world" },
+				ADMIN_HEADERS,
+			);
+
+			expect(body["webhookRegistered"]).toBe(false);
+			expect(body["webhookDisabledReason"]).toBeTruthy();
+		});
+
+		it("deletes the previous repo's webhook when switching to a different one", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const client = new StubGitHubClient();
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				client,
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+				{},
+				undefined,
+				WEBHOOK_CONFIG,
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			await call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "repo-a" }, ADMIN_HEADERS);
+			const firstHookId = client.createdWebhooks[0]?.id;
+			await call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "repo-b" }, ADMIN_HEADERS);
+
+			expect(client.deletedWebhooks).toEqual([{ owner: "octocat", repo: "repo-a", hookId: firstHookId }]);
+		});
+
+		it("deletes the selected repo's webhook on disconnect", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const client = new StubGitHubClient();
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				client,
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+				{},
+				undefined,
+				WEBHOOK_CONFIG,
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+			await call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "hello-world" }, ADMIN_HEADERS);
+			const hookId = client.createdWebhooks[0]?.id;
+
+			await call(server, "POST", "/account/github/disconnect", undefined, ADMIN_HEADERS);
+
+			expect(client.deletedWebhooks).toEqual([{ owner: "octocat", repo: "hello-world", hookId }]);
+		});
+
+		it("cleans up an orphaned webhook if the account is disconnected mid-select", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			let accountState: RefreshDeps["accountState"] | undefined;
+			class DisconnectingDuringWebhookClient extends StubGitHubClient {
+				override async createWebhook(owner: string, repo: string, config: { url: string; secret: string }) {
+					const hook = await super.createWebhook(owner, repo, config);
+					// Simulates a concurrent POST /disconnect landing right after the webhook
+					// was created on GitHub's side but before this handler persists its id.
+					if (accountState !== undefined) accountState.current = undefined;
+					return hook;
+				}
+			}
+			const client = new DisconnectingDuringWebhookClient();
+			const { refreshDeps } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				client,
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+				{},
+				undefined,
+				WEBHOOK_CONFIG,
+			);
+			accountState = refreshDeps.accountState;
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(
+				server,
+				"POST",
+				"/account/github/repos/select",
+				{ owner: "octocat", name: "hello-world" },
+				ADMIN_HEADERS,
+			);
+
+			expect(status).toBe(500);
+			expect(client.createdWebhooks).toHaveLength(1);
+			expect(client.deletedWebhooks).toEqual([
+				{ owner: "octocat", repo: "hello-world", hookId: client.createdWebhooks[0]?.id },
+			]);
+		});
+	});
+
+	describe("needsReconnect", () => {
+		it("surfaces needsReconnect: true on status when the account was flagged", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{
+					login: "octocat",
+					token: "ghp_abc",
+					scopes: [],
+					connectedAt: "2026-06-30T00:00:00.000Z",
+					needsReconnect: true,
+				},
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { body } = await call(server, "GET", "/account/github/status");
+
+			expect(body["needsReconnect"]).toBe(true);
+		});
+
+		it("defaults needsReconnect to false when unset", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { body } = await call(server, "GET", "/account/github/status");
+
+			expect(body["needsReconnect"]).toBe(false);
 		});
 	});
 });

@@ -4,6 +4,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadAuditStore } from "../../engine/gate/auditStore.js";
 import { MergeQueue } from "../../engine/queue/mergeQueue.js";
+import { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
 import type { GitHubClient } from "../../engine/github/client.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { OctokitGitHubClient } from "../../engine/github/octokitClient.js";
@@ -12,9 +13,14 @@ import { loadAccount } from "../../engine/github/account.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
 import { listRepositories } from "../../engine/github/repos.js";
 import { resolveLlmProvider } from "./resolveLlmProvider.js";
-import { buildAuthorizeUrl, exchangeCodeForToken } from "../../engine/github/oauth.js";
+import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken } from "../../engine/github/oauth.js";
+import type { OAuthDeps } from "../../engine/github/oauth.js";
+import { NeedsReconnectError } from "../../engine/github/tokenRefresh.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
+import { createAccountState } from "./accountState.js";
+import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
+import type { RefreshDeps } from "./refreshRepoQueue.js";
 import { prsRouter } from "./routes/prs.js";
 import { bundlesRouter } from "./routes/bundles.js";
 import { gesturesRouter } from "./routes/gestures.js";
@@ -23,7 +29,9 @@ import { shelfRouter } from "./routes/shelf.js";
 import { auditRouter } from "./routes/audit.js";
 import { adminRouter } from "./routes/admin.js";
 import { githubAccountRouter } from "./routes/account.js";
-import type { OAuthDeps } from "./routes/account.js";
+import type { WebhookConfig } from "./routes/account.js";
+import { webhookRouter } from "./routes/webhook.js";
+import { verifyGithubSignature } from "./middleware/webhookSignature.js";
 import { errorHandler } from "./middleware/errors.js";
 import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
@@ -32,6 +40,7 @@ import type { PipelineDeps } from "./ingestIntoQueue.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "../../../data");
 const QUEUE_PATH = join(DATA_DIR, "queue.json");
+const DECIDED_PRS_PATH = join(DATA_DIR, "decided-prs.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
 const GATE_LOG_PATH = join(DATA_DIR, "instrumentation/gate-decisions.ndjson");
 const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjson");
@@ -39,6 +48,8 @@ const AUDIT_LOG_PATH = join(DATA_DIR, "instrumentation/audit.ndjson");
 const ACCOUNT_PATH = join(DATA_DIR, "github-account.json");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
+const RECONCILE_INTERVAL_MS =
+	parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "20", 10) * 60 * 1000;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -53,14 +64,21 @@ const pipelineConfig: PipelineConfig = {
 
 async function main(): Promise<void> {
 	const app = express();
-	app.use(express.json());
 
-	// Serve static UI
-	app.use(express.static(join(__dirname, "../ui")));
+	const githubToken = process.env["GITHUB_TOKEN"];
+	const webhookSecret = process.env["GITHUB_WEBHOOK_SECRET"];
+	const publicUrl = process.env["QUIRE_PUBLIC_URL"];
+	const webhookConfig: WebhookConfig | undefined =
+		webhookSecret !== undefined && webhookSecret !== "" && publicUrl !== undefined && publicUrl !== ""
+			? { publicUrl, secret: webhookSecret }
+			: undefined;
 
 	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
-	const githubToken = process.env["GITHUB_TOKEN"];
 	const connectedAccount = await loadAccount(ACCOUNT_PATH);
+	const accountState = createAccountState(connectedAccount);
+
+	const decidedStore = new DecidedPrStore(DECIDED_PRS_PATH);
+	await decidedStore.load();
 
 	const oauthClientId = process.env["GITHUB_OAUTH_CLIENT_ID"];
 	const oauthClientSecret = process.env["GITHUB_OAUTH_CLIENT_SECRET"];
@@ -71,6 +89,7 @@ async function main(): Promise<void> {
 			config: { clientId: oauthClientId, clientSecret: oauthClientSecret },
 			buildAuthorizeUrl,
 			exchangeCodeForToken,
+			refreshAccessToken,
 			redirectUri,
 		};
 		console.log(`GitHub OAuth: enabled (callback URL must be registered as ${redirectUri})`);
@@ -111,32 +130,78 @@ async function main(): Promise<void> {
 		instrumentationSink,
 	};
 
+	const refreshDeps: RefreshDeps = {
+		accountState,
+		accountPath: ACCOUNT_PATH,
+		clientHolder: github,
+		oauth: oauthDeps,
+		decidedStore,
+		state,
+		pipelineDeps,
+	};
+
+	// The webhook path needs its exact raw request bytes to verify GitHub's HMAC signature,
+	// so it must be parsed (and mounted) before the global express.json() below would
+	// otherwise consume the body as parsed JSON.
+	if (webhookConfig !== undefined) {
+		app.use(
+			"/webhooks/github",
+			express.raw({ type: "application/json" }),
+			verifyGithubSignature(webhookConfig.secret),
+			webhookRouter(refreshDeps),
+		);
+		console.log("GitHub webhook receiver: enabled at /webhooks/github");
+	} else {
+		console.log("GitHub webhook receiver: disabled (QUIRE_PUBLIC_URL/GITHUB_WEBHOOK_SECRET not set)");
+	}
+
+	app.use(express.json());
+
+	// Serve static UI
+	app.use(express.static(join(__dirname, "../ui")));
+
 	app.use("/prs", prsRouter(state, pipelineDeps, queue));
 	app.use("/bundles", bundlesRouter(state));
-	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github));
+	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github, decidedStore));
 	app.use("/queue", queueRouter(queue));
-	app.use("/shelf", shelfRouter(state));
+	app.use("/shelf", shelfRouter(state, decidedStore));
 	app.use("/audit", auditRouter(auditStore));
 	app.use(
 		"/admin",
-		adminRouter(state, auditStore, queue, [DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH]),
+		adminRouter(state, auditStore, queue, [DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH], decidedStore),
 	);
 	app.use(
 		"/account/github",
 		githubAccountRouter(
-			ACCOUNT_PATH,
-			github,
+			refreshDeps,
 			githubToken,
 			fetchAuthenticatedUser,
 			(token) => listRepositories(new Octokit({ auth: token })),
-			connectedAccount,
-			state,
-			pipelineDeps,
-			oauthDeps,
+			webhookConfig,
 		),
 	);
 
 	app.use(errorHandler);
+
+	// Independent of webhooks — a safety net for a missed delivery, and the sole detection
+	// mechanism if webhooks aren't configured. Shares enqueueRefresh's per-repo coalescing
+	// lock with the webhook route, so the two never race on the same repo's queue.
+	const reconcileTimer = setInterval(() => {
+		const repo = accountState.current?.selectedRepo;
+		if (repo === undefined) return;
+		enqueueRefresh(repo.owner, repo.name, refreshDeps).catch((err: unknown) => {
+			if (err instanceof NeedsReconnectError) {
+				console.warn(`Reconciliation poll paused for ${repo.owner}/${repo.name}: ${err.message}`);
+				return;
+			}
+			if (err instanceof AccountChangedError) {
+				console.warn(`Reconciliation poll for ${repo.owner}/${repo.name} aborted: ${err.message}`);
+				return;
+			}
+			console.error(`Reconciliation poll failed for ${repo.owner}/${repo.name}:`, err);
+		});
+	}, RECONCILE_INTERVAL_MS);
+	reconcileTimer.unref();
 
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);

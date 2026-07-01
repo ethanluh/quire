@@ -9,6 +9,7 @@ import { createServerState } from "../../src/interface/server/state.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import type { PullRequest, Bundle, ReviewCard } from "../../src/engine/types/core.js";
 
 function makePR(): PullRequest {
@@ -74,7 +75,7 @@ describe("adminRouter POST /reset", () => {
 		const state = createServerState();
 		state.bundles.set("b-1", makeBundle("b-1"));
 		state.cards.set("b-1", makeCard("b-1"));
-		state.shelf.set("b-2", makeCard("b-2"));
+		state.shelf.set("b-2", { card: makeCard("b-2"), memberPrIds: [] });
 
 		const auditStore = new AuditStore();
 		await auditStore.add(makePR(), "duplicate", "looks like a dup");
@@ -83,10 +84,13 @@ describe("adminRouter POST /reset", () => {
 		await queue.load();
 		await queue.enqueue(makeBundle("b-3"));
 
+		const decidedStore = new DecidedPrStore(join(dir, "decided-prs.json"));
+		await decidedStore.markDecided(["pr-1"], "reject");
+
 		const app = express();
 		app.use(
 			"/admin",
-			adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath]),
+			adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath], decidedStore),
 		);
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -100,6 +104,7 @@ describe("adminRouter POST /reset", () => {
 		expect(state.shelf.size).toBe(0);
 		expect(auditStore.list()).toHaveLength(0);
 		expect(await queue.listEntries()).toHaveLength(0);
+		expect(decidedStore.isDecided("pr-1")).toBe(false);
 		expect(await readFile(deferLogPath, "utf8")).toBe("");
 		expect(await readFile(gateLogPath, "utf8")).toBe("");
 		expect(await readFile(driftScreenLogPath, "utf8")).toBe("");
@@ -116,9 +121,10 @@ describe("adminRouter POST /reset", () => {
 		const auditStore = new AuditStore();
 		const queue = new MergeQueue(queuePath, new StubGitHubClient());
 		await queue.load();
+		const decidedStore = new DecidedPrStore(join(dir, "decided-prs.json"));
 
 		const app = express();
-		app.use("/admin", adminRouter(state, auditStore, queue, [deferLogPath]));
+		app.use("/admin", adminRouter(state, auditStore, queue, [deferLogPath], decidedStore));
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
 

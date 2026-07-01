@@ -96,6 +96,7 @@
     letter-spacing: var(--tracking-wider);
     margin: 0 0 var(--space-3);
   }
+  .automation-status { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
   .repo-search { margin-bottom: var(--space-3); }
   .repo-list { display: flex; flex-direction: column; gap: var(--space-2); max-height: 320px; overflow-y: auto; }
   .repo-entry {
@@ -212,6 +213,9 @@
 <div id="pane-account" class="pane">
   <div class="account-panel">
     <div class="account-status" id="account-status">Checking connection&hellip;</div>
+    <div id="account-reconnect-banner" class="result-msg error" style="display:none">
+      Your GitHub connection expired and couldn't refresh automatically — reconnect to resume automatic PR ingestion.
+    </div>
     <div id="account-connect-form">
       <p>Connect a GitHub account so Quire can merge and revert PRs on its behalf.</p>
       <div class="account-connect-actions">
@@ -224,6 +228,7 @@
 
     <div class="repo-panel" id="repo-panel" style="display:none">
       <h3>Repository to work on</h3>
+      <div class="automation-status" id="automation-status" style="display:none"></div>
       <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
       <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
     </div>
@@ -397,11 +402,25 @@ const patModalBackdrop = document.getElementById('pat-modal-backdrop');
 const patConnectBtn = document.getElementById('btn-account-connect-pat');
 const patModalCancelBtn = document.getElementById('btn-pat-modal-cancel');
 
+function renderAutomationStatus(selectedRepo) {
+  const el = document.getElementById('automation-status');
+  if (!selectedRepo) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  el.textContent = selectedRepo.webhookId !== undefined && selectedRepo.webhookId !== null
+    ? 'Webhooks active — new and updated PRs are ingested automatically.'
+    : 'Polling for new PRs periodically (no webhook registered for this repo).';
+}
+
 async function loadAccount() {
   const statusEl = document.getElementById('account-status');
   const resultEl = document.getElementById('account-result');
+  const reconnectBanner = document.getElementById('account-reconnect-banner');
   resultEl.style.display = 'none';
   const status = await api('GET', '/account/github/status');
+  reconnectBanner.style.display = status.needsReconnect ? 'block' : 'none';
   if (status.connected) {
     statusEl.innerHTML = `Connected as <span class="login">${escapeHtml(status.login)}</span>`;
     accountConnectForm.style.display = 'none';
@@ -409,6 +428,7 @@ async function loadAccount() {
     closePatModal();
     if (isLocalUi) {
       repoPanel.style.display = 'block';
+      renderAutomationStatus(status.selectedRepo);
       loadRepos(status.selectedRepo);
     } else {
       repoPanel.style.display = 'none';
@@ -550,8 +570,31 @@ async function loadRepos(selectedRepo) {
 document.getElementById('repo-search').addEventListener('input', renderRepoList);
 
 async function selectRepo(owner, name) {
-  await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
-  loadAccount();
+  const result = await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
+  if (result.error) {
+    showAccountResult('Error: ' + result.error, true);
+    return;
+  }
+  const skipped = result.skipped || [];
+  const parts = [`Selected ${owner}/${name}.`, `${result.bundlesCreated || 0} bundle(s) created.`];
+  if (skipped.length) {
+    // Most commonly: the PR body has no <!-- declared-direction: ... --> marker
+    // (INV-1's fail-closed case) — surfaced so an empty/short queue isn't a silent mystery.
+    parts.push(`${skipped.length} PR(s) could not be ingested (e.g. missing declared-direction marker) and were skipped.`);
+  }
+  if (result.webhookRegistered) {
+    parts.push('Webhook registered — new PRs will be ingested automatically.');
+  } else if (result.webhookError) {
+    parts.push(`Webhook registration failed (${result.webhookError}) — falling back to periodic polling.`);
+  } else if (result.webhookDisabledReason) {
+    parts.push('Webhooks not configured — falling back to periodic polling.');
+  }
+  // loadAccount() resets account-result's visibility as part of its normal refresh, so the
+  // message has to be shown after it settles, not before (same ordering as the OAuth
+  // redirect handler above).
+  await loadAccount();
+  showAccountResult(parts.join(' '), false);
+  loadReview();
 }
 
 // Theme: "paper" (light, default) and "ink" (dark) — same tokens, see styles/tokens.css.
