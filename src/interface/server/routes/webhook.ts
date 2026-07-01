@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
-import { enqueueRefresh } from "../refreshRepoQueue.js";
+import { enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 
 const TRIGGER_ACTIONS = new Set(["opened", "reopened", "synchronize", "ready_for_review", "closed"]);
 
@@ -84,6 +84,10 @@ export function webhookRouter(refreshDeps: RefreshDeps): Router {
 			}
 			await enqueueRefresh(parsed.repoOwner, parsed.repoName, refreshDeps);
 		})().catch((err: unknown) => {
+			if (err instanceof AccountChangedError) {
+				console.warn(`Webhook-triggered refresh for ${parsed.repoOwner}/${parsed.repoName} aborted: ${err.message}`);
+				return;
+			}
 			console.error(`Webhook-triggered refresh failed for ${parsed.repoOwner}/${parsed.repoName}:`, err);
 		});
 	});

@@ -13,6 +13,11 @@ import type { ServerState } from "./state.js";
 
 export { NeedsReconnectError } from "../../engine/github/tokenRefresh.js";
 
+// Thrown when the connected account changed (disconnected, reconnected, or reselected)
+// while a refresh was mid-flight — see the compare-and-swap in refreshRepoQueue below.
+// Not a real failure: the account itself is fine, this refresh cycle is just stale.
+export class AccountChangedError extends Error {}
+
 export interface RefreshDeps {
 	accountState: AccountState;
 	accountPath: string;
@@ -58,11 +63,18 @@ export async function refreshRepoQueue(
 	const account = deps.accountState.current;
 	if (account === undefined) throw new Error("No connected account");
 
-	deps.accountState.current = await ensureValidAccessToken(account, {
+	const refreshed = await ensureValidAccessToken(account, {
 		accountPath: deps.accountPath,
 		clientHolder: deps.clientHolder,
 		oauth: deps.oauth,
 	});
+	// A disconnect (or reconnect/reselect) racing this refresh's network round-trip would
+	// otherwise get silently overwritten here — bail instead of resurrecting a cleared
+	// account or clobbering a newer one.
+	if (deps.accountState.current !== account) {
+		throw new AccountChangedError("Account changed while refreshing its token; aborting this refresh");
+	}
+	deps.accountState.current = refreshed;
 
 	const { payloads: rawPRs, skipped } = await deps.clientHolder.listOpenPullRequests(owner, name);
 	const prs = rawPRs.map((raw) => normalizePR(rawPRPayloadToIncomingPR(raw)));

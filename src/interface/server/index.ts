@@ -19,7 +19,7 @@ import { NeedsReconnectError } from "../../engine/github/tokenRefresh.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
 import { createAccountState } from "./accountState.js";
-import { enqueueRefresh } from "./refreshRepoQueue.js";
+import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
 import type { RefreshDeps } from "./refreshRepoQueue.js";
 import { prsRouter } from "./routes/prs.js";
 import { bundlesRouter } from "./routes/bundles.js";
@@ -168,7 +168,7 @@ async function main(): Promise<void> {
 	app.use("/audit", auditRouter(auditStore));
 	app.use(
 		"/admin",
-		adminRouter(state, auditStore, queue, [DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH]),
+		adminRouter(state, auditStore, queue, [DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH], decidedStore),
 	);
 	app.use(
 		"/account/github",
@@ -192,6 +192,10 @@ async function main(): Promise<void> {
 		enqueueRefresh(repo.owner, repo.name, refreshDeps).catch((err: unknown) => {
 			if (err instanceof NeedsReconnectError) {
 				console.warn(`Reconciliation poll paused for ${repo.owner}/${repo.name}: ${err.message}`);
+				return;
+			}
+			if (err instanceof AccountChangedError) {
+				console.warn(`Reconciliation poll for ${repo.owner}/${repo.name} aborted: ${err.message}`);
 				return;
 			}
 			console.error(`Reconciliation poll failed for ${repo.owner}/${repo.name}:`, err);

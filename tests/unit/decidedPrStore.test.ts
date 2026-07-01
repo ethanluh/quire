@@ -66,6 +66,23 @@ describe("DecidedPrStore", () => {
 		await expect(store.clearDecided("never-decided")).resolves.toBeUndefined();
 	});
 
+	it("clearAll wipes every decided entry and persists the empty state", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-decided-"));
+		const path = join(dir, "decided-prs.json");
+		const store = new DecidedPrStore(path);
+		await store.load();
+		await store.markDecided(["pr-1", "pr-2"], "reject");
+
+		await store.clearAll();
+
+		expect(store.isDecided("pr-1")).toBe(false);
+		expect(store.isDecided("pr-2")).toBe(false);
+
+		const reloaded = new DecidedPrStore(path);
+		await reloaded.load();
+		expect(reloaded.isDecided("pr-1")).toBe(false);
+	});
+
 	it("treats a corrupted state file as empty instead of throwing", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-decided-"));
 		const path = join(dir, "decided-prs.json");

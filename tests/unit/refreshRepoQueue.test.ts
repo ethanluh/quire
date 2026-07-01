@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "@jest/globals";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { refreshRepoQueue, enqueueRefresh, NeedsReconnectError } from "../../src/interface/server/refreshRepoQueue.js";
+import { refreshRepoQueue, enqueueRefresh, NeedsReconnectError, AccountChangedError } from "../../src/interface/server/refreshRepoQueue.js";
 import type { RefreshDeps } from "../../src/interface/server/refreshRepoQueue.js";
 import { createAccountState } from "../../src/interface/server/accountState.js";
 import { createServerState } from "../../src/interface/server/state.js";
@@ -156,6 +156,38 @@ describe("refreshRepoQueue", () => {
 		const deps = makeDeps({ account: expiringAccount, oauth });
 
 		await expect(refreshRepoQueue("octocat", "hello-world", deps)).rejects.toBeInstanceOf(NeedsReconnectError);
+	});
+
+	it("does not resurrect the account if it's disconnected while a token refresh is in flight", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
+		const expiringAccount: ConnectedAccount = {
+			...BASE_ACCOUNT,
+			refreshToken: "refresh-1",
+			tokenExpiresAt: new Date(Date.now() - 1000).toISOString(),
+		};
+		let releaseRefresh: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			releaseRefresh = resolve;
+		});
+		const oauth: OAuthDeps = {
+			config: { clientId: "id", clientSecret: "secret" },
+			buildAuthorizeUrl: () => "",
+			exchangeCodeForToken: async () => ({ accessToken: "unused" }),
+			refreshAccessToken: async () => {
+				await gate;
+				return { accessToken: "new-token", refreshToken: "refresh-2" };
+			},
+			redirectUri: "http://localhost:3000/callback",
+		};
+		const deps = makeDeps({ account: expiringAccount, oauth });
+
+		const refreshPromise = refreshRepoQueue("octocat", "hello-world", deps);
+		await new Promise((resolve) => setImmediate(resolve));
+		deps.accountState.current = undefined; // simulates a concurrent /disconnect
+
+		releaseRefresh();
+		await expect(refreshPromise).rejects.toBeInstanceOf(AccountChangedError);
+		expect(deps.accountState.current).toBeUndefined();
 	});
 
 	it("re-clusters the full undecided set on every call, not just newly-arrived PRs", async () => {

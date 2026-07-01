@@ -33,6 +33,12 @@ export async function ensureValidAccessToken(
 
 	try {
 		const result = await ctx.oauth.refreshAccessToken(ctx.oauth.config, account.refreshToken);
+		// Persisted immediately, even though the caller (e.g. refreshRepoQueue) may still go
+		// on to fail its own PR fetch: rolling this back on that later failure would mean
+		// reverting to the old refreshToken, which GitHub may have already single-use-rotated
+		// out from under us — the next attempt would then fail with an unrecoverable invalid
+		// refresh token instead of just retrying the fetch. A successful refresh is real and
+		// should stick regardless of what happens next.
 		const refreshed: ConnectedAccount = {
 			...account,
 			token: result.accessToken,

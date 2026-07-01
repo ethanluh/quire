@@ -1,6 +1,5 @@
-import { readFile, writeFile, rm, rename, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { rm } from "node:fs/promises";
+import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
 
 export interface SelectedRepo {
 	owner: string;
@@ -25,31 +24,21 @@ export interface ConnectedAccount {
 	needsReconnect?: boolean;
 }
 
+function isConnectedAccount(value: unknown): value is ConnectedAccount {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof (value as Record<string, unknown>)["login"] === "string" &&
+		typeof (value as Record<string, unknown>)["token"] === "string"
+	);
+}
+
 export async function loadAccount(path: string): Promise<ConnectedAccount | undefined> {
-	if (!existsSync(path)) return undefined;
-	try {
-		const raw = await readFile(path, "utf8");
-		const parsed: unknown = JSON.parse(raw);
-		if (
-			typeof parsed === "object" &&
-			parsed !== null &&
-			typeof (parsed as Record<string, unknown>)["login"] === "string" &&
-			typeof (parsed as Record<string, unknown>)["token"] === "string"
-		) {
-			return parsed as ConnectedAccount;
-		}
-	} catch {
-		// corrupted file — treat as not connected
-	}
-	return undefined;
+	return readJsonFile(path, isConnectedAccount);
 }
 
 export async function saveAccount(path: string, account: ConnectedAccount): Promise<void> {
-	const dir = dirname(path);
-	await mkdir(dir, { recursive: true });
-	const tmp = `${path}.tmp`;
-	await writeFile(tmp, JSON.stringify(account, null, 2), "utf8");
-	await rename(tmp, path);
+	await writeJsonFileAtomic(path, account);
 }
 
 export async function clearAccount(path: string): Promise<void> {

@@ -1028,6 +1028,48 @@ describe("githubAccountRouter", () => {
 
 			expect(client.deletedWebhooks).toEqual([{ owner: "octocat", repo: "hello-world", hookId }]);
 		});
+
+		it("cleans up an orphaned webhook if the account is disconnected mid-select", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			let accountState: RefreshDeps["accountState"] | undefined;
+			class DisconnectingDuringWebhookClient extends StubGitHubClient {
+				override async createWebhook(owner: string, repo: string, config: { url: string; secret: string }) {
+					const hook = await super.createWebhook(owner, repo, config);
+					// Simulates a concurrent POST /disconnect landing right after the webhook
+					// was created on GitHub's side but before this handler persists its id.
+					if (accountState !== undefined) accountState.current = undefined;
+					return hook;
+				}
+			}
+			const client = new DisconnectingDuringWebhookClient();
+			const { refreshDeps } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				client,
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+				{},
+				undefined,
+				WEBHOOK_CONFIG,
+			);
+			accountState = refreshDeps.accountState;
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(
+				server,
+				"POST",
+				"/account/github/repos/select",
+				{ owner: "octocat", name: "hello-world" },
+				ADMIN_HEADERS,
+			);
+
+			expect(status).toBe(500);
+			expect(client.createdWebhooks).toHaveLength(1);
+			expect(client.deletedWebhooks).toEqual([
+				{ owner: "octocat", repo: "hello-world", hookId: client.createdWebhooks[0]?.id },
+			]);
+		});
 	});
 
 	describe("needsReconnect", () => {

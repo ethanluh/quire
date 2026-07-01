@@ -33,4 +33,9 @@ export class DecidedPrStore {
 		this.state = { entries: this.state.entries.filter((e) => e.prId !== prId) };
 		await saveState(this.statePath, this.state);
 	}
+
+	async clearAll(): Promise<void> {
+		this.state = { entries: [] };
+		await saveState(this.statePath, this.state);
+	}
 }

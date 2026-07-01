@@ -4,13 +4,14 @@ import { z } from "zod";
 import { Octokit } from "@octokit/rest";
 import type { ConnectedAccount } from "../../../engine/github/account.js";
 import { saveAccount, clearAccount } from "../../../engine/github/account.js";
+import type { GitHubClientHolder } from "../../../engine/github/clientHolder.js";
 import { OctokitGitHubClient } from "../../../engine/github/octokitClient.js";
 import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
 import { OAuthExchangeError } from "../../../engine/github/oauth.js";
-import { clearRepoFromQueue, refreshRepoQueue } from "../refreshRepoQueue.js";
+import { clearRepoFromQueue, enqueueRefresh } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { localOnly } from "../middleware/localOnly.js";
 import { requireAdminHeader } from "../middleware/requireAdminHeader.js";
@@ -39,6 +40,15 @@ function oauthResultRedirectUrl(status: "connected" | "error", reason: string | 
 	const params = new URLSearchParams({ account: status });
 	if (reason !== undefined) params.set("reason", reason);
 	return `/?${params.toString()}`;
+}
+
+async function deleteWebhookBestEffort(
+	clientHolder: GitHubClientHolder,
+	repo: { owner: string; name: string; webhookId: number },
+): Promise<void> {
+	await clientHolder.deleteWebhook(repo.owner, repo.name, repo.webhookId).catch((err: unknown) => {
+		console.error(`Failed to delete webhook for ${repo.owner}/${repo.name}:`, err);
+	});
 }
 
 function buildClientForFallback(fallbackToken: string | undefined): OctokitGitHubClient | StubGitHubClient {
@@ -130,11 +140,13 @@ export function githubAccountRouter(
 				// Drop the previously selected repo's bundles; refreshRepoQueue itself
 				// handles clearing (and re-populating) the newly selected repo's own entries.
 				clearRepoFromQueue(refreshDeps.state, previousRepo);
-				const summary = await refreshRepoQueue(owner, name, refreshDeps);
+				const summary = await enqueueRefresh(owner, name, refreshDeps);
 
 				if (previousRepo?.webhookId !== undefined) {
-					await clientHolder.deleteWebhook(previousRepo.owner, previousRepo.name, previousRepo.webhookId).catch((err: unknown) => {
-						console.error(`Failed to delete webhook for ${previousRepo.owner}/${previousRepo.name}:`, err);
+					await deleteWebhookBestEffort(clientHolder, {
+						owner: previousRepo.owner,
+						name: previousRepo.name,
+						webhookId: previousRepo.webhookId,
 					});
 				}
 
@@ -155,7 +167,12 @@ export function githubAccountRouter(
 				}
 
 				const current = accountState.current;
-				if (current === undefined) throw new Error("Account was disconnected mid-request");
+				if (current === undefined) {
+					if (webhookId !== undefined) {
+						await deleteWebhookBestEffort(clientHolder, { owner, name, webhookId });
+					}
+					throw new Error("Account was disconnected mid-request");
+				}
 				const updated: ConnectedAccount = {
 					...current,
 					selectedRepo: { owner, name, ...(webhookId !== undefined ? { webhookId } : {}) },
@@ -200,8 +217,10 @@ export function githubAccountRouter(
 		try {
 			const previousRepo = accountState.current?.selectedRepo;
 			if (previousRepo?.webhookId !== undefined) {
-				await clientHolder.deleteWebhook(previousRepo.owner, previousRepo.name, previousRepo.webhookId).catch((err: unknown) => {
-					console.error(`Failed to delete webhook for ${previousRepo.owner}/${previousRepo.name}:`, err);
+				await deleteWebhookBestEffort(clientHolder, {
+					owner: previousRepo.owner,
+					name: previousRepo.name,
+					webhookId: previousRepo.webhookId,
 				});
 			}
 			accountState.current = undefined;
