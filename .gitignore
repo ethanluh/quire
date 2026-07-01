@@ -2,3 +2,5 @@ node_modules/
 dist/
 data/
 *.js.map
+.env
+.env.local
