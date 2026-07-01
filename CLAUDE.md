@@ -10,6 +10,16 @@ Quire is a triage tool for pull requests produced by a fleet of coding agents (a
 
 Whenever a PR addresses a GitHub issue, link the issue in the PR body using a closing keyword so GitHub closes it automatically on merge (e.g. `Closes #<number>`, `Fixes #<number>`, or `Resolves #<number>`). Never open a PR that addresses a tracked issue without this link.
 
+Every PR body must also include a `<!-- declared-direction: ... -->` HTML comment stating the PR's product-direction intent in one sentence, e.g. `<!-- declared-direction: Add dark mode toggle to settings panel -->`. This is Quire's own ingestion requirement, not just a convention: `OctokitGitHubClient` (`src/engine/github/octokitClient.ts`) reads real PRs through exactly this marker to populate `declaredDirection` (INV-1 — the label must be explicit, never inferred from the diff), and a PR missing it is silently skipped from ingestion rather than failing loudly. When dogfooding Quire against its own repo (see "Running and testing locally" below), a forgotten marker means the PR just never shows up in the queue.
+
+## Running and testing locally
+
+- **Setup**: `npm install`.
+- **Dev server**: `npm run dev` (runs `tsx src/interface/server/index.ts`). Serves the UI and API at `http://localhost:3000` (override with `PORT`). There's no database — state persists to the gitignored `data/` directory (`queue.json`, `github-account.json`, `instrumentation/*.ndjson`), created automatically on first run.
+- **GitHub auth**, in priority order: a connected account (set up through the UI, persisted to `data/github-account.json`) beats the `GITHUB_TOKEN` env var beats the built-in `StubGitHubClient` (mock data, no token needed — fine for exercising pipeline logic, but doesn't ingest real PRs).
+- **Dogfooding on the Quire repo itself**: open `http://localhost:3000`, use the account panel to connect a GitHub PAT with `repo` scope, then select `quire` from the repo list. Selecting a repo immediately fetches its open PRs and ingests them into the queue. Its own PRs must carry the `<!-- declared-direction: ... -->` marker (see "Pull request discipline" above) or they're silently skipped. Note the account/repo-selection endpoints are gated to localhost and require a same-origin header — they're only reachable through Quire's own UI, not arbitrary scripts.
+- **Automated tests**: `npm test` (Jest via `ts-jest`, ESM), `npm run build` (`tsc`), `npm run lint` (`tsc --noEmit`).
+
 ## Code style
 
 - TypeScript strict mode throughout.
