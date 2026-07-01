@@ -65,6 +65,7 @@
   }
 
   .account-panel p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
+  .account-connect-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
   .account-panel input {
     width: 100%;
     max-width: 480px;
@@ -212,9 +213,11 @@
   <div class="account-panel">
     <div class="account-status" id="account-status">Checking connection&hellip;</div>
     <div id="account-connect-form">
-      <p>Connect a GitHub account so Quire can merge and revert PRs on its behalf. Paste a <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">personal access token</a> with repo access.</p>
-      <input type="password" id="account-token" placeholder="ghp_..." autocomplete="off">
-      <button class="btn btn-accept" style="margin-top:12px" id="btn-account-connect">Connect</button>
+      <p>Connect a GitHub account so Quire can merge and revert PRs on its behalf.</p>
+      <div class="account-connect-actions">
+        <button class="btn btn-accept" id="btn-account-connect-pat">Auth via PAT</button>
+        <button class="btn btn-defer" style="display:none" id="btn-account-connect-oauth">Sign in with GitHub</button>
+      </div>
     </div>
     <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
     <div id="account-result" class="result-msg" style="display:none"></div>
@@ -227,14 +230,27 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="pat-modal-backdrop" style="display:none">
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="pat-modal-title">
+    <h3 class="modal-title" id="pat-modal-title">Connect with a personal access token</h3>
+    <p>Paste a <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">personal access token</a> with repo access.</p>
+    <input type="password" id="account-token" placeholder="ghp_..." autocomplete="off">
+    <div id="pat-modal-result" class="result-msg" style="display:none"></div>
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-pat-modal-cancel">Cancel</button>
+      <button class="btn btn-accept" id="btn-account-connect">Connect</button>
+    </div>
+  </div>
+</div>
+
 <script>
-const tabs = document.querySelectorAll('.tab');
-tabs.forEach(tab => {
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
+}
+document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
-    tabs.forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
-    document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+    showTab(tab.dataset.tab);
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
@@ -376,6 +392,10 @@ const accountConnectForm = document.getElementById('account-connect-form');
 const accountDisconnectBtn = document.getElementById('btn-account-disconnect');
 
 const repoPanel = document.getElementById('repo-panel');
+const oauthConnectBtn = document.getElementById('btn-account-connect-oauth');
+const patModalBackdrop = document.getElementById('pat-modal-backdrop');
+const patConnectBtn = document.getElementById('btn-account-connect-pat');
+const patModalCancelBtn = document.getElementById('btn-pat-modal-cancel');
 
 async function loadAccount() {
   const statusEl = document.getElementById('account-status');
@@ -386,6 +406,7 @@ async function loadAccount() {
     statusEl.innerHTML = `Connected as <span class="login">${escapeHtml(status.login)}</span>`;
     accountConnectForm.style.display = 'none';
     accountDisconnectBtn.style.display = isLocalUi ? 'inline-block' : 'none';
+    closePatModal();
     if (isLocalUi) {
       repoPanel.style.display = 'block';
       loadRepos(status.selectedRepo);
@@ -397,26 +418,86 @@ async function loadAccount() {
       ? 'Not connected.'
       : 'Not connected. Connecting is only available from the machine running Quire.';
     accountConnectForm.style.display = isLocalUi ? 'block' : 'none';
+    oauthConnectBtn.style.display = isLocalUi && status.oauthAvailable ? 'inline-block' : 'none';
+    oauthConnectBtn.disabled = false;
     accountDisconnectBtn.style.display = 'none';
     repoPanel.style.display = 'none';
   }
 }
 
+function showAccountResult(message, isError) {
+  const resultEl = document.getElementById('account-result');
+  resultEl.textContent = message;
+  resultEl.className = isError ? 'result-msg error' : 'result-msg';
+  resultEl.style.display = 'block';
+}
+
+function openPatModal() {
+  const tokenInput = document.getElementById('account-token');
+  document.getElementById('pat-modal-result').style.display = 'none';
+  tokenInput.value = '';
+  patModalBackdrop.style.display = 'flex';
+  tokenInput.focus();
+}
+
+function closePatModal() {
+  patModalBackdrop.style.display = 'none';
+}
+
+patConnectBtn.addEventListener('click', openPatModal);
+patModalCancelBtn.addEventListener('click', closePatModal);
+patModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === patModalBackdrop) closePatModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && patModalBackdrop.style.display !== 'none') closePatModal();
+});
+
 document.getElementById('btn-account-connect').addEventListener('click', async () => {
   const tokenInput = document.getElementById('account-token');
   const token = tokenInput.value.trim();
-  const resultEl = document.getElementById('account-result');
   if (!token) return;
   const result = await api('POST', '/account/github/connect', { token }, { 'X-Quire-Admin': '1' });
   if (result.error) {
+    const resultEl = document.getElementById('pat-modal-result');
     resultEl.textContent = 'Error: ' + result.error;
     resultEl.className = 'result-msg error';
     resultEl.style.display = 'block';
     return;
   }
   tokenInput.value = '';
+  closePatModal();
   loadAccount();
 });
+
+oauthConnectBtn.addEventListener('click', async () => {
+  // Disabled for the round trip to /oauth/start so a fast double-click can't fire it
+  // twice before location.href navigates away — the server is idempotent either way,
+  // but there's no reason to rely on that alone.
+  oauthConnectBtn.disabled = true;
+  const result = await api('POST', '/account/github/oauth/start', undefined, { 'X-Quire-Admin': '1' });
+  if (result.error) {
+    showAccountResult('Error: ' + result.error, true);
+    oauthConnectBtn.disabled = false;
+    return;
+  }
+  location.href = result.authorizeUrl;
+});
+
+// The OAuth callback redirects back here with ?account=connected|error once GitHub's
+// consent screen is done, since the whole flow is a top-level navigation away and back
+// (not a popup) — pick that signal up on load, then drop it from the URL.
+(async function handleOAuthRedirect() {
+  const params = new URLSearchParams(location.search);
+  const result = params.get('account');
+  if (!result) return;
+  history.replaceState(null, '', location.pathname);
+  showTab('account');
+  await loadAccount();
+  if (result === 'error') {
+    showAccountResult('GitHub connection failed: ' + (params.get('reason') || 'unknown error'), true);
+  }
+})();
 
 accountDisconnectBtn.addEventListener('click', async () => {
   if (!confirm('Disconnect the connected GitHub account?')) return;

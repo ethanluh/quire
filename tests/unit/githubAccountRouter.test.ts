@@ -3,8 +3,10 @@ import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
+import { request as httpRequest } from "node:http";
 import type { Server } from "node:http";
 import { githubAccountRouter } from "../../src/interface/server/routes/account.js";
+import type { OAuthDeps } from "../../src/interface/server/routes/account.js";
 import type { ConnectedAccount } from "../../src/engine/github/account.js";
 import { GitHubClientHolder } from "../../src/engine/github/clientHolder.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
@@ -13,6 +15,7 @@ import { InvalidTokenError } from "../../src/engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../src/engine/github/verifyToken.js";
 import type { RepoSummary } from "../../src/engine/github/repos.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
+import { OAuthExchangeError } from "../../src/engine/github/oauth.js";
 import { createServerState } from "../../src/interface/server/state.js";
 import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
@@ -45,6 +48,28 @@ async function call(
 	if (body !== undefined) init.body = JSON.stringify(body);
 	const res = await fetch(`http://127.0.0.1:${address.port}${path}`, init);
 	return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+interface RedirectResponse {
+	status: number;
+	location: string | undefined;
+}
+
+// The OAuth callback always responds with a redirect (never JSON) — global fetch()'s
+// default redirect mode follows it, which would then 404 against this test app's bare
+// router (no static index.html mounted here), so this uses node:http directly to inspect
+// the redirect itself without following it.
+async function callRedirect(server: Server, path: string): Promise<RedirectResponse> {
+	const address = server.address();
+	if (address === null || typeof address === "string") throw new Error("no address");
+	return new Promise((resolve, reject) => {
+		const req = httpRequest({ host: "127.0.0.1", port: address.port, path }, (res) => {
+			res.resume();
+			res.on("end", () => resolve({ status: res.statusCode ?? 0, location: res.headers.location }));
+		});
+		req.on("error", reject);
+		req.end();
+	});
 }
 
 function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
@@ -102,6 +127,7 @@ describe("githubAccountRouter", () => {
 		provider: StubLlmProvider = new StubLlmProvider(),
 		initialAccount: ConnectedAccount | undefined = undefined,
 		depsOverrides: Partial<Pick<PipelineDeps, "auditStore" | "config">> = {},
+		oauthDeps: OAuthDeps | undefined = undefined,
 	): { accountPath: string; holder: GitHubClientHolder; state: ServerState } {
 		const accountPath = join(dir, "github-account.json");
 		const holder = new GitHubClientHolder(client);
@@ -116,11 +142,41 @@ describe("githubAccountRouter", () => {
 		app.use(express.json());
 		app.use(
 			"/account/github",
-			githubAccountRouter(accountPath, holder, fallbackToken, verifyToken, listRepos, initialAccount, state, deps),
+			githubAccountRouter(
+				accountPath,
+				holder,
+				fallbackToken,
+				verifyToken,
+				listRepos,
+				initialAccount,
+				state,
+				deps,
+				oauthDeps,
+			),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
 		return { accountPath, holder, state };
+	}
+
+	function makeOAuthDeps(
+		exchangeCodeForToken: OAuthDeps["exchangeCodeForToken"] = async () => ({ accessToken: "oauth-access-token" }),
+	): OAuthDeps {
+		return {
+			config: { clientId: "client-id", clientSecret: "client-secret" },
+			buildAuthorizeUrl: (config, redirectUri, state) =>
+				`https://github.com/login/oauth/authorize?client_id=${config.clientId}&redirect_uri=${redirectUri}&state=${state}`,
+			exchangeCodeForToken,
+			redirectUri: "http://localhost:3000/account/github/oauth/callback",
+		};
+	}
+
+	async function startOAuth(server: Server): Promise<string> {
+		const { body } = await call(server, "POST", "/account/github/oauth/start", undefined, ADMIN_HEADERS);
+		const authorizeUrl = body["authorizeUrl"] as string;
+		const state = new URL(authorizeUrl).searchParams.get("state");
+		if (state === null) throw new Error("authorizeUrl had no state param");
+		return state;
 	}
 
 	it("reports not connected when no account has been set up", async () => {
@@ -131,7 +187,7 @@ describe("githubAccountRouter", () => {
 		const { status, body } = await call(server, "GET", "/account/github/status");
 
 		expect(status).toBe(200);
-		expect(body).toEqual({ connected: false });
+		expect(body).toEqual({ connected: false, oauthAvailable: false });
 	});
 
 	it("connects, persists the account, and swaps in an authenticated client", async () => {
@@ -222,7 +278,7 @@ describe("githubAccountRouter", () => {
 		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
 
 		const statusResult = await call(server, "GET", "/account/github/status");
-		expect(statusResult.body).toEqual({ connected: false });
+		expect(statusResult.body).toEqual({ connected: false, oauthAvailable: false });
 	});
 
 	it("rejects disconnect attempts missing the admin header", async () => {
@@ -546,5 +602,286 @@ describe("githubAccountRouter", () => {
 		);
 
 		expect(status).toBe(403);
+	});
+
+	describe("OAuth connect", () => {
+		it("hides the OAuth endpoints and reports oauthAvailable: false when no oauthDeps is configured", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(async () => ({ login: "octocat", scopes: [] }));
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const start = await callRedirect(server, "/account/github/oauth/start");
+			expect(start.status).toBe(404);
+
+			const status = await call(server, "GET", "/account/github/status");
+			expect(status.body["oauthAvailable"]).toBe(false);
+		});
+
+		it("reports oauthAvailable: true once oauthDeps is configured", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const status = await call(server, "GET", "/account/github/status");
+			expect(status.body["oauthAvailable"]).toBe(true);
+		});
+
+		it("rejects /oauth/start missing the admin header", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(server, "POST", "/account/github/oauth/start", undefined, {});
+
+			expect(status).toBe(403);
+		});
+
+		it("reuses the same pending state across repeated /oauth/start calls (idempotent against a double-click or a second tab)", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const first = await startOAuth(server);
+			const second = await startOAuth(server);
+
+			expect(first).toBe(second);
+		});
+
+		it("does not orphan a legitimate flow when /oauth/start is called twice before the callback returns (double-click / second-tab regression)", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const exchangeCodeForToken = jest.fn(async () => ({ accessToken: "oauth-access-token" }));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(exchangeCodeForToken),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			// Simulates a double-click or a second tab firing /oauth/start again before the
+			// first attempt's browser has navigated to GitHub and back.
+			const firstState = await startOAuth(server);
+			await startOAuth(server);
+
+			const { status, location } = await callRedirect(
+				server,
+				`/account/github/oauth/callback?code=good-code&state=${firstState}`,
+			);
+
+			expect(status).toBe(302);
+			expect(location).toBe("/?account=connected");
+		});
+
+		it("mints a fresh state once the previous flow has been consumed", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const first = await startOAuth(server);
+			await callRedirect(server, `/account/github/oauth/callback?code=good-code&state=${first}`);
+			const second = await startOAuth(server);
+
+			expect(first).not.toBe(second);
+		});
+
+		it("connects via a valid code+state, persisting the account and swapping in an authenticated client", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const exchangeCodeForToken = jest.fn(async () => ({ accessToken: "oauth-access-token" }));
+			const { accountPath, holder } = setup(
+				async (token) => {
+					expect(token).toBe("oauth-access-token");
+					return { login: "octocat", scopes: ["repo"] };
+				},
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(exchangeCodeForToken),
+			);
+			const setClientSpy = jest.spyOn(holder, "setClient");
+			await new Promise((resolve) => server.once("listening", resolve));
+			const state = await startOAuth(server);
+
+			const { status, location } = await callRedirect(
+				server,
+				`/account/github/oauth/callback?code=good-code&state=${state}`,
+			);
+
+			expect(status).toBe(302);
+			expect(location).toBe("/?account=connected");
+			expect(exchangeCodeForToken).toHaveBeenCalledTimes(1);
+			expect(setClientSpy).toHaveBeenCalledTimes(1);
+			expect(setClientSpy.mock.calls[0]?.[0]).toBeInstanceOf(OctokitGitHubClient);
+
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
+			expect(persisted["login"]).toBe("octocat");
+			expect(persisted["token"]).toBe("oauth-access-token");
+		});
+
+		it("rejects a callback whose state doesn't match the pending one, without exchanging the code", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const exchangeCodeForToken = jest.fn(async () => ({ accessToken: "oauth-access-token" }));
+			const { accountPath } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(exchangeCodeForToken),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+			await startOAuth(server);
+
+			const { status, location } = await callRedirect(server, "/account/github/oauth/callback?code=x&state=wrong-state");
+
+			expect(status).toBe(302);
+			expect(location).toContain("account=error");
+			expect(exchangeCodeForToken).not.toHaveBeenCalled();
+			await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+		});
+
+		it("rejects a callback when no OAuth flow was ever started", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const exchangeCodeForToken = jest.fn(async () => ({ accessToken: "oauth-access-token" }));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(exchangeCodeForToken),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, location } = await callRedirect(server, "/account/github/oauth/callback?code=x&state=anything");
+
+			expect(status).toBe(302);
+			expect(location).toContain("account=error");
+			expect(exchangeCodeForToken).not.toHaveBeenCalled();
+		});
+
+		it("rejects a second callback that reuses an already-consumed code+state (one-time use)", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const exchangeCodeForToken = jest.fn(async () => ({ accessToken: "oauth-access-token" }));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(exchangeCodeForToken),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+			const state = await startOAuth(server);
+
+			const first = await callRedirect(server, `/account/github/oauth/callback?code=good-code&state=${state}`);
+			expect(first.status).toBe(302);
+			expect(first.location).toBe("/?account=connected");
+
+			const second = await callRedirect(server, `/account/github/oauth/callback?code=good-code&state=${state}`);
+
+			expect(second.status).toBe(302);
+			expect(second.location).toContain("account=error");
+			expect(exchangeCodeForToken).toHaveBeenCalledTimes(1);
+		});
+
+		it("surfaces an OAuthExchangeError as an error page without persisting anything", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const exchangeCodeForToken = jest.fn(async () => {
+				throw new OAuthExchangeError("bad_verification_code");
+			});
+			const { accountPath } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(exchangeCodeForToken),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+			const state = await startOAuth(server);
+
+			const { status, location } = await callRedirect(server, `/account/github/oauth/callback?code=bad&state=${state}`);
+
+			expect(status).toBe(302);
+			expect(location).toContain("account=error");
+			expect(new URLSearchParams(location?.split("?")[1]).get("reason")).toContain("bad_verification_code");
+			await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+		});
+
+		it("surfaces a post-exchange InvalidTokenError as an error page without persisting anything", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const { accountPath } = setup(
+				async () => {
+					throw new InvalidTokenError("GitHub rejected this token");
+				},
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{},
+				makeOAuthDeps(),
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+			const state = await startOAuth(server);
+
+			const { status, location } = await callRedirect(server, `/account/github/oauth/callback?code=good&state=${state}`);
+
+			expect(status).toBe(302);
+			expect(location).toContain("account=error");
+			expect(new URLSearchParams(location?.split("?")[1]).get("reason")).toBe("GitHub rejected this token");
+			await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+		});
 	});
 });

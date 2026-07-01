@@ -225,9 +225,23 @@
 				<span class="label">Deferred for closer inspection</span>
 				<p class="note" style="margin-top:var(--space-2)">A card lands here on a human's discretionary call, or because the drift check flagged it — the card's own badge says which, so the two reasons never collapse into one undifferentiated tray.</p>
 			</div>
+			<div class="row">
+				<button class="btn btn-defer" id="btn-open-modal-demo">Open modal</button>
+			</div>
 		</div>
 	</section>
 
+</div>
+
+<div class="modal-backdrop" id="modal-demo-backdrop" style="display:none">
+	<div class="card">
+		<h3 class="modal-title">Connect with a personal access token</h3>
+		<p class="note" style="margin:0 0 var(--space-3)">A dossier interrupting the page, not covering it — the backdrop dims what's behind, the dialog is just a .card keeping its usual elevation and entrance animation. Closes on Cancel, Escape, or a click outside the card.</p>
+		<div class="modal-actions">
+			<button class="btn btn-defer" id="btn-close-modal-demo">Cancel</button>
+			<button class="btn btn-accept">Connect</button>
+		</div>
+	</div>
 </div>
 
 <script>
@@ -323,6 +337,22 @@ document.querySelectorAll('.replay-btn[data-anim]').forEach(btn => {
 document.getElementById('replay-settle').addEventListener('click', () => {
 	demoCard.className = 'demo-card';
 	requestAnimationFrame(() => demoCard.classList.add('card'));
+});
+
+// Modal demo — same open/close pattern the app uses: Cancel, Escape, or a click
+// on the backdrop itself (not the card) all close it.
+const modalDemoBackdrop = document.getElementById('modal-demo-backdrop');
+document.getElementById('btn-open-modal-demo').addEventListener('click', () => {
+	modalDemoBackdrop.style.display = 'flex';
+});
+document.getElementById('btn-close-modal-demo').addEventListener('click', () => {
+	modalDemoBackdrop.style.display = 'none';
+});
+modalDemoBackdrop.addEventListener('click', (e) => {
+	if (e.target === modalDemoBackdrop) modalDemoBackdrop.style.display = 'none';
+});
+document.addEventListener('keydown', (e) => {
+	if (e.key === 'Escape' && modalDemoBackdrop.style.display !== 'none') modalDemoBackdrop.style.display = 'none';
 });
 </script>
 </body>

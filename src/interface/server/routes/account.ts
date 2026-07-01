@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { Octokit } from "@octokit/rest";
@@ -9,6 +10,8 @@ import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
+import type { OAuthConfig } from "../../../engine/github/oauth.js";
+import { OAuthExchangeError } from "../../../engine/github/oauth.js";
 import { rawPRPayloadToIncomingPR } from "../../../engine/github/toIncomingPR.js";
 import { normalizePR } from "../../../engine/ingest/ingest.js";
 import type { Bundle } from "../../../engine/types/core.js";
@@ -28,10 +31,37 @@ const SelectRepoSchema = z.object({
 	name: z.string().min(1),
 });
 
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+export interface OAuthDeps {
+	config: OAuthConfig;
+	buildAuthorizeUrl: (config: OAuthConfig, redirectUri: string, state: string) => string;
+	exchangeCodeForToken: (config: OAuthConfig, code: string, redirectUri: string) => Promise<{ accessToken: string }>;
+	redirectUri: string;
+}
+
+// Where the OAuth callback sends the browser once it's done — GitHub's redirect is a
+// top-level navigation, so the result is reported via a query param on the app's own
+// page rather than a JSON response.
+function oauthResultRedirectUrl(status: "connected" | "error", reason: string | undefined): string {
+	const params = new URLSearchParams({ account: status });
+	if (reason !== undefined) params.set("reason", reason);
+	return `/?${params.toString()}`;
+}
+
 function buildClientForFallback(fallbackToken: string | undefined): OctokitGitHubClient | StubGitHubClient {
 	return fallbackToken !== undefined && fallbackToken !== ""
 		? new OctokitGitHubClient(new Octokit({ auth: fallbackToken }))
 		: new StubGitHubClient();
+}
+
+function buildConnectedAccount(identity: VerifiedTokenIdentity, token: string): ConnectedAccount {
+	return {
+		login: identity.login,
+		token,
+		scopes: identity.scopes,
+		connectedAt: new Date().toISOString(),
+	};
 }
 
 function isBundleForRepo(bundle: Bundle, owner: string, name: string): boolean {
@@ -62,13 +92,20 @@ export function githubAccountRouter(
 	initialAccount: ConnectedAccount | undefined,
 	state: ServerState,
 	deps: PipelineDeps,
+	oauth: OAuthDeps | undefined,
 ): Router {
 	const router = Router();
 	let account = initialAccount;
 
+	interface PendingOAuthState {
+		state: string;
+		expiresAt: number;
+	}
+	let pendingOAuth: PendingOAuthState | undefined;
+
 	router.get("/status", (_req, res) => {
 		if (account === undefined) {
-			res.json({ connected: false });
+			res.json({ connected: false, oauthAvailable: oauth !== undefined });
 			return;
 		}
 		res.json({
@@ -77,6 +114,7 @@ export function githubAccountRouter(
 			scopes: account.scopes,
 			connectedAt: account.connectedAt,
 			selectedRepo: account.selectedRepo,
+			oauthAvailable: oauth !== undefined,
 		});
 	});
 
@@ -136,12 +174,7 @@ export function githubAccountRouter(
 			const { token } = req.body as z.infer<typeof ConnectSchema>;
 			const identity = await verifyToken(token);
 
-			account = {
-				login: identity.login,
-				token,
-				scopes: identity.scopes,
-				connectedAt: new Date().toISOString(),
-			};
+			account = buildConnectedAccount(identity, token);
 			await saveAccount(accountPath, account);
 			clientHolder.setClient(new OctokitGitHubClient(new Octokit({ auth: token })));
 
@@ -165,6 +198,54 @@ export function githubAccountRouter(
 			next(err);
 		}
 	});
+
+	if (oauth !== undefined) {
+		router.post("/oauth/start", localOnly, requireAdminHeader, (_req, res) => {
+			// Idempotent while a flow is still pending: a double-click before the page
+			// navigates away, or a second tab, reuses the same nonce instead of minting a
+			// fresh one that would silently orphan the first flow's eventual callback.
+			if (pendingOAuth === undefined || Date.now() >= pendingOAuth.expiresAt) {
+				pendingOAuth = { state: randomBytes(32).toString("hex"), expiresAt: Date.now() + OAUTH_STATE_TTL_MS };
+			}
+			res.json({ authorizeUrl: oauth.buildAuthorizeUrl(oauth.config, oauth.redirectUri, pendingOAuth.state) });
+		});
+
+		router.get("/oauth/callback", localOnly, async (req, res) => {
+			const { code, state: returnedState } = req.query;
+			const pending = pendingOAuth;
+			// Consumed before the exchange awaits, so a concurrent double-submit of the same
+			// code+state can't both pass this check — only the first request still sees it.
+			pendingOAuth = undefined;
+
+			if (
+				pending === undefined ||
+				typeof code !== "string" ||
+				typeof returnedState !== "string" ||
+				returnedState !== pending.state ||
+				Date.now() >= pending.expiresAt
+			) {
+				res.redirect(oauthResultRedirectUrl("error", "the connection request expired or was invalid"));
+				return;
+			}
+
+			try {
+				const { accessToken } = await oauth.exchangeCodeForToken(oauth.config, code, oauth.redirectUri);
+				const identity = await verifyToken(accessToken);
+
+				account = buildConnectedAccount(identity, accessToken);
+				await saveAccount(accountPath, account);
+				clientHolder.setClient(new OctokitGitHubClient(new Octokit({ auth: accessToken })));
+
+				res.redirect(oauthResultRedirectUrl("connected", undefined));
+			} catch (err) {
+				const reason =
+					err instanceof OAuthExchangeError || err instanceof InvalidTokenError
+						? err.message
+						: "GitHub connection failed unexpectedly";
+				res.redirect(oauthResultRedirectUrl("error", reason));
+			}
+		});
+	}
 
 	return router;
 }

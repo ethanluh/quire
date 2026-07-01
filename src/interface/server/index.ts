@@ -12,6 +12,7 @@ import { loadAccount } from "../../engine/github/account.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
 import { listRepositories } from "../../engine/github/repos.js";
 import { resolveLlmProvider } from "./resolveLlmProvider.js";
+import { buildAuthorizeUrl, exchangeCodeForToken } from "../../engine/github/oauth.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
 import { prsRouter } from "./routes/prs.js";
@@ -22,6 +23,7 @@ import { shelfRouter } from "./routes/shelf.js";
 import { auditRouter } from "./routes/audit.js";
 import { adminRouter } from "./routes/admin.js";
 import { githubAccountRouter } from "./routes/account.js";
+import type { OAuthDeps } from "./routes/account.js";
 import { errorHandler } from "./middleware/errors.js";
 import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
@@ -59,6 +61,22 @@ async function main(): Promise<void> {
 	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
 	const githubToken = process.env["GITHUB_TOKEN"];
 	const connectedAccount = await loadAccount(ACCOUNT_PATH);
+
+	const oauthClientId = process.env["GITHUB_OAUTH_CLIENT_ID"];
+	const oauthClientSecret = process.env["GITHUB_OAUTH_CLIENT_SECRET"];
+	let oauthDeps: OAuthDeps | undefined;
+	if (oauthClientId !== undefined && oauthClientId !== "" && oauthClientSecret !== undefined && oauthClientSecret !== "") {
+		const redirectUri = `http://localhost:${PORT}/account/github/oauth/callback`;
+		oauthDeps = {
+			config: { clientId: oauthClientId, clientSecret: oauthClientSecret },
+			buildAuthorizeUrl,
+			exchangeCodeForToken,
+			redirectUri,
+		};
+		console.log(`GitHub OAuth: enabled (callback URL must be registered as ${redirectUri})`);
+	} else {
+		console.log("GitHub OAuth: disabled (GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET not set)");
+	}
 
 	// A connected account (set up through the UI) takes priority over GITHUB_TOKEN,
 	// since it's the more recent, more deliberate choice of credential.
@@ -114,6 +132,7 @@ async function main(): Promise<void> {
 			connectedAccount,
 			state,
 			pipelineDeps,
+			oauthDeps,
 		),
 	);
 
