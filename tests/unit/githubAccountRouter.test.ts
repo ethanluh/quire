@@ -5,12 +5,24 @@ import { join } from "node:path";
 import express from "express";
 import type { Server } from "node:http";
 import { githubAccountRouter } from "../../src/interface/server/routes/account.js";
+import type { ConnectedAccount } from "../../src/engine/github/account.js";
 import { GitHubClientHolder } from "../../src/engine/github/clientHolder.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 import { OctokitGitHubClient } from "../../src/engine/github/octokitClient.js";
 import { InvalidTokenError } from "../../src/engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../src/engine/github/verifyToken.js";
 import type { RepoSummary } from "../../src/engine/github/repos.js";
+import { createServerState } from "../../src/interface/server/state.js";
+import { AuditStore } from "../../src/engine/gate/auditStore.js";
+import { StubLlmProvider } from "../mocks/llmProvider.js";
+import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
+import type { ServerState } from "../../src/interface/server/state.js";
+import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
+
+const PIPELINE_CONFIG: PipelineConfig = {
+	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
+	bundle: { similarityThreshold: 0.75 },
+};
 
 interface JsonResponse {
 	status: number;
@@ -47,17 +59,33 @@ describe("githubAccountRouter", () => {
 		verifyToken: (token: string) => Promise<VerifiedTokenIdentity>,
 		fallbackToken: string | undefined = undefined,
 		listRepos: (token: string) => Promise<ReadonlyArray<RepoSummary>> = async () => [],
-	): { accountPath: string; holder: GitHubClientHolder } {
+		client: StubGitHubClient = new StubGitHubClient(),
+		provider: StubLlmProvider = new StubLlmProvider(),
+		initialAccount: ConnectedAccount | undefined = undefined,
+	): { accountPath: string; holder: GitHubClientHolder; state: ServerState } {
 		const accountPath = join(dir, "github-account.json");
-		const holder = new GitHubClientHolder(new StubGitHubClient());
+		const holder = new GitHubClientHolder(client);
+		const state = createServerState();
 		const app = express();
 		app.use(express.json());
 		app.use(
 			"/account/github",
-			githubAccountRouter(accountPath, holder, fallbackToken, verifyToken, listRepos, undefined),
+			githubAccountRouter(
+				accountPath,
+				holder,
+				fallbackToken,
+				verifyToken,
+				listRepos,
+				initialAccount,
+				state,
+				PIPELINE_CONFIG,
+				provider,
+				new StubStaticAnalyzer(),
+				new AuditStore(),
+			),
 		);
 		server = app.listen(0);
-		return { accountPath, holder };
+		return { accountPath, holder, state };
 	}
 
 	it("reports not connected when no account has been set up", async () => {
@@ -221,9 +249,18 @@ describe("githubAccountRouter", () => {
 
 	it("selects a repo and persists it, surfacing it on status and /repos", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
-		const { accountPath } = setup(async () => ({ login: "octocat", scopes: [] }));
+		// Uses initialAccount rather than /connect: connecting for real would swap the
+		// holder to a network-backed OctokitGitHubClient, and selecting a repo now also
+		// fetches that repo's open PRs (see below), which would then hit the network.
+		const { accountPath } = setup(
+			async () => ({ login: "octocat", scopes: [] }),
+			undefined,
+			undefined,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+		);
 		await new Promise((resolve) => server.once("listening", resolve));
-		await call(server, "POST", "/account/github/connect", { token: "ghp_abc" }, ADMIN_HEADERS);
 
 		const { status, body } = await call(
 			server,
@@ -241,6 +278,77 @@ describe("githubAccountRouter", () => {
 
 		const statusResult = await call(server, "GET", "/account/github/status");
 		expect(statusResult.body["selectedRepo"]).toEqual({ owner: "octocat", name: "hello-world" });
+	});
+
+	it("ingests the selected repo's open PRs into the review queue", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+		const client = new StubGitHubClient();
+		client.addFixture("octocat", "hello-world", {
+			id: "pr-1",
+			number: 1,
+			owner: "octocat",
+			repo: "hello-world",
+			title: "Add OTP login",
+			body: "",
+			diff: "diff --git a/src/auth.ts b/src/auth.ts\n@@ -0,0 +1 @@\n+export function login() {}\n",
+			ciStatus: "success",
+			declaredDirection: "add passwordless auth",
+			filesTouched: ["src/auth.ts"],
+		});
+		const provider = new StubLlmProvider();
+		provider.queueCompletion('["adds OTP login"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		// initialAccount pre-connects without going through /connect, which would swap the
+		// holder to a real OctokitGitHubClient (and hit the network) instead of `client`.
+		const { state } = setup(
+			async () => ({ login: "octocat", scopes: [] }),
+			undefined,
+			undefined,
+			client,
+			provider,
+			{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(
+			server,
+			"POST",
+			"/account/github/repos/select",
+			{ owner: "octocat", name: "hello-world" },
+			ADMIN_HEADERS,
+		);
+
+		expect(status).toBe(200);
+		expect(body["bundlesCreated"]).toBe(1);
+		expect(state.cards.size).toBe(1);
+		expect(state.bundles.size).toBe(1);
+		const [card] = [...state.cards.values()];
+		expect(card?.directionSummary).toBe("add passwordless auth");
+	});
+
+	it("selecting a repo with no open PRs leaves the review queue empty", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+		const { state } = setup(
+			async () => ({ login: "octocat", scopes: [] }),
+			undefined,
+			undefined,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(
+			server,
+			"POST",
+			"/account/github/repos/select",
+			{ owner: "octocat", name: "hello-world" },
+			ADMIN_HEADERS,
+		);
+
+		expect(status).toBe(200);
+		expect(body["bundlesCreated"]).toBe(0);
+		expect(state.cards.size).toBe(0);
 	});
 
 	it("rejects repo selection when no account is connected", async () => {

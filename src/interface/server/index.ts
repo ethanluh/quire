@@ -106,6 +106,12 @@ async function main(): Promise<void> {
 			fetchAuthenticatedUser,
 			(token) => listRepositories(new Octokit({ auth: token })),
 			connectedAccount,
+			state,
+			pipelineConfig,
+			provider,
+			analyzer,
+			auditStore,
+			instrumentationSink,
 		),
 	);
 

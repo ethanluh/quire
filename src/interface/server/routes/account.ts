@@ -9,6 +9,15 @@ import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
+import { rawPRPayloadToIncomingPR } from "../../../engine/github/toIncomingPR.js";
+import { normalizePR } from "../../../engine/ingest/ingest.js";
+import { orchestratePipeline } from "../../../engine/pipeline/pipeline.js";
+import type { PipelineConfig } from "../../../engine/pipeline/pipeline.js";
+import type { LlmProvider } from "../../../engine/drift/effectList/provider.js";
+import type { StaticAnalyzer } from "../../../engine/drift/footprint/analyzer.js";
+import type { AuditStore } from "../../../engine/gate/auditStore.js";
+import type { InstrumentationSink } from "../../../engine/types/instrumentation.js";
+import type { ServerState } from "../state.js";
 import { localOnly } from "../middleware/localOnly.js";
 import { requireAdminHeader } from "../middleware/requireAdminHeader.js";
 import { validateBody } from "../middleware/validation.js";
@@ -37,6 +46,12 @@ export function githubAccountRouter(
 	verifyToken: (token: string) => Promise<VerifiedTokenIdentity>,
 	listRepos: (token: string) => Promise<ReadonlyArray<RepoSummary>>,
 	initialAccount: ConnectedAccount | undefined,
+	state: ServerState,
+	pipelineConfig: PipelineConfig,
+	provider: LlmProvider,
+	analyzer: StaticAnalyzer,
+	auditStore: AuditStore,
+	instrumentationSink?: InstrumentationSink,
 ): Router {
 	const router = Router();
 	let account = initialAccount;
@@ -82,7 +97,34 @@ export function githubAccountRouter(
 				const { owner, name } = req.body as z.infer<typeof SelectRepoSchema>;
 				account = { ...account, selectedRepo: { owner, name } };
 				await saveAccount(accountPath, account);
-				res.json({ selected: account.selectedRepo });
+
+				// Selecting a repo re-populates the review queue from that repo's open PRs,
+				// same pipeline /prs/ingest runs — the swarm's PRs land on the queue without
+				// a separate manual ingest step.
+				const rawPRs = await clientHolder.listOpenPullRequests(owner, name);
+				const prs = rawPRs.map((raw) => normalizePR(rawPRPayloadToIncomingPR(raw)));
+				const result = await orchestratePipeline(
+					prs,
+					pipelineConfig,
+					provider,
+					analyzer,
+					auditStore,
+					instrumentationSink,
+				);
+				for (const bundle of result.bundles) {
+					state.bundles.set(bundle.id, bundle);
+				}
+				for (const card of result.cards) {
+					state.cards.set(card.bundleId, card);
+				}
+
+				res.json({
+					selected: account.selectedRepo,
+					bundlesCreated: result.bundles.length,
+					rejected: result.rejected.map((p) => p.id),
+					shadowed: result.shadowed.map((p) => p.id),
+					...(result.error !== undefined ? { error: result.error } : {}),
+				});
 			} catch (err) {
 				next(err);
 			}
