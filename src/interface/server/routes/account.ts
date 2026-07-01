@@ -9,6 +9,12 @@ import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
+import { rawPRPayloadToIncomingPR } from "../../../engine/github/toIncomingPR.js";
+import { normalizePR } from "../../../engine/ingest/ingest.js";
+import type { Bundle } from "../../../engine/types/core.js";
+import { ingestIntoQueue } from "../ingestIntoQueue.js";
+import type { PipelineDeps } from "../ingestIntoQueue.js";
+import type { ServerState } from "../state.js";
 import { localOnly } from "../middleware/localOnly.js";
 import { requireAdminHeader } from "../middleware/requireAdminHeader.js";
 import { validateBody } from "../middleware/validation.js";
@@ -28,6 +34,23 @@ function buildClientForFallback(fallbackToken: string | undefined): OctokitGitHu
 		: new StubGitHubClient();
 }
 
+function isBundleForRepo(bundle: Bundle, owner: string, name: string): boolean {
+	return bundle.members.length > 0 && bundle.members.every((m) => m.repoOwner === owner && m.repoName === name);
+}
+
+// Drops any bundle/card whose members all belong to `repo` — used when selecting a repo
+// so its queue entries get replaced rather than accumulated (re-selecting the same repo,
+// or switching away from a previously selected one, both leave stale entries otherwise).
+function clearRepoFromQueue(state: ServerState, repo: { owner: string; name: string } | undefined): void {
+	if (repo === undefined) return;
+	for (const [id, bundle] of state.bundles) {
+		if (isBundleForRepo(bundle, repo.owner, repo.name)) {
+			state.bundles.delete(id);
+			state.cards.delete(id);
+		}
+	}
+}
+
 // `account` is in-memory, mirroring how ServerState holds bundles/cards/shelf in memory
 // with the queue's on-disk state as the durable copy — `accountPath` is that copy.
 export function githubAccountRouter(
@@ -37,6 +60,8 @@ export function githubAccountRouter(
 	verifyToken: (token: string) => Promise<VerifiedTokenIdentity>,
 	listRepos: (token: string) => Promise<ReadonlyArray<RepoSummary>>,
 	initialAccount: ConnectedAccount | undefined,
+	state: ServerState,
+	deps: PipelineDeps,
 ): Router {
 	const router = Router();
 	let account = initialAccount;
@@ -80,9 +105,26 @@ export function githubAccountRouter(
 					return;
 				}
 				const { owner, name } = req.body as z.infer<typeof SelectRepoSchema>;
+
+				// Fetch and ingest before persisting the selection: if listOpenPullRequests
+				// throws (network/API/token failure), the account stays pointed at whatever
+				// repo was already selected — with its queue intact — instead of "selecting"
+				// a repo whose PRs never actually made it onto the queue.
+				const rawPRs = await clientHolder.listOpenPullRequests(owner, name);
+				const prs = rawPRs.map((raw) => normalizePR(rawPRPayloadToIncomingPR(raw)));
+
+				// Re-populates the queue for the newly selected repo: drop bundles left over
+				// from whatever was previously selected, and any earlier bundles from this
+				// same repo (so re-selecting it doesn't duplicate them), before adding the
+				// freshly ingested ones.
+				clearRepoFromQueue(state, account.selectedRepo);
+				clearRepoFromQueue(state, { owner, name });
+				const summary = await ingestIntoQueue(prs, state, deps);
+
 				account = { ...account, selectedRepo: { owner, name } };
 				await saveAccount(accountPath, account);
-				res.json({ selected: account.selectedRepo });
+
+				res.json({ selected: account.selectedRepo, ...summary });
 			} catch (err) {
 				next(err);
 			}
