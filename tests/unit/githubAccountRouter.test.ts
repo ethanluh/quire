@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, jest } from "@jest/globals";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
@@ -12,12 +12,15 @@ import { OctokitGitHubClient } from "../../src/engine/github/octokitClient.js";
 import { InvalidTokenError } from "../../src/engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../src/engine/github/verifyToken.js";
 import type { RepoSummary } from "../../src/engine/github/repos.js";
+import type { RawPRPayload } from "../../src/engine/github/client.js";
 import { createServerState } from "../../src/interface/server/state.js";
+import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { ServerState } from "../../src/interface/server/state.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
+import type { PipelineDeps } from "../../src/interface/server/ingestIntoQueue.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -44,6 +47,42 @@ async function call(
 	return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
+function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
+	return {
+		id: "pr-1",
+		number: 1,
+		owner: "octocat",
+		repo: "hello-world",
+		title: "Add OTP login",
+		body: "",
+		diff: "diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -0,0 +1 @@\n+export function login() {}\n",
+		ciStatus: "success",
+		declaredDirection: "add passwordless auth",
+		filesTouched: ["src/auth.ts"],
+		...overrides,
+	};
+}
+
+// Returns a different fixed set of PRs on each successive call, so a test can simulate
+// a repo's open-PR set changing between two selections of the same repo.
+class SequencedGitHubClient extends StubGitHubClient {
+	private call = 0;
+	constructor(private readonly responses: ReadonlyArray<ReadonlyArray<RawPRPayload>>) {
+		super();
+	}
+	override async listOpenPullRequests(): Promise<ReadonlyArray<RawPRPayload>> {
+		const response = this.responses[this.call] ?? [];
+		this.call++;
+		return response;
+	}
+}
+
+class ThrowingGitHubClient extends StubGitHubClient {
+	override async listOpenPullRequests(): Promise<never> {
+		throw new Error("GitHub API unavailable");
+	}
+}
+
 const ADMIN_HEADERS = { "X-Quire-Admin": "1" };
 
 describe("githubAccountRouter", () => {
@@ -62,28 +101,24 @@ describe("githubAccountRouter", () => {
 		client: StubGitHubClient = new StubGitHubClient(),
 		provider: StubLlmProvider = new StubLlmProvider(),
 		initialAccount: ConnectedAccount | undefined = undefined,
+		depsOverrides: Partial<Pick<PipelineDeps, "auditStore" | "config">> = {},
 	): { accountPath: string; holder: GitHubClientHolder; state: ServerState } {
 		const accountPath = join(dir, "github-account.json");
 		const holder = new GitHubClientHolder(client);
 		const state = createServerState();
+		const deps: PipelineDeps = {
+			config: depsOverrides.config ?? PIPELINE_CONFIG,
+			provider,
+			analyzer: new StubStaticAnalyzer(),
+			auditStore: depsOverrides.auditStore ?? new AuditStore(),
+		};
 		const app = express();
 		app.use(express.json());
 		app.use(
 			"/account/github",
-			githubAccountRouter(
-				accountPath,
-				holder,
-				fallbackToken,
-				verifyToken,
-				listRepos,
-				initialAccount,
-				state,
-				PIPELINE_CONFIG,
-				provider,
-				new StubStaticAnalyzer(),
-				new AuditStore(),
-			),
+			githubAccountRouter(accountPath, holder, fallbackToken, verifyToken, listRepos, initialAccount, state, deps),
 		);
+		app.use(errorHandler);
 		server = app.listen(0);
 		return { accountPath, holder, state };
 	}
@@ -283,18 +318,7 @@ describe("githubAccountRouter", () => {
 	it("ingests the selected repo's open PRs into the review queue", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
 		const client = new StubGitHubClient();
-		client.addFixture("octocat", "hello-world", {
-			id: "pr-1",
-			number: 1,
-			owner: "octocat",
-			repo: "hello-world",
-			title: "Add OTP login",
-			body: "",
-			diff: "diff --git a/src/auth.ts b/src/auth.ts\n@@ -0,0 +1 @@\n+export function login() {}\n",
-			ciStatus: "success",
-			declaredDirection: "add passwordless auth",
-			filesTouched: ["src/auth.ts"],
-		});
+		client.addFixture("octocat", "hello-world", makePrFixture());
 		const provider = new StubLlmProvider();
 		provider.queueCompletion('["adds OTP login"]');
 		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
@@ -349,6 +373,145 @@ describe("githubAccountRouter", () => {
 		expect(status).toBe(200);
 		expect(body["bundlesCreated"]).toBe(0);
 		expect(state.cards.size).toBe(0);
+	});
+
+	it("does not persist the repo selection when fetching its open PRs fails, leaving the previous selection intact", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+		const { accountPath } = setup(
+			async () => ({ login: "octocat", scopes: [] }),
+			undefined,
+			undefined,
+			new ThrowingGitHubClient(),
+			new StubLlmProvider(),
+			{
+				login: "octocat",
+				token: "ghp_abc",
+				scopes: [],
+				connectedAt: "2026-06-30T00:00:00.000Z",
+				selectedRepo: { owner: "octocat", name: "old-repo" },
+			},
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status } = await call(
+			server,
+			"POST",
+			"/account/github/repos/select",
+			{ owner: "octocat", name: "new-repo" },
+			ADMIN_HEADERS,
+		);
+
+		expect(status).toBe(500);
+
+		const statusResult = await call(server, "GET", "/account/github/status");
+		expect(statusResult.body["selectedRepo"]).toEqual({ owner: "octocat", name: "old-repo" });
+		// The account started as an in-memory initialAccount, never written to disk; a
+		// failed select must not write it either.
+		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+	});
+
+	it("clears bundles from a previously selected repo when switching to a different one", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+		const client = new StubGitHubClient();
+		client.addFixture(
+			"octocat",
+			"repo-a",
+			makePrFixture({ id: "pr-a", repo: "repo-a", declaredDirection: "direction a", filesTouched: ["src/a.ts"] }),
+		);
+		client.addFixture(
+			"octocat",
+			"repo-b",
+			makePrFixture({ id: "pr-b", repo: "repo-b", declaredDirection: "direction b", filesTouched: ["src/b.ts"] }),
+		);
+		const provider = new StubLlmProvider();
+		provider.queueCompletion('["does a"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "does a", matchedDirection: true }]));
+		provider.queueCompletion('["does b"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "does b", matchedDirection: true }]));
+		const { state } = setup(
+			async () => ({ login: "octocat", scopes: [] }),
+			undefined,
+			undefined,
+			client,
+			provider,
+			{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		await call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "repo-a" }, ADMIN_HEADERS);
+		expect(state.bundles.size).toBe(1);
+
+		await call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "repo-b" }, ADMIN_HEADERS);
+
+		expect(state.bundles.size).toBe(1);
+		const [card] = [...state.cards.values()];
+		expect(card?.directionSummary).toBe("direction b");
+	});
+
+	it("re-selecting the same repo replaces its bundles instead of accumulating stale ones", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+		const client = new SequencedGitHubClient([
+			[makePrFixture({ id: "pr-1", declaredDirection: "direction one", filesTouched: ["src/one.ts"] })],
+			[makePrFixture({ id: "pr-2", declaredDirection: "direction two", filesTouched: ["src/two.ts"] })],
+		]);
+		const provider = new StubLlmProvider();
+		provider.queueCompletion('["does one"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "does one", matchedDirection: true }]));
+		provider.queueCompletion('["does two"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "does two", matchedDirection: true }]));
+		const { state } = setup(
+			async () => ({ login: "octocat", scopes: [] }),
+			undefined,
+			undefined,
+			client,
+			provider,
+			{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		await call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "hello-world" }, ADMIN_HEADERS);
+		expect(state.bundles.size).toBe(1);
+
+		await call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "hello-world" }, ADMIN_HEADERS);
+
+		expect(state.bundles.size).toBe(1);
+		const [card] = [...state.cards.values()];
+		expect(card?.directionSummary).toBe("direction two");
+	});
+
+	it("surfaces a partial pipeline failure in the response instead of silently succeeding", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+		const client = new StubGitHubClient();
+		client.addFixture("octocat", "hello-world", makePrFixture({ ciStatus: "failure" }));
+		const blockerPath = join(dir, "blocker");
+		await writeFile(blockerPath, "not a directory", "utf8");
+		const brokenAuditStore = new AuditStore(join(blockerPath, "audit.ndjson"));
+
+		setup(
+			async () => ({ login: "octocat", scopes: [] }),
+			undefined,
+			undefined,
+			client,
+			new StubLlmProvider(),
+			{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			{
+				auditStore: brokenAuditStore,
+				config: { gate: { criteria: [{ name: "buildFailure", mode: "shadow" }] }, bundle: { similarityThreshold: 0.75 } },
+			},
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(
+			server,
+			"POST",
+			"/account/github/repos/select",
+			{ owner: "octocat", name: "hello-world" },
+			ADMIN_HEADERS,
+		);
+
+		expect(status).toBe(200);
+		expect(body["error"]).toBeTruthy();
+		expect(body["bundlesCreated"]).toBe(0);
 	});
 
 	it("rejects repo selection when no account is connected", async () => {

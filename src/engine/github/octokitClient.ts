@@ -33,6 +33,35 @@ interface PullRequestRef {
 	head: { sha: string };
 }
 
+// Each item's per-PR work (diff + files + CI status, several API calls apiece) is
+// independent, but listing every open PR in a repo unbounded would fan out to GitHub
+// all at once — cap how many run concurrently to stay clear of secondary rate limits.
+const MAX_CONCURRENT_PR_FETCHES = 5;
+
+async function mapWithConcurrency<T, R>(
+	items: ReadonlyArray<T>,
+	limit: number,
+	fn: (item: T) => Promise<R>,
+): Promise<ReadonlyArray<PromiseSettledResult<R>>> {
+	const results: PromiseSettledResult<R>[] = new Array(items.length);
+	let next = 0;
+
+	async function worker(): Promise<void> {
+		while (next < items.length) {
+			const index = next++;
+			const item = items[index] as T;
+			try {
+				results[index] = { status: "fulfilled", value: await fn(item) };
+			} catch (reason) {
+				results[index] = { status: "rejected", reason };
+			}
+		}
+	}
+
+	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+	return results;
+}
+
 function extractDeclaredDirection(body: string | null, owner: string, repo: string, prNumber: number): string {
 	const match = body !== null ? DECLARED_DIRECTION_MARKER.exec(body) : null;
 	const direction = match?.[1]?.trim();
@@ -55,7 +84,9 @@ export class OctokitGitHubClient implements GitHubClient {
 
 	async listOpenPullRequests(owner: string, repo: string): Promise<ReadonlyArray<RawPRPayload>> {
 		const prs = await this.octokit.paginate(this.octokit.rest.pulls.list, { owner, repo, state: "open" });
-		const results = await Promise.allSettled(prs.map((pr) => this.toRawPRPayload(owner, repo, pr)));
+		const results = await mapWithConcurrency(prs, MAX_CONCURRENT_PR_FETCHES, (pr) =>
+			this.toRawPRPayload(owner, repo, pr),
+		);
 
 		const payloads: RawPRPayload[] = [];
 		for (const [i, result] of results.entries()) {

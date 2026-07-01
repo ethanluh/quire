@@ -163,6 +163,16 @@ describe("OctokitGitHubClient", () => {
 			expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("org/repo#6"));
 			errorSpy.mockRestore();
 		});
+
+		it("processes more PRs than the internal concurrency cap, preserving order", async () => {
+			const prs = Array.from({ length: 8 }, (_, i) =>
+				makePrResponse("<!-- declared-direction: add passwordless auth -->", { id: i + 1, number: i + 1 }),
+			);
+			const { octokit } = makeFakeOctokit({ listPrs: prs });
+			const client = new OctokitGitHubClient(octokit);
+			const payloads = await client.listOpenPullRequests("org", "repo");
+			expect(payloads.map((p) => p.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+		});
 	});
 
 	describe("mergePullRequest", () => {

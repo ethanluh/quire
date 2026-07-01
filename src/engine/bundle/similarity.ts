@@ -60,13 +60,17 @@ export async function clusterPRs(
 
 	for (const pr of prs) {
 		const prEffectText = (effectsByPr.get(pr.id) ?? []).join(". ");
+		// Comparisons against every existing centroid are independent of each other — only
+		// PR-to-PR progression (centroids growing as each PR is clustered) needs to stay
+		// sequential — so run them concurrently instead of one await per centroid.
+		const scores = await Promise.all(
+			centroids.map((centroid) => textSimilarity(prEffectText, centroid, provider)),
+		);
 		let bestIdx = -1;
 		let bestScore = -1;
-		for (let i = 0; i < centroids.length; i++) {
-			const centroid = centroids[i];
-			if (centroid === undefined) continue;
-			const score = await textSimilarity(prEffectText, centroid, provider);
-			if (score > bestScore) {
+		for (let i = 0; i < scores.length; i++) {
+			const score = scores[i];
+			if (score !== undefined && score > bestScore) {
 				bestScore = score;
 				bestIdx = i;
 			}

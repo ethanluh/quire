@@ -25,6 +25,7 @@ import { githubAccountRouter } from "./routes/account.js";
 import { errorHandler } from "./middleware/errors.js";
 import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
+import type { PipelineDeps } from "./ingestIntoQueue.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "../../../data");
@@ -83,11 +84,15 @@ async function main(): Promise<void> {
 		gateLogPath: GATE_LOG_PATH,
 		driftScreenLogPath: DRIFT_SCREEN_LOG_PATH,
 	});
+	const pipelineDeps: PipelineDeps = {
+		config: pipelineConfig,
+		provider,
+		analyzer,
+		auditStore,
+		instrumentationSink,
+	};
 
-	app.use(
-		"/prs",
-		prsRouter(state, pipelineConfig, provider, analyzer, auditStore, queue, instrumentationSink),
-	);
+	app.use("/prs", prsRouter(state, pipelineDeps, queue));
 	app.use("/bundles", bundlesRouter(state));
 	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github));
 	app.use("/queue", queueRouter(queue));
@@ -107,11 +112,7 @@ async function main(): Promise<void> {
 			(token) => listRepositories(new Octokit({ auth: token })),
 			connectedAccount,
 			state,
-			pipelineConfig,
-			provider,
-			analyzer,
-			auditStore,
-			instrumentationSink,
+			pipelineDeps,
 		),
 	);
 

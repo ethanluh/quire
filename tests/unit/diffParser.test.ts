@@ -66,4 +66,55 @@ describe("parseUnifiedDiff", () => {
 	it("returns no hunks for an empty diff", () => {
 		expect(parseUnifiedDiff("")).toEqual([]);
 	});
+
+	it("correctly attributes hunks for a file path containing the literal substring \" b/\"", () => {
+		// The `diff --git a/X b/Y` header concatenates both paths with no delimiter, so a
+		// path like "src/a b/c.ts" makes that line ambiguous — the file path must come
+		// from the unambiguous `--- a/...` / `+++ b/...` lines instead.
+		const raw = [
+			"diff --git a/src/a b/c.ts b/src/a b/c.ts",
+			"--- a/src/a b/c.ts",
+			"+++ b/src/a b/c.ts",
+			"@@ -1,1 +1,1 @@",
+			"+export function weird() {}",
+		].join("\n");
+
+		const hunks = parseUnifiedDiff(raw);
+
+		expect(hunks).toEqual([
+			{ filePath: "src/a b/c.ts", additions: ["+export function weird() {}"], deletions: [] },
+		]);
+	});
+
+	it("attributes a deleted file's hunk to its old path via the --- a/... line", () => {
+		const raw = [
+			"diff --git a/src/gone.ts b/src/gone.ts",
+			"--- a/src/gone.ts",
+			"+++ /dev/null",
+			"@@ -1,1 +0,0 @@",
+			"-export function gone() {}",
+		].join("\n");
+
+		const hunks = parseUnifiedDiff(raw);
+
+		expect(hunks).toEqual([
+			{ filePath: "src/gone.ts", additions: [], deletions: ["-export function gone() {}"] },
+		]);
+	});
+
+	it("attributes a renamed file's hunk to its new path via the +++ b/... line", () => {
+		const raw = [
+			"diff --git a/src/old-name.ts b/src/new-name.ts",
+			"--- a/src/old-name.ts",
+			"+++ b/src/new-name.ts",
+			"@@ -1,1 +1,1 @@",
+			"+export function renamed() {}",
+		].join("\n");
+
+		const hunks = parseUnifiedDiff(raw);
+
+		expect(hunks).toEqual([
+			{ filePath: "src/new-name.ts", additions: ["+export function renamed() {}"], deletions: [] },
+		]);
+	});
 });
