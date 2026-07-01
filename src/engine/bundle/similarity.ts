@@ -25,20 +25,19 @@ function jaccardSimilarity(a: string, b: string): number {
 	return union === 0 ? 0 : intersection / union;
 }
 
+// An embed() failure (real API error/outage) is let through rather than caught here,
+// so it propagates to the caller instead of being silently indistinguishable from a
+// provider's intentional all-zero-vector opt-out (see provider.ts's embed() contract).
 export async function textSimilarity(
 	a: string,
 	b: string,
 	provider: EmbeddingProvider,
 ): Promise<number> {
-	try {
-		const [vecA, vecB] = await Promise.all([provider.embed(a), provider.embed(b)]);
-		const allZeroA = vecA.every((v) => v === 0);
-		const allZeroB = vecB.every((v) => v === 0);
-		if (allZeroA || allZeroB) return jaccardSimilarity(a, b);
-		return cosineSimilarity(vecA, vecB);
-	} catch {
-		return jaccardSimilarity(a, b);
-	}
+	const [vecA, vecB] = await Promise.all([provider.embed(a), provider.embed(b)]);
+	const allZeroA = vecA.every((v) => v === 0);
+	const allZeroB = vecB.every((v) => v === 0);
+	if (allZeroA || allZeroB) return jaccardSimilarity(a, b);
+	return cosineSimilarity(vecA, vecB);
 }
 
 export interface ClusterConfig {
@@ -58,19 +57,33 @@ export async function clusterPRs(
 	const clusters: PullRequest[][] = [];
 	const centroids: string[] = [];
 
+	// Caches in-flight/resolved embeddings by text for the life of this call, since a
+	// real network-backed provider.embed() would otherwise re-embed the same unchanged
+	// centroid on every subsequent PR comparison. Caching the promise (not just the
+	// resolved value) also dedupes concurrent requests for the same text.
+	const embedCache = new Map<string, Promise<ReadonlyArray<number>>>();
+	function cachedEmbed(text: string): Promise<ReadonlyArray<number>> {
+		const cached = embedCache.get(text);
+		if (cached !== undefined) return cached;
+		const promise = provider.embed(text);
+		embedCache.set(text, promise);
+		return promise;
+	}
+	const cachingProvider: EmbeddingProvider = { embed: cachedEmbed };
+
 	for (const pr of prs) {
 		const prEffectText = (effectsByPr.get(pr.id) ?? []).join(". ");
-		// Comparisons against every existing centroid are independent of each other — only
-		// PR-to-PR progression (centroids growing as each PR is clustered) needs to stay
-		// sequential — so run them concurrently instead of one await per centroid.
+		// Comparisons against every existing centroid are independent of each other for
+		// this PR, so they run concurrently instead of one network round-trip at a time.
 		const scores = await Promise.all(
-			centroids.map((centroid) => textSimilarity(prEffectText, centroid, provider)),
+			centroids.map((centroid) => textSimilarity(prEffectText, centroid, cachingProvider)),
 		);
+
 		let bestIdx = -1;
 		let bestScore = -1;
 		for (let i = 0; i < scores.length; i++) {
-			const score = scores[i];
-			if (score !== undefined && score > bestScore) {
+			const score = scores[i] ?? -1;
+			if (score > bestScore) {
 				bestScore = score;
 				bestIdx = i;
 			}

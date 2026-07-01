@@ -1,5 +1,6 @@
 import type { Effect } from "../../types/core.js";
 import type { LlmProvider } from "./provider.js";
+import { stripCodeFence } from "./stripCodeFence.js";
 
 const SYSTEM_PROMPT = `You are a code analyst. You will be given a bundle direction and a list of effect clauses extracted from a PR diff.
 For each clause, decide whether it matches the stated direction (true) or is an orphan — an effect with no directional home in the bundle's declared intent (false).
@@ -21,7 +22,7 @@ export async function matchEffectsToDirection(
 	]);
 
 	try {
-		const parsed: unknown = JSON.parse(response);
+		const parsed: unknown = JSON.parse(stripCodeFence(response));
 		if (Array.isArray(parsed)) {
 			const result: Effect[] = [];
 			for (const item of parsed) {

@@ -11,7 +11,7 @@ import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { loadAccount } from "../../engine/github/account.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
 import { listRepositories } from "../../engine/github/repos.js";
-import { StubLlmProvider } from "../../engine/drift/effectList/stubProvider.js";
+import { resolveLlmProvider } from "./resolveLlmProvider.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
 import { prsRouter } from "./routes/prs.js";
@@ -77,7 +77,8 @@ async function main(): Promise<void> {
 	const queue = new MergeQueue(QUEUE_PATH, github);
 	await queue.load();
 
-	const provider = new StubLlmProvider();
+	const { provider, description } = resolveLlmProvider(process.env);
+	console.log(`LLM provider: ${description}`);
 	const analyzer = new TypeScriptAnalyzer();
 	const state = createServerState();
 	const instrumentationSink = createNdjsonInstrumentationSink({

@@ -51,6 +51,13 @@ describe("extractEffects — INV-2: direction must never appear in LLM messages"
 		expect(effects).toContain("effect one");
 		expect(effects).toContain("effect two");
 	});
+
+	it("parses a JSON array response wrapped in a markdown code fence", async () => {
+		const stub = new StubLlmProvider();
+		stub.queueCompletion('```json\n["effect one", "effect two"]\n```');
+		const effects = await extractEffects(EMPTY_DIFF, [], stub);
+		expect(effects).toEqual(["effect one", "effect two"]);
+	});
 });
 
 describe("matchEffectsToDirection", () => {
