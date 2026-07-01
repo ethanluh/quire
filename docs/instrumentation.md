@@ -38,7 +38,8 @@ excluded upstream in `runGate`, before any `GateDecisionLog` row is built.
 
 Phase 0 derives from this log:
 - **Keep rate** — fraction of PRs with no `triggered: true` row at `mode: "enforce"`.
-- **Per-criterion false-positive rate** (gate health, §12 of the engineering handoff) — for `shadow`-mode criteria, the fraction of `triggered: true` rows a human later overturns via the audit view.
+- **Per-criterion trigger rate** — for `shadow`-mode criteria, the fraction of evaluated rows where `triggered: true`. This is a proxy for gate health, not the false-positive rate itself: the log records what the criterion *would have* rejected, not whether a human later confirmed the rejection was warranted.
+- **Per-criterion false-positive rate** (gate health, §12 of the engineering handoff) is **not yet computable**. It would require a human overturn recorded against a specific audit entry, but `AuditEntry` (`src/engine/gate/auditStore.ts`) has no outcome/overturned field and `auditRouter` (`src/interface/server/routes/audit.ts`) exposes no endpoint to record one — that data model and UI don't exist yet. Until then, treat the trigger rate above as the best available signal, not a substitute.
 
 ## Drift-screen results — `drift-screen.ndjson`
 
