@@ -18,10 +18,13 @@ export class AuditStore {
 		this.entries = [...initialEntries];
 	}
 
+	// Persist before mutating in-memory state, so a failed write never leaves the
+	// in-memory store ahead of the log — list() must never report something a
+	// restart (loadAuditStore) couldn't reproduce.
 	async add(pr: PullRequest, criterionName: string, reason: string): Promise<void> {
 		const entry: AuditEntry = { pr, criterionName, reason, addedAt: new Date().toISOString() };
-		this.entries.push(entry);
 		if (this.logPath !== undefined) await appendNdjson(this.logPath, entry);
+		this.entries.push(entry);
 	}
 
 	list(): ReadonlyArray<AuditEntry> {
@@ -29,8 +32,8 @@ export class AuditStore {
 	}
 
 	async clear(): Promise<void> {
-		this.entries.length = 0;
 		if (this.logPath !== undefined) await truncateNdjson(this.logPath);
+		this.entries.length = 0;
 	}
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "@jest/globals";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, unlink, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditStore, loadAuditStore } from "../../src/engine/gate/auditStore.js";
@@ -82,5 +82,32 @@ describe("AuditStore persistence", () => {
 
 		const reloaded = await loadAuditStore(logPath);
 		expect(reloaded.list()).toHaveLength(0);
+	});
+
+	it("does not record an entry in memory when the persisted write fails", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-audit-"));
+		// A file where a directory component is expected forces the write's mkdir to fail.
+		const blockerPath = join(dir, "blocker");
+		await writeFile(blockerPath, "not a directory", "utf8");
+		const logPath = join(blockerPath, "audit.ndjson");
+		const store = new AuditStore(logPath);
+
+		await expect(store.add(makePR(), "duplicate", "looks like a dup")).rejects.toThrow();
+		expect(store.list()).toHaveLength(0);
+	});
+
+	it("does not clear in-memory entries when the persisted truncate fails", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-audit-"));
+		const logPath = join(dir, "audit.ndjson");
+		const store = new AuditStore(logPath);
+		await store.add(makePR(), "duplicate", "looks like a dup");
+
+		// Replace the log file with a directory of the same name so the truncating
+		// write structurally fails (EISDIR), regardless of process permissions.
+		await unlink(logPath);
+		await mkdir(logPath);
+
+		await expect(store.clear()).rejects.toThrow();
+		expect(store.list()).toHaveLength(1);
 	});
 });
