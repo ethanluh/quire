@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
 import express from "express";
 import type { Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -9,7 +9,19 @@ import { bundlesRouter } from "../../src/interface/server/routes/bundles.js";
 import { gesturesRouter } from "../../src/interface/server/routes/gestures.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
-import type { Bundle, ReviewCard } from "../../src/engine/types/core.js";
+import type { Bundle, GestureAction, ReviewCard } from "../../src/engine/types/core.js";
+
+class RejectingGitHubClient extends StubGitHubClient {
+	override async postReviewCardComment(
+		_owner: string,
+		_repo: string,
+		_prNumber: number,
+		_action: GestureAction,
+		_card: ReviewCard,
+	): Promise<void> {
+		throw new Error("GitHub API unavailable");
+	}
+}
 
 function makeBundle(id: string): Bundle {
 	return {
@@ -153,5 +165,61 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(github.postedReviewCardComments).toEqual([
 			expect.objectContaining({ owner: "org", repo: "repo", prNumber: 1, action: "defer" }),
 		]);
+	});
+});
+
+describe("gesturesRouter — review card comment posting failures", () => {
+	let server: Server;
+	let baseUrl: string;
+	let dataDir: string;
+
+	beforeEach(async () => {
+		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
+		const state = createServerState();
+		state.bundles.set("b-1", makeBundle("b-1"));
+		state.cards.set("b-1", makeCard("b-1"));
+
+		const github = new RejectingGitHubClient();
+		const queue = new MergeQueue(join(dataDir, "queue.json"), github);
+		await queue.load();
+
+		const app = express();
+		app.use(express.json());
+		app.use("/bundles", gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github));
+
+		await new Promise<void>((resolve) => {
+			server = app.listen(0, resolve);
+		});
+		const address = server.address();
+		const port = typeof address === "object" && address !== null ? address.port : 0;
+		baseUrl = `http://127.0.0.1:${port}`;
+	});
+
+	afterEach(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(dataDir, { recursive: true, force: true });
+	});
+
+	it("still returns success and logs the failure when postReviewCardComment rejects", async () => {
+		const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+		const res = await fetch(`${baseUrl}/bundles/b-1/gesture`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ action: "accept" }),
+		});
+
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ status: "queued", bundleId: "b-1" });
+
+		// The rejection is handled by a fire-and-forget .catch(), so let its microtask settle.
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(errorSpy).toHaveBeenCalledWith(
+			expect.stringContaining("Failed to post review card comment to org/repo#1"),
+			expect.any(Error),
+		);
+
+		errorSpy.mockRestore();
 	});
 });
