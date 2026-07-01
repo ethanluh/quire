@@ -40,28 +40,13 @@ export interface OAuthDeps {
 	redirectUri: string;
 }
 
-// Rendered by the OAuth callback in place of a redirect, so the connect flow can run in a
-// popup: it posts the result back to the tab that opened it (checked there against
-// window.location.origin) rather than bouncing the main tab through a full navigation.
-function renderOAuthResultPage(status: "connected" | "error", login: string | undefined, reason: string | undefined): string {
-	const payload = JSON.stringify({ source: "quire-oauth", status, login, reason });
-	const message =
-		status === "connected"
-			? `Connected as ${login ?? ""}. You can close this window.`
-			: `GitHub connection failed: ${reason ?? "unknown error"}`;
-	const closeScript = status === "connected" ? "setTimeout(() => window.close(), 1200);" : "";
-	return `<!doctype html>
-<html>
-<body>
-<script>
-if (window.opener) {
-	window.opener.postMessage(${payload}, window.location.origin);
-}
-${closeScript}
-</script>
-<p>${message.replace(/</g, "&lt;")}</p>
-</body>
-</html>`;
+// Where the OAuth callback sends the browser once it's done — GitHub's redirect is a
+// top-level navigation, so the result is reported via a query param on the app's own
+// page rather than a JSON response.
+function oauthResultRedirectUrl(status: "connected" | "error", reason: string | undefined): string {
+	const params = new URLSearchParams({ account: status });
+	if (reason !== undefined) params.set("reason", reason);
+	return `/?${params.toString()}`;
 }
 
 function buildClientForFallback(fallbackToken: string | undefined): OctokitGitHubClient | StubGitHubClient {
@@ -231,7 +216,7 @@ export function githubAccountRouter(
 				returnedState !== pending.state ||
 				Date.now() >= pending.expiresAt
 			) {
-				res.status(400).type("html").send(renderOAuthResultPage("error", undefined, "the connection request expired or was invalid"));
+				res.redirect(oauthResultRedirectUrl("error", "the connection request expired or was invalid"));
 				return;
 			}
 
@@ -248,13 +233,13 @@ export function githubAccountRouter(
 				await saveAccount(accountPath, account);
 				clientHolder.setClient(new OctokitGitHubClient(new Octokit({ auth: accessToken })));
 
-				res.type("html").send(renderOAuthResultPage("connected", account.login, undefined));
+				res.redirect(oauthResultRedirectUrl("connected", undefined));
 			} catch (err) {
 				const reason =
 					err instanceof OAuthExchangeError || err instanceof InvalidTokenError
 						? err.message
 						: "GitHub connection failed unexpectedly";
-				res.status(502).type("html").send(renderOAuthResultPage("error", undefined, reason));
+				res.redirect(oauthResultRedirectUrl("error", reason));
 			}
 		});
 	}

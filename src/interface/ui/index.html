@@ -229,13 +229,13 @@
 </div>
 
 <script>
-const tabs = document.querySelectorAll('.tab');
-tabs.forEach(tab => {
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
+}
+document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
-    tabs.forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
-    document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+    showTab(tab.dataset.tab);
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
@@ -431,23 +431,23 @@ oauthConnectBtn.addEventListener('click', async () => {
     showAccountResult('Error: ' + result.error, true);
     return;
   }
-  const popup = window.open(result.authorizeUrl, 'quire-github-oauth', 'width=600,height=700');
-  if (!popup) {
-    showAccountResult('Could not open the GitHub sign-in popup — check your browser’s popup blocker.', true);
-  }
+  location.href = result.authorizeUrl;
 });
 
-// The OAuth callback runs in the popup and posts its result back here rather than
-// navigating the main tab, so the connect flow never leaves the Quire page it started on.
-window.addEventListener('message', (event) => {
-  if (event.origin !== location.origin) return;
-  if (!event.data || event.data.source !== 'quire-oauth') return;
-  if (event.data.status === 'connected') {
-    loadAccount();
-  } else {
-    showAccountResult('GitHub connection failed: ' + (event.data.reason || 'unknown error'), true);
+// The OAuth callback redirects back here with ?account=connected|error once GitHub's
+// consent screen is done, since the whole flow is a top-level navigation away and back
+// (not a popup) — pick that signal up on load, then drop it from the URL.
+(async function handleOAuthRedirect() {
+  const params = new URLSearchParams(location.search);
+  const result = params.get('account');
+  if (!result) return;
+  history.replaceState(null, '', location.pathname);
+  showTab('account');
+  await loadAccount();
+  if (result === 'error') {
+    showAccountResult('GitHub connection failed: ' + (params.get('reason') || 'unknown error'), true);
   }
-});
+})();
 
 accountDisconnectBtn.addEventListener('click', async () => {
   if (!confirm('Disconnect the connected GitHub account?')) return;
