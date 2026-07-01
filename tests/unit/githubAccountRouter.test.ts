@@ -327,7 +327,15 @@ describe("githubAccountRouter", () => {
 	it("lists repos for the connected account's token", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
 		const repos: ReadonlyArray<RepoSummary> = [
-			{ owner: "octocat", name: "hello-world", fullName: "octocat/hello-world", private: false, defaultBranch: "main" },
+			{
+				owner: "octocat",
+				name: "hello-world",
+				fullName: "octocat/hello-world",
+				private: false,
+				defaultBranch: "main",
+				starred: false,
+				pinned: false,
+			},
 		];
 		const listRepos = jest.fn(async (token: string) => {
 			expect(token).toBe("ghp_abc");

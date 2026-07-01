@@ -118,6 +118,7 @@
   }
   .repo-entry.selected { border-color: var(--color-brand); }
   .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 64px; justify-content: center; }
+  .repo-entry .badge-priority { font-size: var(--text-xs); flex: 0 0 auto; white-space: nowrap; }
 
   .ingest-form p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
   .ingest-form textarea {
@@ -528,8 +529,12 @@ accountDisconnectBtn.addEventListener('click', async () => {
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
+  const starredBadge = repo.starred ? '<span class="badge badge-clean badge-priority">★ Favorite</span>' : '';
+  const pinnedBadge = repo.pinned ? '<span class="badge badge-neutral badge-priority">📌 Pinned</span>' : '';
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
+    ${starredBadge}
+    ${pinnedBadge}
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isSelected
       ? '<span class="badge badge-clean">Selected</span>'
