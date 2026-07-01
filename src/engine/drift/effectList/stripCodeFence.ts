@@ -1,9 +1,10 @@
-const CODE_FENCE = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/;
+// Not anchored to the whole string: real LLM output routinely wraps JSON in a
+// fence AND adds surrounding prose ("Here is the result:\n```json\n[...]\n```")
+// despite being told "output only a JSON array". Finds the first fenced block
+// anywhere in the text, with any (or no) language tag, and extracts only its
+// content — so surrounding prose and the tag itself never leak into the result.
+const CODE_FENCE = /```(?:\w+)?\s*\n?([\s\S]*?)\n?```/;
 
-// LLMs routinely wrap JSON output in a markdown code fence even when told
-// "output only a JSON array" — strip it so JSON.parse sees bare JSON instead
-// of falling through to a fallback parser that was never meant to carry the
-// primary path.
 export function stripCodeFence(text: string): string {
 	const trimmed = text.trim();
 	const match = CODE_FENCE.exec(trimmed);

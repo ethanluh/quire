@@ -83,15 +83,24 @@ export async function orchestratePipeline(
 	const cards: ReviewCard[] = [];
 	let extractionError: string | undefined;
 	try {
-		const { bundles: builtBundles, effectsByPr, extractionFailures } = await buildBundles(
+		const { bundles: builtBundles, effectsByPr, extractionFailures, clusteringFailures } = await buildBundles(
 			passed, provider, config.bundle,
 		);
 		bundles.push(...builtBundles);
 
+		const failureNotices: string[] = [];
 		if (extractionFailures.length > 0) {
-			extractionError = `effect extraction failed for ${extractionFailures.length} PR(s): ${extractionFailures
+			failureNotices.push(`effect extraction failed for ${extractionFailures.length} PR(s): ${extractionFailures
 				.map((f) => `${f.pr.id} (${f.error})`)
-				.join("; ")}`;
+				.join("; ")}`);
+		}
+		if (clusteringFailures.length > 0) {
+			failureNotices.push(`clustering failed for ${clusteringFailures.length} PR(s): ${clusteringFailures
+				.map((f) => `${f.pr.id} (${f.error})`)
+				.join("; ")}`);
+		}
+		if (failureNotices.length > 0) {
+			extractionError = failureNotices.join("; ");
 		}
 
 		for (const bundle of bundles) {

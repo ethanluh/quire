@@ -1,5 +1,8 @@
 import type { PullRequest } from "../types/core.js";
 import type { EmbeddingProvider } from "../drift/effectList/provider.js";
+import { settleWithConcurrency } from "../util/concurrency.js";
+
+const CENTROID_COMPARISON_CONCURRENCY = 4;
 
 function cosineSimilarity(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
 	let dot = 0, normA = 0, normB = 0;
@@ -44,6 +47,20 @@ export interface ClusterConfig {
 	threshold: number;
 }
 
+export interface ClusteringFailure {
+	pr: PullRequest;
+	error: string;
+}
+
+export interface ClusterResult {
+	clusters: ReadonlyArray<ReadonlyArray<PullRequest>>;
+	// PRs excluded from this round because comparing them against every existing
+	// centroid failed (e.g. a real embed() outage). Kept separate from a thrown
+	// error so one flaky comparison doesn't discard clustering progress already
+	// made for every other PR (mirrors buildBundles()'s extractionFailures contract).
+	failures: ReadonlyArray<ClusteringFailure>;
+}
+
 // Clusters on extracted-effect text, never on declaredDirection (INV-1): membership
 // must rest on the independent evidence the drift check produces, not the untrusted
 // declared-direction prior. effectsByPr is expected to come from extraction that ran
@@ -53,20 +70,24 @@ export async function clusterPRs(
 	effectsByPr: ReadonlyMap<string, ReadonlyArray<string>>,
 	provider: EmbeddingProvider,
 	config: ClusterConfig,
-): Promise<ReadonlyArray<ReadonlyArray<PullRequest>>> {
+): Promise<ClusterResult> {
 	const clusters: PullRequest[][] = [];
 	const centroids: string[] = [];
+	const failures: ClusteringFailure[] = [];
 
 	// Caches in-flight/resolved embeddings by text for the life of this call, since a
 	// real network-backed provider.embed() would otherwise re-embed the same unchanged
 	// centroid on every subsequent PR comparison. Caching the promise (not just the
-	// resolved value) also dedupes concurrent requests for the same text.
+	// resolved value) also dedupes concurrent requests for the same text. A rejection
+	// is evicted rather than cached, so a transient failure doesn't permanently poison
+	// every later comparison against that same text for the rest of this call.
 	const embedCache = new Map<string, Promise<ReadonlyArray<number>>>();
 	function cachedEmbed(text: string): Promise<ReadonlyArray<number>> {
 		const cached = embedCache.get(text);
 		if (cached !== undefined) return cached;
 		const promise = provider.embed(text);
 		embedCache.set(text, promise);
+		promise.catch(() => embedCache.delete(text));
 		return promise;
 	}
 	const cachingProvider: EmbeddingProvider = { embed: cachedEmbed };
@@ -74,15 +95,29 @@ export async function clusterPRs(
 	for (const pr of prs) {
 		const prEffectText = (effectsByPr.get(pr.id) ?? []).join(". ");
 		// Comparisons against every existing centroid are independent of each other for
-		// this PR, so they run concurrently instead of one network round-trip at a time.
-		const scores = await Promise.all(
-			centroids.map((centroid) => textSimilarity(prEffectText, centroid, cachingProvider)),
+		// this PR, so they run concurrently (capped) instead of one round-trip at a time.
+		// A failure here must not discard clustering progress made for every other PR —
+		// skip this PR for this round instead, the same way extraction failures are
+		// isolated per-PR in buildBundles().
+		const settled = await settleWithConcurrency(
+			centroids,
+			CENTROID_COMPARISON_CONCURRENCY,
+			(centroid) => textSimilarity(prEffectText, centroid, cachingProvider),
 		);
+		const firstFailure = settled.find((r) => r.status === "rejected");
+		if (firstFailure !== undefined && firstFailure.status === "rejected") {
+			failures.push({
+				pr,
+				error: firstFailure.reason instanceof Error ? firstFailure.reason.message : String(firstFailure.reason),
+			});
+			continue;
+		}
 
 		let bestIdx = -1;
 		let bestScore = -1;
-		for (let i = 0; i < scores.length; i++) {
-			const score = scores[i] ?? -1;
+		for (let i = 0; i < settled.length; i++) {
+			const result = settled[i];
+			const score = result?.status === "fulfilled" ? result.value : -1;
 			if (score > bestScore) {
 				bestScore = score;
 				bestIdx = i;
@@ -96,5 +131,5 @@ export async function clusterPRs(
 		}
 	}
 
-	return clusters;
+	return { clusters, failures };
 }
