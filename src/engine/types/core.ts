@@ -31,6 +31,10 @@ export interface PullRequest {
 export interface Bundle {
 	id: string;
 	direction: string;
+	// Extracted-effect evidence (blind to declaredDirection, INV-2) that formed this
+	// bundle. The drift check compares members against this, never against
+	// `direction` — declaredDirection is a label for humans, not a verdict input (INV-1).
+	effectSummary: string;
 	members: ReadonlyArray<PullRequest>;
 }
 

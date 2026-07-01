@@ -25,7 +25,7 @@ function jaccardSimilarity(a: string, b: string): number {
 	return union === 0 ? 0 : intersection / union;
 }
 
-export async function directionalSimilarity(
+export async function textSimilarity(
 	a: string,
 	b: string,
 	provider: EmbeddingProvider,
@@ -45,8 +45,13 @@ export interface ClusterConfig {
 	threshold: number;
 }
 
+// Clusters on extracted-effect text, never on declaredDirection (INV-1): membership
+// must rest on the independent evidence the drift check produces, not the untrusted
+// declared-direction prior. effectsByPr is expected to come from extraction that ran
+// blind to declaredDirection (INV-2).
 export async function clusterPRs(
 	prs: ReadonlyArray<PullRequest>,
+	effectsByPr: ReadonlyMap<string, ReadonlyArray<string>>,
 	provider: EmbeddingProvider,
 	config: ClusterConfig,
 ): Promise<ReadonlyArray<ReadonlyArray<PullRequest>>> {
@@ -54,12 +59,13 @@ export async function clusterPRs(
 	const centroids: string[] = [];
 
 	for (const pr of prs) {
+		const prEffectText = (effectsByPr.get(pr.id) ?? []).join(". ");
 		let bestIdx = -1;
 		let bestScore = -1;
 		for (let i = 0; i < centroids.length; i++) {
 			const centroid = centroids[i];
 			if (centroid === undefined) continue;
-			const score = await directionalSimilarity(pr.declaredDirection, centroid, provider);
+			const score = await textSimilarity(prEffectText, centroid, provider);
 			if (score > bestScore) {
 				bestScore = score;
 				bestIdx = i;
@@ -69,7 +75,7 @@ export async function clusterPRs(
 			clusters[bestIdx]!.push(pr);
 		} else {
 			clusters.push([pr]);
-			centroids.push(pr.declaredDirection);
+			centroids.push(prEffectText);
 		}
 	}
 

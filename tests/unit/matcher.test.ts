@@ -22,7 +22,7 @@ function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
 }
 
 function makeBundle(members: ReadonlyArray<PullRequest>): Bundle {
-	return { id: "bundle-1", direction: "add passwordless auth", members };
+	return { id: "bundle-1", direction: "add passwordless auth", effectSummary: "adds OTP-based login", members };
 }
 
 describe("matchEffectsToDirection — parse-failure fallback (INV-3)", () => {
@@ -70,7 +70,6 @@ describe("matchEffectsToDirection — parse-failure fallback (INV-3)", () => {
 describe("runCheapScreen — screen failure must flag, never clear (INV-3)", () => {
 	it("flags the member when the matcher's response fails to parse", async () => {
 		const provider = new StubLlmProvider();
-		provider.queueCompletion(JSON.stringify(["adds rate limiting to login endpoint"])); // extractor response
 		provider.queueCompletion("garbage, not json"); // matcher response — fails to parse
 
 		const analyzer = new StubStaticAnalyzer();
@@ -80,7 +79,7 @@ describe("runCheapScreen — screen failure must flag, never clear (INV-3)", () 
 		const pr = makePR();
 		const bundle = makeBundle([pr]);
 
-		const verdict = await runCheapScreen(pr, bundle, provider, analyzer);
+		const verdict = await runCheapScreen(pr, bundle, ["adds rate limiting to login endpoint"], provider, analyzer);
 
 		expect(verdict.status).toBe("flagged");
 		if (verdict.status === "flagged") {
