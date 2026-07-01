@@ -5,6 +5,9 @@ import { dirname } from "node:path";
 export interface SelectedRepo {
 	owner: string;
 	name: string;
+	// GitHub webhook id registered for this repo, if auto-registration succeeded — used to
+	// remove it when switching to a different repo or disconnecting.
+	webhookId?: number;
 }
 
 export interface ConnectedAccount {
@@ -13,6 +16,13 @@ export interface ConnectedAccount {
 	scopes: ReadonlyArray<string>;
 	connectedAt: string;
 	selectedRepo?: SelectedRepo;
+	// Only set for an OAuth-connected account whose token expires (see oauth.ts) — a PAT,
+	// or an OAuth App without token expiration enabled, leaves both undefined.
+	refreshToken?: string;
+	tokenExpiresAt?: string;
+	// Set when a token refresh failed (or wasn't possible) and background ingestion has
+	// stopped until the user reconnects — surfaced on GET /status for the UI to prompt.
+	needsReconnect?: boolean;
 }
 
 export async function loadAccount(path: string): Promise<ConnectedAccount | undefined> {

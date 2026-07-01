@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { GitHubClient } from "../../../engine/github/client.js";
+import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { Bundle, GestureAction, ReviewCard } from "../../../engine/types/core.js";
 import type { ServerState } from "../state.js";
 import { logDefer } from "../../../engine/instrumentation/logger.js";
@@ -33,6 +34,7 @@ export function gesturesRouter(
 	queue: MergeQueue,
 	deferLogPath: string,
 	github: GitHubClient,
+	decidedStore: DecidedPrStore,
 ): Router {
 	const router = Router({ mergeParams: true });
 
@@ -51,22 +53,26 @@ export function gesturesRouter(
 				}
 
 				const { action } = req.body as z.infer<typeof GestureSchema>;
+				const memberPrIds = bundle.members.map((m) => m.id);
 
 				if (action === "accept") {
 					await queue.enqueue(bundle); // enqueues, does not merge (INV-5)
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
+					await decidedStore.markDecided(memberPrIds, action);
 					postCardToMembers(github, action, bundle, card);
 					res.json({ status: "queued", bundleId });
 				} else if (action === "reject") {
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
+					await decidedStore.markDecided(memberPrIds, action);
 					postCardToMembers(github, action, bundle, card);
 					res.json({ status: "rejected", bundleId });
 				} else {
 					// defer
-					state.shelf.set(bundleId, card);
+					state.shelf.set(bundleId, { card, memberPrIds });
 					state.cards.delete(bundleId);
+					await decidedStore.markDecided(memberPrIds, action);
 					await logDefer(deferLogPath, bundleId, card);
 					postCardToMembers(github, action, bundle, card);
 					res.json({ status: "deferred", bundleId, shelfPosition: state.shelf.size });

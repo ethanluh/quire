@@ -74,7 +74,7 @@ describe("adminRouter POST /reset", () => {
 		const state = createServerState();
 		state.bundles.set("b-1", makeBundle("b-1"));
 		state.cards.set("b-1", makeCard("b-1"));
-		state.shelf.set("b-2", makeCard("b-2"));
+		state.shelf.set("b-2", { card: makeCard("b-2"), memberPrIds: [] });
 
 		const auditStore = new AuditStore();
 		await auditStore.add(makePR(), "duplicate", "looks like a dup");

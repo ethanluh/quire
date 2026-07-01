@@ -144,23 +144,27 @@ describe("OctokitGitHubClient", () => {
 			const prB = makePrResponse("<!-- declared-direction: add rate limiting -->", { id: 2, number: 6 });
 			const { octokit } = makeFakeOctokit({ listPrs: [prA, prB] });
 			const client = new OctokitGitHubClient(octokit);
-			const payloads = await client.listOpenPullRequests("org", "repo");
+			const { payloads, skipped } = await client.listOpenPullRequests("org", "repo");
 			expect(payloads.map((p) => p.number)).toEqual([5, 6]);
 			expect(payloads.map((p) => p.declaredDirection)).toEqual([
 				"add passwordless auth",
 				"add rate limiting",
 			]);
+			expect(skipped).toEqual([]);
 		});
 
-		it("skips a PR that fails to map instead of failing the whole batch", async () => {
+		it("skips a PR that fails to map instead of failing the whole batch, and reports it as skipped", async () => {
 			const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
 			const good = makePrResponse("<!-- declared-direction: add passwordless auth -->", { id: 1, number: 5 });
 			const bad = makePrResponse("no marker here", { id: 2, number: 6 });
 			const { octokit } = makeFakeOctokit({ listPrs: [good, bad] });
 			const client = new OctokitGitHubClient(octokit);
-			const payloads = await client.listOpenPullRequests("org", "repo");
+			const { payloads, skipped } = await client.listOpenPullRequests("org", "repo");
 			expect(payloads.map((p) => p.number)).toEqual([5]);
 			expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("org/repo#6"));
+			expect(skipped).toEqual([
+				{ number: 6, reason: expect.stringContaining("no <!-- declared-direction: ... --> marker") },
+			]);
 			errorSpy.mockRestore();
 		});
 
@@ -170,8 +174,38 @@ describe("OctokitGitHubClient", () => {
 			);
 			const { octokit } = makeFakeOctokit({ listPrs: prs });
 			const client = new OctokitGitHubClient(octokit);
-			const payloads = await client.listOpenPullRequests("org", "repo");
+			const { payloads } = await client.listOpenPullRequests("org", "repo");
 			expect(payloads.map((p) => p.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+		});
+	});
+
+	describe("createWebhook", () => {
+		it("creates a pull_request webhook with the given url and secret", async () => {
+			const createWebhook = jest.fn(async () => ({ data: { id: 99 } }));
+			const octokit = { rest: { repos: { createWebhook } } } as unknown as Octokit;
+			const client = new OctokitGitHubClient(octokit);
+
+			const result = await client.createWebhook("org", "repo", { url: "https://example.com/hook", secret: "s3cr3t" });
+
+			expect(result).toEqual({ id: 99 });
+			expect(createWebhook).toHaveBeenCalledWith({
+				owner: "org",
+				repo: "repo",
+				config: { url: "https://example.com/hook", content_type: "json", secret: "s3cr3t" },
+				events: ["pull_request"],
+			});
+		});
+	});
+
+	describe("deleteWebhook", () => {
+		it("deletes the webhook by id", async () => {
+			const deleteWebhook = jest.fn(async () => ({}));
+			const octokit = { rest: { repos: { deleteWebhook } } } as unknown as Octokit;
+			const client = new OctokitGitHubClient(octokit);
+
+			await client.deleteWebhook("org", "repo", 99);
+
+			expect(deleteWebhook).toHaveBeenCalledWith({ owner: "org", repo: "repo", hook_id: 99 });
 		});
 	});
 

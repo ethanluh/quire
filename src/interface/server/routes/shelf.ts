@@ -1,24 +1,36 @@
 import { Router } from "express";
+import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { ServerState } from "../state.js";
 
-export function shelfRouter(state: ServerState): Router {
+export function shelfRouter(state: ServerState, decidedStore: DecidedPrStore): Router {
 	const router = Router();
 
 	router.get("/", (_req, res) => {
-		res.json([...state.shelf.values()]);
+		res.json([...state.shelf.values()].map((shelved) => shelved.card));
 	});
 
-	router.delete("/:bundleId", (req, res) => {
-		const bundleId = req.params["bundleId"] ?? "";
-		const card = state.shelf.get(bundleId);
-		if (card === undefined) {
-			res.status(404).json({ error: "Bundle not found on shelf" });
-			return;
+	router.delete("/:bundleId", async (req, res, next) => {
+		try {
+			const bundleId = req.params["bundleId"] ?? "";
+			const shelved = state.shelf.get(bundleId);
+			if (shelved === undefined) {
+				res.status(404).json({ error: "Bundle not found on shelf" });
+				return;
+			}
+			state.shelf.delete(bundleId);
+			// Promote back to review queue. A human explicitly asking to reconsider a
+			// deferred bundle is a "this deserves fresh review" signal, same as a webhook's
+			// synchronize event — so its members' decided-PR record is cleared too, or a
+			// webhook/reconciliation refresh would immediately treat them as still-decided
+			// and exclude them again.
+			state.cards.set(bundleId, shelved.card);
+			for (const prId of shelved.memberPrIds) {
+				await decidedStore.clearDecided(prId);
+			}
+			res.json({ status: "promoted", bundleId });
+		} catch (err) {
+			next(err);
 		}
-		state.shelf.delete(bundleId);
-		// Promote back to review queue
-		state.cards.set(bundleId, card);
-		res.json({ status: "promoted", bundleId });
 	});
 
 	return router;

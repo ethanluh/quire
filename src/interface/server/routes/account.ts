@@ -4,20 +4,14 @@ import { z } from "zod";
 import { Octokit } from "@octokit/rest";
 import type { ConnectedAccount } from "../../../engine/github/account.js";
 import { saveAccount, clearAccount } from "../../../engine/github/account.js";
-import type { GitHubClientHolder } from "../../../engine/github/clientHolder.js";
 import { OctokitGitHubClient } from "../../../engine/github/octokitClient.js";
 import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
-import type { OAuthConfig } from "../../../engine/github/oauth.js";
 import { OAuthExchangeError } from "../../../engine/github/oauth.js";
-import { rawPRPayloadToIncomingPR } from "../../../engine/github/toIncomingPR.js";
-import { normalizePR } from "../../../engine/ingest/ingest.js";
-import type { Bundle } from "../../../engine/types/core.js";
-import { ingestIntoQueue } from "../ingestIntoQueue.js";
-import type { PipelineDeps } from "../ingestIntoQueue.js";
-import type { ServerState } from "../state.js";
+import { clearRepoFromQueue, refreshRepoQueue } from "../refreshRepoQueue.js";
+import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { localOnly } from "../middleware/localOnly.js";
 import { requireAdminHeader } from "../middleware/requireAdminHeader.js";
 import { validateBody } from "../middleware/validation.js";
@@ -33,11 +27,9 @@ const SelectRepoSchema = z.object({
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-export interface OAuthDeps {
-	config: OAuthConfig;
-	buildAuthorizeUrl: (config: OAuthConfig, redirectUri: string, state: string) => string;
-	exchangeCodeForToken: (config: OAuthConfig, code: string, redirectUri: string) => Promise<{ accessToken: string }>;
-	redirectUri: string;
+export interface WebhookConfig {
+	publicUrl: string;
+	secret: string;
 }
 
 // Where the OAuth callback sends the browser once it's done — GitHub's redirect is a
@@ -55,47 +47,33 @@ function buildClientForFallback(fallbackToken: string | undefined): OctokitGitHu
 		: new StubGitHubClient();
 }
 
-function buildConnectedAccount(identity: VerifiedTokenIdentity, token: string): ConnectedAccount {
+function buildConnectedAccount(
+	identity: VerifiedTokenIdentity,
+	token: string,
+	extra: { refreshToken?: string; tokenExpiresAt?: string } = {},
+): ConnectedAccount {
 	return {
 		login: identity.login,
 		token,
 		scopes: identity.scopes,
 		connectedAt: new Date().toISOString(),
+		...extra,
 	};
 }
 
-function isBundleForRepo(bundle: Bundle, owner: string, name: string): boolean {
-	return bundle.members.length > 0 && bundle.members.every((m) => m.repoOwner === owner && m.repoName === name);
-}
-
-// Drops any bundle/card whose members all belong to `repo` — used when selecting a repo
-// so its queue entries get replaced rather than accumulated (re-selecting the same repo,
-// or switching away from a previously selected one, both leave stale entries otherwise).
-function clearRepoFromQueue(state: ServerState, repo: { owner: string; name: string } | undefined): void {
-	if (repo === undefined) return;
-	for (const [id, bundle] of state.bundles) {
-		if (isBundleForRepo(bundle, repo.owner, repo.name)) {
-			state.bundles.delete(id);
-			state.cards.delete(id);
-		}
-	}
-}
-
-// `account` is in-memory, mirroring how ServerState holds bundles/cards/shelf in memory
-// with the queue's on-disk state as the durable copy — `accountPath` is that copy.
+// `refreshDeps` bundles the account's live state, its on-disk copy, the swappable GitHub
+// client, OAuth config, the decided-PR store, and the pipeline — the same dependency set
+// POST /repos/select needs to fetch-and-ingest, and the same one the webhook route and
+// reconciliation poll need to trigger that exact same refresh from outside this router.
 export function githubAccountRouter(
-	accountPath: string,
-	clientHolder: GitHubClientHolder,
+	refreshDeps: RefreshDeps,
 	fallbackToken: string | undefined,
 	verifyToken: (token: string) => Promise<VerifiedTokenIdentity>,
 	listRepos: (token: string) => Promise<ReadonlyArray<RepoSummary>>,
-	initialAccount: ConnectedAccount | undefined,
-	state: ServerState,
-	deps: PipelineDeps,
-	oauth: OAuthDeps | undefined,
+	webhookConfig: WebhookConfig | undefined,
 ): Router {
 	const router = Router();
-	let account = initialAccount;
+	const { accountState, accountPath, clientHolder, oauth } = refreshDeps;
 
 	interface PendingOAuthState {
 		state: string;
@@ -104,6 +82,7 @@ export function githubAccountRouter(
 	let pendingOAuth: PendingOAuthState | undefined;
 
 	router.get("/status", (_req, res) => {
+		const account = accountState.current;
 		if (account === undefined) {
 			res.json({ connected: false, oauthAvailable: oauth !== undefined });
 			return;
@@ -115,11 +94,13 @@ export function githubAccountRouter(
 			connectedAt: account.connectedAt,
 			selectedRepo: account.selectedRepo,
 			oauthAvailable: oauth !== undefined,
+			needsReconnect: account.needsReconnect ?? false,
 		});
 	});
 
 	router.get("/repos", localOnly, requireAdminHeader, async (_req, res, next) => {
 		try {
+			const account = accountState.current;
 			if (account === undefined) {
 				res.status(400).json({ error: "Connect a GitHub account first" });
 				return;
@@ -138,31 +119,57 @@ export function githubAccountRouter(
 		validateBody(SelectRepoSchema),
 		async (req, res, next) => {
 			try {
+				const account = accountState.current;
 				if (account === undefined) {
 					res.status(400).json({ error: "Connect a GitHub account first" });
 					return;
 				}
 				const { owner, name } = req.body as z.infer<typeof SelectRepoSchema>;
+				const previousRepo = account.selectedRepo;
 
-				// Fetch and ingest before persisting the selection: if listOpenPullRequests
-				// throws (network/API/token failure), the account stays pointed at whatever
-				// repo was already selected — with its queue intact — instead of "selecting"
-				// a repo whose PRs never actually made it onto the queue.
-				const rawPRs = await clientHolder.listOpenPullRequests(owner, name);
-				const prs = rawPRs.map((raw) => normalizePR(rawPRPayloadToIncomingPR(raw)));
+				// Drop the previously selected repo's bundles; refreshRepoQueue itself
+				// handles clearing (and re-populating) the newly selected repo's own entries.
+				clearRepoFromQueue(refreshDeps.state, previousRepo);
+				const summary = await refreshRepoQueue(owner, name, refreshDeps);
 
-				// Re-populates the queue for the newly selected repo: drop bundles left over
-				// from whatever was previously selected, and any earlier bundles from this
-				// same repo (so re-selecting it doesn't duplicate them), before adding the
-				// freshly ingested ones.
-				clearRepoFromQueue(state, account.selectedRepo);
-				clearRepoFromQueue(state, { owner, name });
-				const summary = await ingestIntoQueue(prs, state, deps);
+				if (previousRepo?.webhookId !== undefined) {
+					await clientHolder.deleteWebhook(previousRepo.owner, previousRepo.name, previousRepo.webhookId).catch((err: unknown) => {
+						console.error(`Failed to delete webhook for ${previousRepo.owner}/${previousRepo.name}:`, err);
+					});
+				}
 
-				account = { ...account, selectedRepo: { owner, name } };
-				await saveAccount(accountPath, account);
+				let webhookRegistered = false;
+				let webhookError: string | undefined;
+				let webhookId: number | undefined;
+				if (webhookConfig !== undefined) {
+					try {
+						const hook = await clientHolder.createWebhook(owner, name, {
+							url: `${webhookConfig.publicUrl}/webhooks/github`,
+							secret: webhookConfig.secret,
+						});
+						webhookId = hook.id;
+						webhookRegistered = true;
+					} catch (err) {
+						webhookError = err instanceof Error ? err.message : String(err);
+					}
+				}
 
-				res.json({ selected: account.selectedRepo, ...summary });
+				const current = accountState.current;
+				if (current === undefined) throw new Error("Account was disconnected mid-request");
+				const updated: ConnectedAccount = {
+					...current,
+					selectedRepo: { owner, name, ...(webhookId !== undefined ? { webhookId } : {}) },
+				};
+				accountState.current = updated;
+				await saveAccount(accountPath, updated);
+
+				res.json({
+					selected: updated.selectedRepo,
+					...summary,
+					webhookRegistered,
+					...(webhookError !== undefined ? { webhookError } : {}),
+					...(webhookConfig === undefined ? { webhookDisabledReason: "QUIRE_PUBLIC_URL/GITHUB_WEBHOOK_SECRET not configured" } : {}),
+				});
 			} catch (err) {
 				next(err);
 			}
@@ -174,10 +181,11 @@ export function githubAccountRouter(
 			const { token } = req.body as z.infer<typeof ConnectSchema>;
 			const identity = await verifyToken(token);
 
-			account = buildConnectedAccount(identity, token);
-			await saveAccount(accountPath, account);
+			accountState.current = buildConnectedAccount(identity, token);
+			await saveAccount(accountPath, accountState.current);
 			clientHolder.setClient(new OctokitGitHubClient(new Octokit({ auth: token })));
 
+			const account = accountState.current;
 			res.json({ connected: true, login: account.login, scopes: account.scopes, connectedAt: account.connectedAt });
 		} catch (err) {
 			if (err instanceof InvalidTokenError) {
@@ -190,7 +198,13 @@ export function githubAccountRouter(
 
 	router.post("/disconnect", localOnly, requireAdminHeader, async (_req, res, next) => {
 		try {
-			account = undefined;
+			const previousRepo = accountState.current?.selectedRepo;
+			if (previousRepo?.webhookId !== undefined) {
+				await clientHolder.deleteWebhook(previousRepo.owner, previousRepo.name, previousRepo.webhookId).catch((err: unknown) => {
+					console.error(`Failed to delete webhook for ${previousRepo.owner}/${previousRepo.name}:`, err);
+				});
+			}
+			accountState.current = undefined;
 			await clearAccount(accountPath);
 			clientHolder.setClient(buildClientForFallback(fallbackToken));
 			res.json({ connected: false });
@@ -229,11 +243,18 @@ export function githubAccountRouter(
 			}
 
 			try {
-				const { accessToken } = await oauth.exchangeCodeForToken(oauth.config, code, oauth.redirectUri);
+				const { accessToken, refreshToken, tokenExpiresAt } = await oauth.exchangeCodeForToken(
+					oauth.config,
+					code,
+					oauth.redirectUri,
+				);
 				const identity = await verifyToken(accessToken);
 
-				account = buildConnectedAccount(identity, accessToken);
-				await saveAccount(accountPath, account);
+				accountState.current = buildConnectedAccount(identity, accessToken, {
+					...(refreshToken !== undefined ? { refreshToken } : {}),
+					...(tokenExpiresAt !== undefined ? { tokenExpiresAt } : {}),
+				});
+				await saveAccount(accountPath, accountState.current);
 				clientHolder.setClient(new OctokitGitHubClient(new Octokit({ auth: accessToken })));
 
 				res.redirect(oauthResultRedirectUrl("connected", undefined));
