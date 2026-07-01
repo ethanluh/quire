@@ -11,7 +11,10 @@ import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { loadAccount } from "../../engine/github/account.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
 import { listRepositories } from "../../engine/github/repos.js";
+import type { LlmProvider } from "../../engine/drift/effectList/provider.js";
 import { StubLlmProvider } from "../../engine/drift/effectList/stubProvider.js";
+import { AnthropicLlmProvider, DEFAULT_MODEL as DEFAULT_ANTHROPIC_MODEL } from "../../engine/drift/effectList/anthropicProvider.js";
+import { GeminiLlmProvider, DEFAULT_MODEL as DEFAULT_GEMINI_MODEL } from "../../engine/drift/effectList/geminiProvider.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
 import { prsRouter } from "./routes/prs.js";
@@ -48,6 +51,44 @@ const pipelineConfig: PipelineConfig = {
 	bundle: { similarityThreshold: 0.75 },
 };
 
+// LLM-backed steps sit behind the LlmProvider interface so the backing model is
+// swappable: LLM_PROVIDER picks explicitly when both keys are set; otherwise
+// whichever key is present wins, and no key falls back to the stub.
+function resolveLlmProvider(): { provider: LlmProvider; description: string } {
+	const anthropicApiKey = process.env["ANTHROPIC_API_KEY"];
+	const geminiApiKey = process.env["GEMINI_API_KEY"];
+	const requested = process.env["LLM_PROVIDER"];
+
+	if (requested === "gemini" || (requested === undefined && !anthropicApiKey && geminiApiKey)) {
+		if (geminiApiKey === undefined || geminiApiKey === "") {
+			throw new Error("LLM_PROVIDER=gemini requires GEMINI_API_KEY to be set");
+		}
+		const model = process.env["GEMINI_MODEL"];
+		return {
+			provider: new GeminiLlmProvider({ apiKey: geminiApiKey, ...(model !== undefined ? { model } : {}) }),
+			description: `gemini (${model ?? DEFAULT_GEMINI_MODEL})`,
+		};
+	}
+
+	if (requested === "anthropic" || (requested === undefined && anthropicApiKey)) {
+		if (anthropicApiKey === undefined || anthropicApiKey === "") {
+			throw new Error("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY to be set");
+		}
+		const model = process.env["ANTHROPIC_MODEL"];
+		const baseUrl = process.env["ANTHROPIC_BASE_URL"];
+		return {
+			provider: new AnthropicLlmProvider({
+				apiKey: anthropicApiKey,
+				...(baseUrl !== undefined ? { baseUrl } : {}),
+				...(model !== undefined ? { model } : {}),
+			}),
+			description: `anthropic (${model ?? DEFAULT_ANTHROPIC_MODEL})`,
+		};
+	}
+
+	return { provider: new StubLlmProvider(), description: "stub (no ANTHROPIC_API_KEY / GEMINI_API_KEY set)" };
+}
+
 async function main(): Promise<void> {
 	const app = express();
 	app.use(express.json());
@@ -76,7 +117,8 @@ async function main(): Promise<void> {
 	const queue = new MergeQueue(QUEUE_PATH, github);
 	await queue.load();
 
-	const provider = new StubLlmProvider();
+	const { provider, description } = resolveLlmProvider();
+	console.log(`LLM provider: ${description}`);
 	const analyzer = new TypeScriptAnalyzer();
 	const state = createServerState();
 	const instrumentationSink = createNdjsonInstrumentationSink({
