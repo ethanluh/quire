@@ -11,7 +11,9 @@ import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { loadAccount } from "../../engine/github/account.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
 import { listRepositories } from "../../engine/github/repos.js";
+import type { LlmProvider } from "../../engine/drift/effectList/provider.js";
 import { StubLlmProvider } from "../../engine/drift/effectList/stubProvider.js";
+import { AnthropicLlmProvider } from "../../engine/drift/effectList/anthropicProvider.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
 import { prsRouter } from "./routes/prs.js";
@@ -76,7 +78,20 @@ async function main(): Promise<void> {
 	const queue = new MergeQueue(QUEUE_PATH, github);
 	await queue.load();
 
-	const provider = new StubLlmProvider();
+	const anthropicApiKey = process.env["ANTHROPIC_API_KEY"];
+	const provider: LlmProvider =
+		anthropicApiKey !== undefined && anthropicApiKey !== ""
+			? new AnthropicLlmProvider({
+					apiKey: anthropicApiKey,
+					baseUrl: process.env["ANTHROPIC_BASE_URL"],
+					model: process.env["ANTHROPIC_MODEL"],
+				})
+			: new StubLlmProvider();
+	console.log(
+		anthropicApiKey !== undefined && anthropicApiKey !== ""
+			? `LLM provider: anthropic (${process.env["ANTHROPIC_MODEL"] ?? "claude-haiku-4-5-20251001"})`
+			: "LLM provider: stub (ANTHROPIC_API_KEY not set)",
+	);
 	const analyzer = new TypeScriptAnalyzer();
 	const state = createServerState();
 	const instrumentationSink = createNdjsonInstrumentationSink({
