@@ -18,10 +18,11 @@ export interface PipelineResult {
 	bundles: ReadonlyArray<Bundle>;
 	rejected: ReadonlyArray<PullRequest>;
 	shadowed: ReadonlyArray<PullRequest>;
-	// Set when bundling or screening fails partway through. Gate results (passed/
-	// rejected/shadowed, including audit-store writes already made) are still valid and
-	// returned above; cards/bundles only cover what completed before the failure, so a
-	// caller can decide whether to retry, surface a partial review queue, or both.
+	// Set when gating, bundling, or screening fails partway through. Whatever gate
+	// outcomes (passed/rejected/shadowed, including audit-store writes already made)
+	// and cards/bundles completed before the failure are still valid and returned
+	// above, so a caller can decide whether to retry, surface a partial review queue,
+	// or both — instead of throwing and losing the work already done.
 	error?: string;
 }
 
@@ -36,15 +37,22 @@ export async function orchestratePipeline(
 	const rejected: PullRequest[] = [];
 	const shadowed: PullRequest[] = [];
 
-	// Gate each PR
+	// Gate each PR. A gate can fail partway through (e.g. the audit-store write for a
+	// shadow-mode hit hits a disk error) — stop gating further PRs but still return
+	// what was already decided, rather than losing it to an uncaught rejection.
 	for (const pr of prs) {
-		const result = runGate(pr, config.gate, auditStore, passed);
-		if (result.outcome.result === "pass") {
-			passed.push(pr);
-		} else if (result.outcome.result === "reject") {
-			rejected.push(pr);
-		} else {
-			shadowed.push(pr);
+		try {
+			const result = await runGate(pr, config.gate, auditStore, passed);
+			if (result.outcome.result === "pass") {
+				passed.push(pr);
+			} else if (result.outcome.result === "reject") {
+				rejected.push(pr);
+			} else {
+				shadowed.push(pr);
+			}
+		} catch (err) {
+			const error = err instanceof Error ? err.message : String(err);
+			return { cards: [], bundles: [], rejected, shadowed, error };
 		}
 	}
 

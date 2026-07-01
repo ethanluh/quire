@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "@jest/globals";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendNdjson, truncateNdjson } from "../../src/engine/instrumentation/store.js";
+import { appendNdjson, readNdjson, truncateNdjson } from "../../src/engine/instrumentation/store.js";
 
 describe("truncateNdjson", () => {
 	let dir: string;
@@ -29,5 +29,38 @@ describe("truncateNdjson", () => {
 		await truncateNdjson(path);
 
 		expect(await readFile(path, "utf8")).toBe("");
+	});
+});
+
+describe("readNdjson", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	it("returns an empty array when the file doesn't exist", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-store-"));
+		const path = join(dir, "missing.ndjson");
+
+		expect(await readNdjson(path)).toEqual([]);
+	});
+
+	it("parses every well-formed line", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-store-"));
+		const path = join(dir, "records.ndjson");
+		await appendNdjson(path, { a: 1 });
+		await appendNdjson(path, { a: 2 });
+
+		expect(await readNdjson(path)).toEqual([{ a: 1 }, { a: 2 }]);
+	});
+
+	it("skips a corrupted/truncated line instead of throwing, keeping the rest of the log", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-store-"));
+		const path = join(dir, "records.ndjson");
+		// Simulates a write truncated mid-append (e.g. process killed mid-flush).
+		await writeFile(path, '{"a":1}\n{"a":2,\n{"a":3}\n', "utf8");
+
+		expect(await readNdjson(path)).toEqual([{ a: 1 }, { a: 3 }]);
 	});
 });
