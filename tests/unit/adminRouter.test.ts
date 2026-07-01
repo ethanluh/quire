@@ -60,19 +60,21 @@ describe("adminRouter POST /reset", () => {
 		if (dir) await rm(dir, { recursive: true, force: true });
 	});
 
-	it("clears bundles, cards, shelf, audit entries, the merge queue, and the defer log", async () => {
+	it("clears bundles, cards, shelf, audit entries, the merge queue, and the defer/audit logs", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-admin-"));
 		const queuePath = join(dir, "queue.json");
 		const deferLogPath = join(dir, "instrumentation", "defers.ndjson");
+		const auditLogPath = join(dir, "instrumentation", "audit.ndjson");
 		await mkdir(dirname(deferLogPath), { recursive: true });
 		await writeFile(deferLogPath, '{"bundleId":"b-1"}\n', "utf8");
+		await writeFile(auditLogPath, '{"criterionName":"duplicate"}\n', "utf8");
 
 		const state = createServerState();
 		state.bundles.set("b-1", makeBundle("b-1"));
 		state.cards.set("b-1", makeCard("b-1"));
 		state.shelf.set("b-2", makeCard("b-2"));
 
-		const auditStore = new AuditStore();
+		const auditStore = new AuditStore(auditLogPath);
 		auditStore.add(makePR(), "duplicate", "looks like a dup");
 
 		const queue = new MergeQueue(queuePath, new StubGitHubClient());
@@ -80,7 +82,7 @@ describe("adminRouter POST /reset", () => {
 		await queue.enqueue(makeBundle("b-3"));
 
 		const app = express();
-		app.use("/admin", adminRouter(state, auditStore, queue, deferLogPath));
+		app.use("/admin", adminRouter(state, auditStore, queue, deferLogPath, auditLogPath));
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
 
@@ -94,22 +96,24 @@ describe("adminRouter POST /reset", () => {
 		expect(auditStore.list()).toHaveLength(0);
 		expect(await queue.listEntries()).toHaveLength(0);
 		expect(await readFile(deferLogPath, "utf8")).toBe("");
+		expect(await readFile(auditLogPath, "utf8")).toBe("");
 	});
 
 	it("rejects a request missing the X-Quire-Admin header without clearing anything (CSRF guard)", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-admin-"));
 		const queuePath = join(dir, "queue.json");
 		const deferLogPath = join(dir, "instrumentation", "defers.ndjson");
+		const auditLogPath = join(dir, "instrumentation", "audit.ndjson");
 
 		const state = createServerState();
 		state.bundles.set("b-1", makeBundle("b-1"));
 
-		const auditStore = new AuditStore();
+		const auditStore = new AuditStore(auditLogPath);
 		const queue = new MergeQueue(queuePath, new StubGitHubClient());
 		await queue.load();
 
 		const app = express();
-		app.use("/admin", adminRouter(state, auditStore, queue, deferLogPath));
+		app.use("/admin", adminRouter(state, auditStore, queue, deferLogPath, auditLogPath));
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
 

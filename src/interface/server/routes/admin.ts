@@ -11,6 +11,7 @@ export function adminRouter(
 	auditStore: AuditStore,
 	queue: MergeQueue,
 	deferLogPath: string,
+	auditLogPath: string,
 ): Router {
 	const router = Router();
 
@@ -22,6 +23,7 @@ export function adminRouter(
 			auditStore.clear();
 			await queue.clear();
 			await truncateNdjson(deferLogPath);
+			await truncateNdjson(auditLogPath);
 			res.json({ status: "reset" });
 		} catch (err) {
 			next(err);

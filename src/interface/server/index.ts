@@ -29,6 +29,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "../../../data");
 const QUEUE_PATH = join(DATA_DIR, "queue.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
+const AUDIT_LOG_PATH = join(DATA_DIR, "instrumentation/audit.ndjson");
 const ACCOUNT_PATH = join(DATA_DIR, "github-account.json");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
@@ -51,7 +52,7 @@ async function main(): Promise<void> {
 	// Serve static UI
 	app.use(express.static(join(__dirname, "../ui")));
 
-	const auditStore = new AuditStore();
+	const auditStore = await AuditStore.load(AUDIT_LOG_PATH);
 	const githubToken = process.env["GITHUB_TOKEN"];
 	const connectedAccount = await loadAccount(ACCOUNT_PATH);
 
@@ -82,7 +83,7 @@ async function main(): Promise<void> {
 	app.use("/queue", queueRouter(queue));
 	app.use("/shelf", shelfRouter(state));
 	app.use("/audit", auditRouter(auditStore));
-	app.use("/admin", adminRouter(state, auditStore, queue, DEFER_LOG_PATH));
+	app.use("/admin", adminRouter(state, auditStore, queue, DEFER_LOG_PATH, AUDIT_LOG_PATH));
 	app.use(
 		"/account/github",
 		githubAccountRouter(
