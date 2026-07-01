@@ -1,5 +1,6 @@
 import type { Bundle, DriftVerdict, PullRequest, ReviewCard } from "../types/core.js";
 import type { GateConfig } from "../types/gate.js";
+import type { InstrumentationSink } from "../types/instrumentation.js";
 import type { LlmProvider } from "../drift/effectList/provider.js";
 import type { StaticAnalyzer } from "../drift/footprint/analyzer.js";
 import type { AuditStore } from "../gate/auditStore.js";
@@ -26,12 +27,27 @@ export interface PipelineResult {
 	error?: string;
 }
 
+// Instrumentation is documented as an add-on, never a hard dependency: a sink
+// call that throws (disk full, permission error, ...) must not abort the
+// pipeline or discard results the caller has no way to recover.
+async function logSafely(call: (() => Promise<void> | void) | undefined): Promise<void> {
+	if (call === undefined) return;
+	try {
+		await call();
+	} catch (err) {
+		console.error("instrumentation sink error (ignored):", err);
+	}
+}
+
 export async function orchestratePipeline(
 	prs: ReadonlyArray<PullRequest>,
 	config: PipelineConfig,
 	provider: LlmProvider,
 	analyzer: StaticAnalyzer,
 	auditStore: AuditStore,
+	// Optional: instrumentation is a pluggable add-on, not a hard dependency for the
+	// pipeline to run. Omitting it (or the caller's sink lacking a method) is a no-op.
+	sink?: InstrumentationSink,
 ): Promise<PipelineResult> {
 	const passed: PullRequest[] = [];
 	const rejected: PullRequest[] = [];
@@ -43,6 +59,9 @@ export async function orchestratePipeline(
 	for (const pr of prs) {
 		try {
 			const result = await runGate(pr, config.gate, auditStore, passed);
+			for (const decision of result.decisions) {
+				await logSafely(() => sink?.logGateDecision?.(decision));
+			}
 			if (result.outcome.result === "pass") {
 				passed.push(pr);
 			} else if (result.outcome.result === "reject") {
@@ -70,6 +89,15 @@ export async function orchestratePipeline(
 			for (const member of bundle.members) {
 				const verdict = await runCheapScreen(member, bundle, provider, analyzer);
 				driftVerdicts.set(member.id, verdict);
+				await logSafely(() =>
+					sink?.logDriftScreen?.({
+						bundleId: bundle.id,
+						prId: member.id,
+						signalCount: verdict.status === "flagged" ? verdict.signals.length : 0,
+						flagged: verdict.status === "flagged",
+						recordedAt: new Date().toISOString(),
+					}),
+				);
 			}
 			cards.push(buildReviewCard(bundle, driftVerdicts));
 		}

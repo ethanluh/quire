@@ -1,3 +1,5 @@
+import type { GateDecisionLog } from "./instrumentation.js";
+
 export type GateMode = "enforce" | "shadow" | "off";
 
 export interface GateCriterion {
@@ -18,4 +20,5 @@ export type GateOutcome =
 export interface GateResult {
 	prId: string;
 	outcome: GateOutcome;
+	decisions: ReadonlyArray<GateDecisionLog>;
 }

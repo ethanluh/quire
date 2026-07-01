@@ -60,12 +60,16 @@ describe("adminRouter POST /reset", () => {
 		if (dir) await rm(dir, { recursive: true, force: true });
 	});
 
-	it("clears bundles, cards, shelf, audit entries, the merge queue, and the defer log", async () => {
+	it("clears bundles, cards, shelf, audit entries, the merge queue, and all instrumentation logs", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-admin-"));
 		const queuePath = join(dir, "queue.json");
 		const deferLogPath = join(dir, "instrumentation", "defers.ndjson");
+		const gateLogPath = join(dir, "instrumentation", "gate-decisions.ndjson");
+		const driftScreenLogPath = join(dir, "instrumentation", "drift-screen.ndjson");
 		await mkdir(dirname(deferLogPath), { recursive: true });
 		await writeFile(deferLogPath, '{"bundleId":"b-1"}\n', "utf8");
+		await writeFile(gateLogPath, '{"prId":"pr-1"}\n', "utf8");
+		await writeFile(driftScreenLogPath, '{"prId":"pr-1"}\n', "utf8");
 
 		const state = createServerState();
 		state.bundles.set("b-1", makeBundle("b-1"));
@@ -80,7 +84,10 @@ describe("adminRouter POST /reset", () => {
 		await queue.enqueue(makeBundle("b-3"));
 
 		const app = express();
-		app.use("/admin", adminRouter(state, auditStore, queue, deferLogPath));
+		app.use(
+			"/admin",
+			adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath]),
+		);
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
 
@@ -94,6 +101,8 @@ describe("adminRouter POST /reset", () => {
 		expect(auditStore.list()).toHaveLength(0);
 		expect(await queue.listEntries()).toHaveLength(0);
 		expect(await readFile(deferLogPath, "utf8")).toBe("");
+		expect(await readFile(gateLogPath, "utf8")).toBe("");
+		expect(await readFile(driftScreenLogPath, "utf8")).toBe("");
 	});
 
 	it("rejects a request missing the X-Quire-Admin header without clearing anything (CSRF guard)", async () => {
@@ -109,7 +118,7 @@ describe("adminRouter POST /reset", () => {
 		await queue.load();
 
 		const app = express();
-		app.use("/admin", adminRouter(state, auditStore, queue, deferLogPath));
+		app.use("/admin", adminRouter(state, auditStore, queue, [deferLogPath]));
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
 

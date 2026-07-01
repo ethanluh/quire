@@ -3,6 +3,7 @@ import type { LlmProvider } from "../../../engine/drift/effectList/provider.js";
 import type { StaticAnalyzer } from "../../../engine/drift/footprint/analyzer.js";
 import type { AuditStore } from "../../../engine/gate/auditStore.js";
 import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
+import type { InstrumentationSink } from "../../../engine/types/instrumentation.js";
 import type { ServerState } from "../state.js";
 import { validateIncomingPayload, normalizePR } from "../../../engine/ingest/ingest.js";
 import { orchestratePipeline } from "../../../engine/pipeline/pipeline.js";
@@ -15,6 +16,7 @@ export function prsRouter(
 	analyzer: StaticAnalyzer,
 	auditStore: AuditStore,
 	_queue: MergeQueue,
+	instrumentationSink?: InstrumentationSink,
 ): Router {
 	const router = Router();
 
@@ -31,7 +33,14 @@ export function prsRouter(
 				prs.push(normalizePR(validated.data));
 			}
 
-			const result = await orchestratePipeline(prs, pipelineConfig, provider, analyzer, auditStore);
+			const result = await orchestratePipeline(
+				prs,
+				pipelineConfig,
+				provider,
+				analyzer,
+				auditStore,
+				instrumentationSink,
+			);
 
 			for (const bundle of result.bundles) {
 				state.bundles.set(bundle.id, bundle);
