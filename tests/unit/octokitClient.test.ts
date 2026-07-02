@@ -1,6 +1,13 @@
 import { describe, it, expect, jest } from "@jest/globals";
 import type { Octokit } from "@octokit/rest";
-import { OctokitGitHubClient } from "../../src/engine/github/octokitClient.js";
+import { RequestError } from "@octokit/request-error";
+import { OctokitGitHubClient, InsufficientGitHubPermissionError } from "../../src/engine/github/octokitClient.js";
+
+function insufficientPermissionError(): RequestError {
+	return new RequestError("Resource not accessible by integration", 403, {
+		request: { method: "POST", url: "", headers: {} },
+	});
+}
 
 interface FakeCheckRun {
 	status: "completed" | "in_progress" | "queued";
@@ -32,21 +39,34 @@ function makeFakeOctokit(opts: {
 	checkRuns?: ReadonlyArray<FakeCheckRun>;
 	combinedStatus?: FakeCombinedStatus;
 	graphqlResult?: unknown;
-}): { octokit: Octokit; merge: jest.Mock; graphql: jest.Mock; createComment: jest.Mock } {
+	mergeRejects?: Error;
+	updateRejects?: Error;
+	graphqlRejects?: Error;
+	createCommentRejects?: Error;
+}): { octokit: Octokit; merge: jest.Mock; update: jest.Mock; graphql: jest.Mock; createComment: jest.Mock } {
 	const pr = opts.pr ?? makePrResponse("<!-- declared-direction: add passwordless auth -->");
 	const get = jest.fn(async (params: { mediaType?: { format: string } }) => {
 		if (params.mediaType?.format === "diff") return { data: opts.diff ?? "diff --git a/x b/x" };
 		return { data: pr };
 	});
-	const merge = jest.fn(async () => ({ data: {} }));
+	const merge = opts.mergeRejects
+		? jest.fn(async () => { throw opts.mergeRejects; })
+		: jest.fn(async () => ({ data: {} }));
+	const update = opts.updateRejects
+		? jest.fn(async () => { throw opts.updateRejects; })
+		: jest.fn(async () => ({ data: {} }));
 	const listFiles = jest.fn(async () => ({ data: opts.files ?? [{ filename: "src/auth.ts" }] }));
 	const list = jest.fn(async () => ({ data: opts.listPrs ?? [pr] }));
 	const listForRef = jest.fn(async () => ({ data: opts.checkRuns ?? [{ status: "completed", conclusion: "success" }] }));
 	const getCombinedStatusForRef = jest.fn(async () => ({
 		data: opts.combinedStatus ?? { state: "success", statuses: [] },
 	}));
-	const graphql = jest.fn(async () => opts.graphqlResult ?? { revertPullRequest: { pullRequest: { url: "https://github.com/org/repo/pull/8" } } });
-	const createComment = jest.fn(async () => ({ data: {} }));
+	const graphql = opts.graphqlRejects
+		? jest.fn(async () => { throw opts.graphqlRejects; })
+		: jest.fn(async () => opts.graphqlResult ?? { revertPullRequest: { pullRequest: { url: "https://github.com/org/repo/pull/8" } } });
+	const createComment = opts.createCommentRejects
+		? jest.fn(async () => { throw opts.createCommentRejects; })
+		: jest.fn(async () => ({ data: {} }));
 
 	const paginate = jest.fn(async (method: (p: unknown) => Promise<{ data: unknown }>, params: unknown) => {
 		const res = await method(params);
@@ -55,7 +75,7 @@ function makeFakeOctokit(opts: {
 
 	const octokit = {
 		rest: {
-			pulls: { get, merge, listFiles, list },
+			pulls: { get, merge, update, listFiles, list },
 			checks: { listForRef },
 			repos: { getCombinedStatusForRef },
 			issues: { createComment },
@@ -64,7 +84,7 @@ function makeFakeOctokit(opts: {
 		graphql,
 	} as unknown as Octokit;
 
-	return { octokit, merge, graphql, createComment };
+	return { octokit, merge, update, graphql, createComment };
 }
 
 describe("OctokitGitHubClient", () => {
@@ -203,6 +223,35 @@ describe("OctokitGitHubClient", () => {
 			});
 			expect(merge).toHaveBeenCalledWith({ owner: "org", repo: "repo", pull_number: 7 });
 		});
+
+		it("raises an actionable error when the App lacks write permission to merge", async () => {
+			const { octokit } = makeFakeOctokit({ mergeRejects: insufficientPermissionError() });
+			const client = new OctokitGitHubClient(octokit);
+			await expect(client.mergePullRequest("org", "repo", 7)).rejects.toThrow(InsufficientGitHubPermissionError);
+			await expect(client.mergePullRequest("org", "repo", 7)).rejects.toThrow(/README.md/);
+		});
+
+		it("rethrows an unrelated merge failure unchanged", async () => {
+			const notFound = new RequestError("Not Found", 404, { request: { method: "PUT", url: "", headers: {} } });
+			const { octokit } = makeFakeOctokit({ mergeRejects: notFound });
+			const client = new OctokitGitHubClient(octokit);
+			await expect(client.mergePullRequest("org", "repo", 7)).rejects.toBe(notFound);
+		});
+	});
+
+	describe("closePullRequest", () => {
+		it("updates the PR state to closed", async () => {
+			const { octokit, update } = makeFakeOctokit({});
+			const client = new OctokitGitHubClient(octokit);
+			await client.closePullRequest("org", "repo", 7);
+			expect(update).toHaveBeenCalledWith({ owner: "org", repo: "repo", pull_number: 7, state: "closed" });
+		});
+
+		it("raises an actionable error when the App lacks write permission to close", async () => {
+			const { octokit } = makeFakeOctokit({ updateRejects: insufficientPermissionError() });
+			const client = new OctokitGitHubClient(octokit);
+			await expect(client.closePullRequest("org", "repo", 7)).rejects.toThrow(InsufficientGitHubPermissionError);
+		});
 	});
 
 	describe("revertPullRequest", () => {
@@ -214,6 +263,12 @@ describe("OctokitGitHubClient", () => {
 			expect(graphql).toHaveBeenCalledWith(expect.stringContaining("revertPullRequest"), {
 				pullRequestId: "PR_node123",
 			});
+		});
+
+		it("raises an actionable error when the App lacks write permission to revert", async () => {
+			const { octokit } = makeFakeOctokit({ graphqlRejects: insufficientPermissionError() });
+			const client = new OctokitGitHubClient(octokit);
+			await expect(client.revertPullRequest("org", "repo", 7)).rejects.toThrow(InsufficientGitHubPermissionError);
 		});
 	});
 
@@ -240,6 +295,22 @@ describe("OctokitGitHubClient", () => {
 					body: expect.stringContaining("add passwordless auth"),
 				}),
 			);
+		});
+
+		it("raises an actionable error when the App lacks write permission to comment", async () => {
+			const { octokit } = makeFakeOctokit({ createCommentRejects: insufficientPermissionError() });
+			const client = new OctokitGitHubClient(octokit);
+			await expect(
+				client.postReviewCardComment("org", "repo", 7, "accept", {
+					bundleId: "b-1",
+					directionSummary: "add passwordless auth",
+					blastRadius: 2,
+					flags: [],
+					drift: { status: "clean" },
+					residualDisclosure: "behavioral confirm not run",
+					inputsHash: "hash-1",
+				}),
+			).rejects.toThrow(InsufficientGitHubPermissionError);
 		});
 	});
 });
