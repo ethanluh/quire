@@ -569,8 +569,13 @@ document.getElementById('btn-ingest').addEventListener('click', async () => {
   try {
     const body = JSON.parse(raw);
     const result = await api('POST', '/prs/ingest', body);
-    el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
-    el.className = 'result-msg';
+    if (result.error) {
+      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created. ${result.error}`;
+      el.className = 'result-msg error';
+    } else {
+      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
+      el.className = 'result-msg';
+    }
     el.style.display = 'block';
     loadReview();
   } catch (e) {
