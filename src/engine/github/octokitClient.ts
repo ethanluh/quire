@@ -234,25 +234,27 @@ export class OctokitGitHubClient implements GitHubClient {
 		content: string,
 		message: string,
 	): Promise<void> {
-		const branchRef = `heads/${branch}`;
-		try {
-			await this.octokit.rest.git.getRef({ owner, repo, ref: branchRef });
-		} catch (err) {
-			if (!isNotFoundError(err)) throw err;
-			const defaultBranch = await this.getDefaultBranch(owner, repo);
-			const { data: defaultRef } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
-			await this.octokit.rest.git.createRef({ owner, repo, ref: `refs/${branchRef}`, sha: defaultRef.object.sha });
-		}
+		await withPermissionHint("create or update a file in a repo", async () => {
+			const branchRef = `heads/${branch}`;
+			try {
+				await this.octokit.rest.git.getRef({ owner, repo, ref: branchRef });
+			} catch (err) {
+				if (!isNotFoundError(err)) throw err;
+				const defaultBranch = await this.getDefaultBranch(owner, repo);
+				const { data: defaultRef } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
+				await this.octokit.rest.git.createRef({ owner, repo, ref: `refs/${branchRef}`, sha: defaultRef.object.sha });
+			}
 
-		const existing = await this.getFileContentAtRef(owner, repo, path, branch);
-		await this.octokit.rest.repos.createOrUpdateFileContents({
-			owner,
-			repo,
-			path,
-			message,
-			content: Buffer.from(content, "utf8").toString("base64"),
-			branch,
-			...(existing !== undefined ? { sha: existing.sha } : {}),
+			const existing = await this.getFileContentAtRef(owner, repo, path, branch);
+			await this.octokit.rest.repos.createOrUpdateFileContents({
+				owner,
+				repo,
+				path,
+				message,
+				content: Buffer.from(content, "utf8").toString("base64"),
+				branch,
+				...(existing !== undefined ? { sha: existing.sha } : {}),
+			});
 		});
 	}
 
@@ -261,26 +263,28 @@ export class OctokitGitHubClient implements GitHubClient {
 		repo: string,
 		params: { head: string; base: string; title: string; body: string },
 	): Promise<FoundOrCreatedPullRequest> {
-		const { data: openPrs } = await this.octokit.rest.pulls.list({
-			owner,
-			repo,
-			state: "open",
-			head: `${owner}:${params.head}`,
-		});
-		const found = openPrs[0];
-		if (found !== undefined) {
-			return { number: found.number, url: found.html_url, created: false };
-		}
+		return withPermissionHint("open a pull request", async () => {
+			const { data: openPrs } = await this.octokit.rest.pulls.list({
+				owner,
+				repo,
+				state: "open",
+				head: `${owner}:${params.head}`,
+			});
+			const found = openPrs[0];
+			if (found !== undefined) {
+				return { number: found.number, url: found.html_url, created: false };
+			}
 
-		const { data: created } = await this.octokit.rest.pulls.create({
-			owner,
-			repo,
-			head: params.head,
-			base: params.base,
-			title: params.title,
-			body: params.body,
+			const { data: created } = await this.octokit.rest.pulls.create({
+				owner,
+				repo,
+				head: params.head,
+				base: params.base,
+				title: params.title,
+				body: params.body,
+			});
+			return { number: created.number, url: created.html_url, created: true };
 		});
-		return { number: created.number, url: created.html_url, created: true };
 	}
 
 	private async getFileContentAtRef(
