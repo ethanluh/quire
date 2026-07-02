@@ -18,18 +18,17 @@ declare global {
 // res.locals.membership is always set, since resolveMembership already 401'd or
 // auto-provisioned a team otherwise.
 export function resolveTenant(registry: TenantRegistry) {
-	return function (req: Request, res: Response, next: NextFunction): void {
+	return async function (req: Request, res: Response, next: NextFunction): Promise<void> {
 		const teamId = res.locals.membership?.teamId;
 		if (teamId === undefined) {
 			res.status(401).json({ error: "Sign in required" });
 			return;
 		}
-		registry
-			.getOrCreate(teamId)
-			.then((tenant) => {
-				res.locals.tenant = tenant;
-				next();
-			})
-			.catch(next);
+		try {
+			res.locals.tenant = await registry.getOrCreate(teamId);
+			next();
+		} catch (err) {
+			next(err);
+		}
 	};
 }

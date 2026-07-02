@@ -7,6 +7,7 @@ import { TenantRegistry } from "../../src/interface/server/tenant.js";
 import type { TenantSharedConfig } from "../../src/interface/server/tenant.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
+import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
 import type { InstallationBinding } from "../../src/engine/github/installation.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 
@@ -41,6 +42,7 @@ describe("TenantRegistry", () => {
 			analyzer: new StubStaticAnalyzer(),
 			isProduction: false,
 			resolveDefaultLlmProvider: () => ({ provider: new StubLlmProvider(), description: "stub" }),
+			userTokenCache: createUserTokenCache(),
 		};
 		return new TenantRegistry(shared);
 	}
@@ -136,5 +138,34 @@ describe("TenantRegistry", () => {
 		const registry = makeRegistry();
 
 		await expect(registry.getOrCreate("../../etc/passwd")).rejects.toThrow();
+	});
+
+	describe("isInstallationBoundToOtherTeam", () => {
+		it("is false when no team has the installation bound", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+			const registry = makeRegistry();
+			await registry.getOrCreate("alpha");
+
+			expect(registry.isInstallationBoundToOtherTeam(555, "alpha")).toBe(false);
+		});
+
+		it("is false when the exempted team itself holds the installation", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+			const registry = makeRegistry();
+			const alpha = await registry.getOrCreate("alpha");
+			alpha.accountState.current = binding({ installationId: 555 });
+
+			expect(registry.isInstallationBoundToOtherTeam(555, "alpha")).toBe(false);
+		});
+
+		it("is true when a different team already holds the installation", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+			const registry = makeRegistry();
+			const alpha = await registry.getOrCreate("alpha");
+			await registry.getOrCreate("bravo");
+			alpha.accountState.current = binding({ installationId: 555 });
+
+			expect(registry.isInstallationBoundToOtherTeam(555, "bravo")).toBe(true);
+		});
 	});
 });

@@ -18,32 +18,23 @@ declare global {
 // time this runs, res.locals.login is always set, since requireSession already 401'd
 // otherwise. Every signed-in login has an active team by the time this returns: a login
 // with no membership index yet (first request ever) gets a personal team-of-one
-// auto-provisioned here, so nothing downstream ever has to special-case "no team".
+// auto-provisioned here, so nothing downstream ever has to special-case "no team" — see
+// TeamStore.resolveActiveMembership, which also repairs an index that's fallen out of
+// sync with the team roster instead of throwing.
 export function resolveMembership(teamStore: TeamStore) {
-	return function (req: Request, res: Response, next: NextFunction): void {
+	return async function (req: Request, res: Response, next: NextFunction): Promise<void> {
 		const login = res.locals.login;
 		if (login === undefined) {
 			res.status(401).json({ error: "Sign in required" });
 			return;
 		}
 
-		(async () => {
-			let index = await teamStore.loadMembershipIndex(login);
-			if (index === undefined) {
-				await teamStore.createTeamForLogin(login, `${login}'s team`);
-				index = await teamStore.loadMembershipIndex(login);
-			}
-			if (index === undefined) {
-				throw new Error(`Failed to provision a team for ${login}`);
-			}
-
-			const membership = await teamStore.getMembership(index.activeTeamId, login);
-			if (membership === undefined) {
-				throw new Error(`Login ${login}'s membership index points at a team it isn't a member of`);
-			}
-
-			res.locals.membership = { teamId: index.activeTeamId, role: membership.role };
+		try {
+			const membership = await teamStore.resolveActiveMembership(login);
+			res.locals.membership = { teamId: membership.teamId, role: membership.role };
 			next();
-		})().catch(next);
+		} catch (err) {
+			next(err);
+		}
 	};
 }
