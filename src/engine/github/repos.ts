@@ -13,21 +13,23 @@ export interface RepoSummary {
 // GET /installation/repositories — the repos this specific installation was granted,
 // not the connecting user's full repo list (which `listForAuthenticatedUser` returned
 // under the old OAuth-token model, and which has no meaning for an installation-
-// authenticated client — there is no "authenticated user" to list repos for). starred/
-// pinned default to false here; enrichWithStarredAndPinned fills them in separately using
-// a user-authenticated client, since an installation client has no "viewer" of its own.
+// authenticated client — there is no "authenticated user" to list repos for). Archived
+// repos are dropped. starred/pinned default to false here; enrichWithStarredAndPinned
+// fills them in separately using a user-authenticated client, since an installation
+// client has no "viewer" of its own.
 export async function listInstallationRepositories(octokit: Octokit): Promise<ReadonlyArray<RepoSummary>> {
 	const repos = await octokit.paginate(octokit.rest.apps.listReposAccessibleToInstallation, { per_page: 100 });
-	return repos.map((r) => ({
+	return repos
 		.filter((r) => !r.archived)
-		owner: r.owner.login,
-		name: r.name,
-		fullName: r.full_name,
-		private: r.private,
-		defaultBranch: r.default_branch,
-		starred: false,
-		pinned: false,
-	}));
+		.map((r) => ({
+			owner: r.owner.login,
+			name: r.name,
+			fullName: r.full_name,
+			private: r.private,
+			defaultBranch: r.default_branch,
+			starred: false,
+			pinned: false,
+		}));
 }
 
 interface PinnedItemsResponse {

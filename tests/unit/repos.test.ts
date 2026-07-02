@@ -70,7 +70,7 @@ describe("listInstallationRepositories", () => {
 		const repos = await listInstallationRepositories(octokit);
 
 		expect(repos).toEqual([
-			{ owner: "octocat", name: "hello-world", fullName: "octocat/hello-world", private: false, defaultBranch: "main" },
+			{ owner: "octocat", name: "hello-world", fullName: "octocat/hello-world", private: false, defaultBranch: "main", starred: false, pinned: false },
 		]);
 	});
 });

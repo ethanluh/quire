@@ -5,6 +5,7 @@ import { saveInstallation, clearInstallation } from "../../../engine/github/inst
 import type { GitHubAppConfig, InstallationAccount } from "../../../engine/github/installationClient.js";
 import { buildInstallationClient, isInstallationRevoked } from "../../../engine/github/installationClient.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
+import { setUpDeclaredDirectionConvention } from "../../../engine/github/repoSetup.js";
 import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
 import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
