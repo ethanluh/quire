@@ -29,6 +29,10 @@ export class LlmProviderHolder implements LlmProvider {
 		return this.current.calls;
 	}
 
+	get modelKey(): string {
+		return this.current.modelKey;
+	}
+
 	complete(messages: ReadonlyArray<LlmMessage>, opts?: LlmCallOptions): Promise<string> {
 		return this.current.complete(messages, opts);
 	}

@@ -79,12 +79,12 @@ export interface ClusterSeed {
 	members: ReadonlyArray<PullRequest>;
 }
 
-// Cross-run embedding memoization, keyed on the embedded text itself (structurally
-// satisfied by PrEffectCache — kept as a narrow interface here so this module doesn't
-// depend on the concrete cache implementation).
+// Cross-run embedding memoization, keyed on the embedded text itself plus a model
+// identity (structurally satisfied by PrEffectCache — kept as a narrow interface here so
+// this module doesn't depend on the concrete cache implementation).
 export interface EmbeddingCache {
-	getEmbedding(text: string): ReadonlyArray<number> | undefined;
-	putEmbedding(text: string, vector: ReadonlyArray<number>): Promise<void>;
+	getEmbedding(text: string, modelKey: string): ReadonlyArray<number> | undefined;
+	putEmbedding(text: string, vector: ReadonlyArray<number>, modelKey: string): void;
 }
 
 // Clusters on extracted-effect text, never on declaredDirection (INV-1): membership
@@ -103,29 +103,38 @@ export async function clusterPRs(
 	config: ClusterConfig,
 	seeds: ReadonlyArray<ClusterSeed> = [],
 	embeddingCache?: EmbeddingCache,
+	// Identifies the embedding provider+model in use — see LlmProvider.modelKey. Ignored
+	// when embeddingCache is omitted. Required (not defaulted) whenever a real cache is
+	// passed, since a stale default would defeat the point of the cache-key check.
+	modelKey = "",
 ): Promise<ClusterResult> {
 	const clusters: PullRequest[][] = seeds.map((s) => [...s.members]);
 	const centroids: string[] = seeds.map((s) => s.centroidText);
 	const failures: ClusteringFailure[] = [];
 
-	// Caches in-flight/resolved embeddings by text for the life of this call, since a
+	// Resolves one text's embedding: a persisted cache hit short-circuits the network
+	// call entirely; a miss calls the real provider and writes the result back.
+	async function resolveEmbedding(text: string): Promise<ReadonlyArray<number>> {
+		const persisted = embeddingCache?.getEmbedding(text, modelKey);
+		if (persisted !== undefined) return persisted;
+		const vector = await provider.embed(text);
+		embeddingCache?.putEmbedding(text, vector, modelKey);
+		return vector;
+	}
+
+	// Memoizes the in-flight/resolved promise by text for the life of this call, since a
 	// real network-backed provider.embed() would otherwise re-embed the same unchanged
 	// centroid on every subsequent PR comparison. Caching the promise (not just the
-	// resolved value) also dedupes concurrent requests for the same text. A rejection
-	// is evicted rather than cached, so a transient failure doesn't permanently poison
-	// every later comparison against that same text for the rest of this call.
+	// resolved value) also dedupes concurrent requests for the same text — this is a
+	// separate, shorter-lived layer from `embeddingCache` above (which persists resolved
+	// values across calls/runs; this one only dedupes concurrent callers within this one
+	// clusterPRs() invocation). A rejection is evicted rather than cached, so a transient
+	// failure doesn't permanently poison every later comparison against that same text.
 	const embedCache = new Map<string, Promise<ReadonlyArray<number>>>();
 	function cachedEmbed(text: string): Promise<ReadonlyArray<number>> {
 		const cached = embedCache.get(text);
 		if (cached !== undefined) return cached;
-		const persisted = embeddingCache?.getEmbedding(text);
-		const promise =
-			persisted !== undefined
-				? Promise.resolve(persisted)
-				: provider.embed(text).then(async (vector) => {
-						await embeddingCache?.putEmbedding(text, vector);
-						return vector;
-					});
+		const promise = resolveEmbedding(text);
 		embedCache.set(text, promise);
 		promise.catch(() => embedCache.delete(text));
 		return promise;

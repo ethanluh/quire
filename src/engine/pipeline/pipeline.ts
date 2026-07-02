@@ -7,7 +7,7 @@ import type { AuditStore } from "../gate/auditStore.js";
 import { runGate } from "../gate/gate.js";
 import { buildBundles, type BundleConfig } from "../bundle/bundler.js";
 import { runCheapScreen } from "../drift/screen.js";
-import { buildReviewCard } from "../review/card.js";
+import { buildReviewCard, computeInputsHash, reuseReviewCard } from "../review/card.js";
 import { PrEffectCache } from "../cache/prCache.js";
 
 export interface PipelineConfig {
@@ -104,7 +104,7 @@ export async function orchestratePipeline(
 	const cards: ReviewCard[] = [];
 	let extractionError: string | undefined;
 	try {
-		const { bundles: builtBundles, effectsByPr, extractionFailures, clusteringFailures, reextractedPrIds } = await buildBundles(
+		const { bundles: builtBundles, effectsByPr, extractionFailures, clusteringFailures } = await buildBundles(
 			passed, provider, config.bundle, prCache, priorRun.bundles,
 		);
 		bundles.push(...builtBundles);
@@ -125,17 +125,17 @@ export async function orchestratePipeline(
 		}
 
 		for (const bundle of bundles) {
-			// A bundle needs re-screening only if it's new/changed-membership (stableId()
-			// already hashes the member-id set, so a prior card under this exact id means
-			// same members) or one of its members' effects changed this run (cache miss —
-			// the orphan-clause input would differ even with the same member set). Every
-			// other bundle's drift verdict is provably identical to last time, so its prior
-			// ReviewCard is reused rather than re-calling the LLM matcher for each member.
+			// computeInputsHash proves whether blastRadius/flags/drift would come out
+			// identical to the prior run without recomputing them — a strictly stronger
+			// check than "membership + reextraction" (it also catches same-members-same-
+			// headShas-but-different-effectSummary, and stays correct if the drift screen
+			// ever grows a new input this hash doesn't yet cover... though it would need
+			// updating then too). directionSummary is excluded on purpose (see
+			// reuseReviewCard) so a declaredDirection-only edit is never served stale.
 			const priorCard = priorRun.cards.get(bundle.id);
-			const needsRescreen =
-				priorCard === undefined || bundle.members.some((m) => reextractedPrIds.has(m.id));
-			if (!needsRescreen) {
-				cards.push(priorCard);
+			const canReuse = priorCard !== undefined && priorCard.inputsHash === computeInputsHash(bundle);
+			if (canReuse) {
+				cards.push(reuseReviewCard(bundle, priorCard));
 				continue;
 			}
 

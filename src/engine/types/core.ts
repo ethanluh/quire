@@ -62,6 +62,11 @@ export interface ReviewCard {
 	flags: ReadonlyArray<string>;
 	drift: DriftVerdict;
 	residualDisclosure: string;
+	// Fingerprint of everything blastRadius/flags/drift are computed from (see
+	// computeInputsHash in review/card.ts) — lets a later pipeline run prove those fields
+	// are still valid without recomputing them, while directionSummary (declaredDirection
+	// is metadata, not a drift-check input, INV-1) is always refreshed independent of this.
+	inputsHash: string;
 }
 
 export type GestureAction = "accept" | "defer" | "reject";

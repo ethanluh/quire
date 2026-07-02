@@ -236,7 +236,7 @@ describe("clusterPRs — seeded clustering produces the same grouping as a full 
 		const embeddingCache = new Map<string, ReadonlyArray<number>>([["adds OTP login", [1, 0]]]);
 		const cache = {
 			getEmbedding: (text: string) => embeddingCache.get(text),
-			putEmbedding: async (text: string, vector: ReadonlyArray<number>) => {
+			putEmbedding: (text: string, vector: ReadonlyArray<number>) => {
 				embeddingCache.set(text, vector);
 			},
 		};
@@ -248,6 +248,7 @@ describe("clusterPRs — seeded clustering produces the same grouping as a full 
 			{ threshold: 0.75 },
 			[{ centroidText: "adds OTP login", members: [] }],
 			cache,
+			"stub",
 		);
 
 		// pr-b's own text and the seed centroid text are identical here, so a cache hit on

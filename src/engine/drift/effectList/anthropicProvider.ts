@@ -29,6 +29,10 @@ export class AnthropicLlmProvider implements LlmProvider {
 		return this._calls;
 	}
 
+	get modelKey(): string {
+		return `anthropic:${this.model}`;
+	}
+
 	async complete(messages: ReadonlyArray<LlmMessage>, opts?: LlmCallOptions): Promise<string> {
 		const system = messages.find((m) => m.role === "system")?.content;
 		const turns = messages
