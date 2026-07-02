@@ -18,8 +18,8 @@ function cosineSimilarity(a: ReadonlyArray<number>, b: ReadonlyArray<number>): n
 }
 
 function jaccardSimilarity(a: string, b: string): number {
-	const tokensA = new Set(a.toLowerCase().split(/\s+/));
-	const tokensB = new Set(b.toLowerCase().split(/\s+/));
+	const tokensA = new Set(a.toLowerCase().split(/\s+/).filter(Boolean));
+	const tokensB = new Set(b.toLowerCase().split(/\s+/).filter(Boolean));
 	let intersection = 0;
 	for (const t of tokensA) {
 		if (tokensB.has(t)) intersection++;

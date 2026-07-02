@@ -2,6 +2,7 @@ import type { LlmProvider } from "../../engine/drift/effectList/provider.js";
 import { StubLlmProvider } from "../../engine/drift/effectList/stubProvider.js";
 import { AnthropicLlmProvider, DEFAULT_MODEL as DEFAULT_ANTHROPIC_MODEL } from "../../engine/drift/effectList/anthropicProvider.js";
 import { GeminiLlmProvider, DEFAULT_MODEL as DEFAULT_GEMINI_MODEL } from "../../engine/drift/effectList/geminiProvider.js";
+import type { ConnectedLlmAccount } from "../../engine/llm/account.js";
 
 export interface LlmProviderEnv {
 	ANTHROPIC_API_KEY?: string;
@@ -62,5 +63,24 @@ export function resolveLlmProvider(env: LlmProviderEnv): ResolvedLlmProvider {
 			return { provider: new StubLlmProvider(), description: "stub (no ANTHROPIC_API_KEY / GEMINI_API_KEY set)" };
 		default:
 			throw new Error(`Unknown LLM_PROVIDER "${requested}" (expected "anthropic" or "gemini")`);
+	}
+}
+
+// An account connected through the UI (llmAccountRouter) takes priority over env-based
+// resolution — see index.ts's precedence comment for the equivalent GitHub account choice.
+// Shared by server startup and the connect route so provider-construction logic for a
+// given (provider, apiKey) pair lives in exactly one place.
+export function buildLlmProviderFromAccount(account: ConnectedLlmAccount): ResolvedLlmProvider {
+	switch (account.provider) {
+		case "anthropic":
+			return {
+				provider: new AnthropicLlmProvider({ apiKey: account.apiKey }),
+				description: `anthropic (${DEFAULT_ANTHROPIC_MODEL}, connected via UI)`,
+			};
+		case "gemini":
+			return {
+				provider: new GeminiLlmProvider({ apiKey: account.apiKey }),
+				description: `gemini (${DEFAULT_GEMINI_MODEL}, connected via UI)`,
+			};
 	}
 }
