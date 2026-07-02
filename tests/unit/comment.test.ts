@@ -10,6 +10,7 @@ function makeCard(overrides: Partial<ReviewCard> = {}): ReviewCard {
 		flags: [],
 		drift: { status: "clean" },
 		residualDisclosure: "behavioral confirm not run",
+		inputsHash: "hash-1",
 		...overrides,
 	};
 }

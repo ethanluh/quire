@@ -23,6 +23,10 @@ class FlakyProvider implements LlmProvider {
 		return this.inner.calls;
 	}
 
+	get modelKey(): string {
+		return this.inner.modelKey;
+	}
+
 	queueCompletion(response: string): void {
 		this.inner.queueCompletion(response);
 	}
@@ -273,6 +277,33 @@ describe("orchestratePipeline — integration", () => {
 			expect(second.cards).toEqual(first.cards);
 		});
 
+		it("refreshes directionSummary on reuse even when nothing else about the PR changed (declaredDirection edited, no new commit)", async () => {
+			const prCache = new PrEffectCache();
+			stub.queueCompletion('["adds OTP login"]');
+			stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+			analyzer.setFootprint([]);
+
+			const prs = [makePR("pr-1", "add passwordless auth")];
+			const first = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore, prCache });
+			expect(first.cards[0]?.directionSummary).toBe("add passwordless auth");
+
+			// PR body edited on GitHub (declaredDirection changed) with no new commit —
+			// headSha unchanged, so effect extraction and the drift matcher must not re-run.
+			const editedPrs = [{ ...prs[0]!, declaredDirection: "refactor auth token storage" }];
+			const second = await orchestratePipeline(
+				editedPrs,
+				DEFAULT_CONFIG,
+				{ provider: stub, analyzer, auditStore, prCache },
+				{ bundles: first.bundles, cards: new Map(first.cards.map((c) => [c.bundleId, c])) },
+			);
+
+			expect(stub.calls).toHaveLength(2); // no re-extraction, no re-screen
+			expect(second.cards[0]?.directionSummary).toBe("refactor auth token storage");
+			expect(second.bundles[0]?.members[0]?.declaredDirection).toBe("refactor auth token storage");
+			// The drift verdict itself is untouched — only the display field refreshed.
+			expect(second.cards[0]?.drift).toEqual(first.cards[0]?.drift);
+		});
+
 		it("re-screens only the bundle whose member actually changed", async () => {
 			const prCache = new PrEffectCache();
 			stub.queueCompletion('["adds OTP login"]'); // pr-1 extractor
@@ -307,7 +338,9 @@ describe("orchestratePipeline — integration", () => {
 			const pr1Bundle = second.bundles.find((b) => b.members.some((m) => m.id === "pr-1"));
 			const pr1CardBefore = first.cards.find((c) => c.bundleId === pr1Bundle?.id);
 			const pr1CardAfter = second.cards.find((c) => c.bundleId === pr1Bundle?.id);
-			expect(pr1CardAfter).toBe(pr1CardBefore);
+			// Reused (not the literal same object — directionSummary is always refreshed,
+			// see reuseReviewCard), but every other field is unchanged.
+			expect(pr1CardAfter).toEqual(pr1CardBefore);
 		});
 	});
 });

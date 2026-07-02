@@ -24,6 +24,7 @@ function makePR(id: string): PullRequest {
 function taggedProvider(tag: string): LlmProvider {
 	const calls: LlmCall[] = [];
 	return {
+		modelKey: `stub:${tag}`,
 		get calls(): ReadonlyArray<LlmCall> {
 			return calls;
 		},

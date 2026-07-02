@@ -13,6 +13,10 @@ class FlakyProvider implements LlmProvider {
 		return this.inner.calls;
 	}
 
+	get modelKey(): string {
+		return this.inner.modelKey;
+	}
+
 	queueCompletion(response: string): void {
 		this.inner.queueCompletion(response);
 	}
@@ -196,5 +200,25 @@ describe("buildBundles — seeded clustering from a prior run's bundles", () => 
 		expect(stub.calls).toHaveLength(2); // no new extraction; still just the two from setup
 		expect(second.bundles).toHaveLength(1);
 		expect(second.bundles[0]?.members.map((m) => m.id)).toEqual(["pr-a"]);
+	});
+
+	it("refreshes a seeded member's declaredDirection/ciStatus even though its effects came from cache", async () => {
+		const cache = new PrEffectCache();
+		const stub = new StubLlmProvider();
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+
+		const prA = makePR("pr-a", "add passwordless auth");
+		const first = await buildBundles([prA], stub, { similarityThreshold: 0.75 }, cache);
+		const priorBundle = first.bundles[0]!;
+
+		// pr-a's PR body was edited on GitHub (declaredDirection changed, ciStatus flipped)
+		// with no new commit — headSha unchanged, so this is still a cache hit for effects.
+		const prAEdited = { ...prA, declaredDirection: "refactor auth token storage", ciStatus: "failure" as const };
+		const second = await buildBundles([prAEdited], stub, { similarityThreshold: 0.75 }, cache, [priorBundle]);
+
+		expect(stub.calls).toHaveLength(1); // still no re-extraction
+		expect(second.bundles[0]?.direction).toBe("refactor auth token storage");
+		expect(second.bundles[0]?.members[0]?.declaredDirection).toBe("refactor auth token storage");
+		expect(second.bundles[0]?.members[0]?.ciStatus).toBe("failure");
 	});
 });

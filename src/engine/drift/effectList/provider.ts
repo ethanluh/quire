@@ -24,6 +24,11 @@ export interface LlmProvider {
 	// bundles PRs, not just which vendor serves the request.
 	embed(text: string): Promise<ReadonlyArray<number>>;
 	readonly calls: ReadonlyArray<LlmCall>;
+	// Identifies this provider+model configuration for cache-keying (see
+	// src/engine/cache/prCache.ts): two providers/models must never share a modelKey, so
+	// switching which one is active invalidates cached extraction/embedding results
+	// instead of silently serving output produced by a different model.
+	readonly modelKey: string;
 }
 
 export type EmbeddingProvider = Pick<LlmProvider, "embed">;
