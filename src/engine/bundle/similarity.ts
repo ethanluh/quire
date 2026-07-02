@@ -36,6 +36,16 @@ export async function textSimilarity(
 	b: string,
 	provider: EmbeddingProvider,
 ): Promise<number> {
+	// No extracted effects means no evidence of shared direction, regardless of what a
+	// given provider's embed() happens to return for empty/whitespace-only input. The stub
+	// provider and Anthropic (no embeddings endpoint) signal "no real embedding" with an
+	// all-zero vector, which falls back to Jaccard below — but a real embedding-capable
+	// provider like Gemini returns a real, deterministic, non-zero vector even for empty
+	// input, so two such PRs would otherwise score as identical (cosine similarity 1.0)
+	// no matter which provider is active. Checking this before any embed() call fixes the
+	// invariant at the right layer instead of relying on a particular provider's behavior
+	// for degenerate input (INV-1/INV-3: absence of evidence must never become evidence).
+	if (a.trim() === "" || b.trim() === "") return 0;
 	const [vecA, vecB] = await Promise.all([provider.embed(a), provider.embed(b)]);
 	const allZeroA = vecA.every((v) => v === 0);
 	const allZeroB = vecB.every((v) => v === 0);

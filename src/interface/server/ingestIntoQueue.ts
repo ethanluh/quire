@@ -2,6 +2,7 @@ import type { PullRequest } from "../../engine/types/core.js";
 import { orchestratePipeline } from "../../engine/pipeline/pipeline.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
 import type { LlmProvider } from "../../engine/drift/effectList/provider.js";
+import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.js";
 import type { StaticAnalyzer } from "../../engine/drift/footprint/analyzer.js";
 import type { AuditStore } from "../../engine/gate/auditStore.js";
 import type { InstrumentationSink } from "../../engine/types/instrumentation.js";
@@ -31,10 +32,16 @@ export async function ingestIntoQueue(
 	state: ServerState,
 	deps: PipelineDeps,
 ): Promise<IngestSummary> {
+	// Pin the provider for the duration of this one ingestion run: deps.provider may be an
+	// LlmProviderHolder that can be reassigned mid-run if the user connects/disconnects an
+	// LLM account while this run's PRs are still being extracted/clustered. Snapshotting
+	// once up front means every comparison within this run uses the same provider/model,
+	// instead of silently mixing two providers' embeddings within one clusterPRs batch.
+	const provider = deps.provider instanceof LlmProviderHolder ? deps.provider.snapshot() : deps.provider;
 	const result = await orchestratePipeline(
 		prs,
 		deps.config,
-		deps.provider,
+		provider,
 		deps.analyzer,
 		deps.auditStore,
 		deps.instrumentationSink,
