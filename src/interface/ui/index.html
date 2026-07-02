@@ -540,6 +540,7 @@ async function removeFromQueue(bundleId) {
   if (!confirm('Remove this bundle from the merge queue?')) return;
   await api('DELETE', `/queue/${bundleId}`);
   loadQueue();
+  loadReview();
 }
 
 async function gesture(bundleId, action) {

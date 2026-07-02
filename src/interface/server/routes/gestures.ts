@@ -58,7 +58,7 @@ export function gesturesRouter(
 				const memberPrIds = bundle.members.map((m) => m.id);
 
 				if (action === "accept") {
-					await queue.enqueue(bundle); // enqueues, does not merge (INV-5, unless autoMergeOnAccept)
+					await queue.enqueue(bundle, card); // enqueues, does not merge (INV-5, unless autoMergeOnAccept)
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action);

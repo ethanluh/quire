@@ -1,10 +1,14 @@
-import type { Bundle } from "./core.js";
+import type { Bundle, ReviewCard } from "./core.js";
 
 export type MergeQueueEntryStatus = "queued" | "landing" | "landed" | "reverted";
 
 export interface MergeQueueEntry {
 	bundleId: string;
 	bundle: Bundle;
+	// Optional only for entries persisted before this field existed, or lightweight test
+	// fixtures. Real accepts (gestures.ts) always set it, so a removed-while-queued bundle
+	// can be restored to the review queue with the exact card the human last saw.
+	card?: ReviewCard;
 	enqueuedAt: string;
 	status: MergeQueueEntryStatus;
 	revertedPrIds: ReadonlyArray<string>;
