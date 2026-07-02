@@ -7,6 +7,7 @@ import { isInstallationRevoked } from "../../../engine/github/installationClient
 import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import type { GitHubClient } from "../../../engine/github/client.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
+import { settleWithConcurrency } from "../../../engine/util/concurrency.js";
 import { activeInstallation } from "../accountState.js";
 import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
@@ -26,6 +27,7 @@ const SettingsSchema = z.object({
 const INSTALL_STATE_COOKIE_NAME = "quire_install_state";
 const INSTALL_STATE_TTL_MS = 10 * 60 * 1000;
 const REPO_LIST_CACHE_TTL_MS = 30 * 1000;
+const INSTALLATION_LIST_CONCURRENCY = 4;
 
 // Everything installation-shaped: binding GitHub App installations to Quire (an operator
 // may bind several — their personal account plus N orgs), listing the repos they cover,
@@ -47,11 +49,29 @@ export function githubAppRouter(
 
 	interface RepoListCacheEntry {
 		expiresAt: number;
-		repos: ReadonlyArray<RepoSummary>;
+		repos: Promise<ReadonlyArray<RepoSummary>>;
 	}
 	// Keyed per-installation so binding/disconnecting one installation doesn't invalidate
-	// the others' still-fresh cached lists.
+	// the others' still-fresh cached lists. Caches the in-flight promise itself (not just the
+	// settled value) so concurrent /repos calls share one upstream fetch per installation
+	// instead of each firing their own.
 	const repoListCache = new Map<number, RepoListCacheEntry>();
+
+	function getReposCached(installation: InstallationBinding): Promise<ReadonlyArray<RepoSummary>> {
+		const cached = repoListCache.get(installation.installationId);
+		if (cached !== undefined && Date.now() < cached.expiresAt) return cached.repos;
+
+		const repos = listInstallationRepos(installation.installationId, installation.accountLogin);
+		repos.then(
+			() => {
+				const entry = repoListCache.get(installation.installationId);
+				if (entry !== undefined) entry.expiresAt = Date.now() + REPO_LIST_CACHE_TTL_MS;
+			},
+			() => repoListCache.delete(installation.installationId),
+		);
+		repoListCache.set(installation.installationId, { expiresAt: Number.POSITIVE_INFINITY, repos });
+		return repos;
+	}
 
 	router.get("/status", (_req, res) => {
 		const { installations, selectedRepo, autoMergeOnAccept } = accountState.current;
@@ -168,16 +188,7 @@ export function githubAppRouter(
 				return;
 			}
 
-			const results = await Promise.allSettled(
-				installations.map((installation) => {
-					const cached = repoListCache.get(installation.installationId);
-					if (cached !== undefined && Date.now() < cached.expiresAt) return Promise.resolve(cached.repos);
-					return listInstallationRepos(installation.installationId, installation.accountLogin).then((repos) => {
-						repoListCache.set(installation.installationId, { expiresAt: Date.now() + REPO_LIST_CACHE_TTL_MS, repos });
-						return repos;
-					});
-				}),
-			);
+			const results = await settleWithConcurrency(installations, INSTALLATION_LIST_CONCURRENCY, getReposCached);
 
 			const repos: RepoSummary[] = [];
 			const failedAccounts: string[] = [];
@@ -203,12 +214,12 @@ export function githubAppRouter(
 				return;
 			}
 			const previousRepo = previousState.selectedRepo;
+			const previousClient = clientHolder.getClient();
 
 			// Repoint the shared client BEFORE enqueueing the refresh, since enqueueRefresh
 			// reads through it — this is the one steady-state place "which installation is
 			// active" changes.
 			clientHolder.setClient(buildClient(installationId));
-			clearRepoFromQueue(refreshDeps.state, previousRepo);
 
 			// Set the new selection BEFORE calling enqueueRefresh (rather than after, like the
 			// old single-installation flow could get away with): refreshRepoQueue now resolves
@@ -223,9 +234,14 @@ export function githubAppRouter(
 				summary = await enqueueRefresh(owner, name, refreshDeps);
 			} catch (err) {
 				if (accountState.current === updated) accountState.current = previousState;
+				clientHolder.setClient(previousClient);
 				throw err;
 			}
 
+			// Only clear the old repo's queue state once the new selection has actually
+			// succeeded — clearing it upfront would lose that repo's bundles/cards for good if
+			// enqueueRefresh then failed and the selection rolled back.
+			clearRepoFromQueue(refreshDeps.state, previousRepo);
 			await saveInstallation(accountPath, updated);
 
 			res.json({ selected: updated.selectedRepo, ...summary });
@@ -261,23 +277,39 @@ export function githubAppRouter(
 	router.post("/disconnect/:installationId", async (req, res, next) => {
 		try {
 			const installationId = Number(req.params["installationId"]);
+			if (!Number.isInteger(installationId) || installationId <= 0) {
+				res.status(400).json({ error: "Invalid installation id" });
+				return;
+			}
 			const current = accountState.current;
 			const remaining = current.installations.filter((i) => i.installationId !== installationId);
 			const wasActive = current.selectedRepo?.installationId === installationId;
 			const nextSelectedRepo = wasActive ? undefined : current.selectedRepo;
 
-			const updated: InstallationAccountState = {
-				installations: remaining,
-				...(nextSelectedRepo !== undefined ? { selectedRepo: nextSelectedRepo } : {}),
-				...(current.autoMergeOnAccept !== undefined ? { autoMergeOnAccept: current.autoMergeOnAccept } : {}),
-			};
+			const updated: InstallationAccountState =
+				remaining.length === 0
+					? { installations: [] }
+					: {
+							installations: remaining,
+							...(nextSelectedRepo !== undefined ? { selectedRepo: nextSelectedRepo } : {}),
+							...(current.autoMergeOnAccept !== undefined ? { autoMergeOnAccept: current.autoMergeOnAccept } : {}),
+						};
 			accountState.current = updated;
-			repoListCache.delete(installationId);
 			if (wasActive) {
 				clearRepoFromQueue(refreshDeps.state, current.selectedRepo);
 				clientHolder.setClient(new StubGitHubClient());
 			}
-			await saveInstallation(accountPath, updated);
+			// Once the last installation is gone, tear down the file the same way disconnect-all
+			// does (rather than leaving behind a near-empty `{"installations":[]}`) — functionally
+			// equivalent on next load, but avoids two disconnect routes disagreeing about what "no
+			// installations bound" looks like on disk.
+			if (remaining.length === 0) {
+				repoListCache.clear();
+				await clearInstallation(accountPath);
+			} else {
+				repoListCache.delete(installationId);
+				await saveInstallation(accountPath, updated);
+			}
 			res.json({ disconnected: installationId, remaining: remaining.length });
 		} catch (err) {
 			next(err);

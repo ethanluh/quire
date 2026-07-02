@@ -254,6 +254,7 @@
   <div class="account-panel">
     <div class="account-status" id="account-status">Checking connection&hellip;</div>
     <div id="installations-list"></div>
+    <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
     <div id="account-connect-form">
       <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
       <div class="account-connect-actions">
@@ -653,6 +654,7 @@ async function checkSignedIn() {
 const accountConnectForm = document.getElementById('account-connect-form');
 const repoPanel = document.getElementById('repo-panel');
 const installBtn = document.getElementById('btn-account-install');
+const accountDisconnectAllBtn = document.getElementById('btn-account-disconnect-all');
 let loadedInstallations = [];
 
 function installationHtml(installation) {
@@ -668,6 +670,12 @@ async function disconnectInstallation(installationId) {
   await api('POST', `/account/github/disconnect/${installationId}`, undefined);
   loadAccount();
 }
+
+accountDisconnectAllBtn.addEventListener('click', async () => {
+  if (!confirm('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.')) return;
+  await api('POST', '/account/github/disconnect-all', undefined);
+  loadAccount();
+});
 
 function renderAutomationStatus(selectedRepo) {
   const el = document.getElementById('automation-status');
@@ -692,6 +700,7 @@ async function loadAccount() {
     statusEl.textContent = `Connected to ${loadedInstallations.length} installation${loadedInstallations.length === 1 ? '' : 's'}:`;
     listEl.innerHTML = loadedInstallations.map(installationHtml).join('');
     copyEl.textContent = 'Install on another organization or account.';
+    accountDisconnectAllBtn.style.display = 'inline-block';
     repoPanel.style.display = 'block';
     renderAutomationStatus(status.selectedRepo);
     document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
@@ -700,6 +709,7 @@ async function loadAccount() {
     statusEl.textContent = 'Not connected.';
     listEl.innerHTML = '';
     copyEl.textContent = 'Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.';
+    accountDisconnectAllBtn.style.display = 'none';
     repoPanel.style.display = 'none';
   }
 }

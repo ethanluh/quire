@@ -8,6 +8,7 @@ import type { Server } from "node:http";
 import { githubAppRouter } from "../../src/interface/server/routes/githubApp.js";
 import type { RepoSummary } from "../../src/engine/github/repos.js";
 import { GitHubClientHolder } from "../../src/engine/github/clientHolder.js";
+import type { GitHubClient } from "../../src/engine/github/client.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { createServerState } from "../../src/interface/server/state.js";
@@ -125,6 +126,7 @@ describe("githubAppRouter", () => {
 			accountLogin: "acme-corp",
 			accountType: "Organization",
 		}),
+		buildClient: (installationId: number) => GitHubClient = () => client,
 	): { accountPath: string; state: ServerState; refreshDeps: RefreshDeps } {
 		const accountPath = join(dir, "installation.json");
 		const holder = new GitHubClientHolder(client);
@@ -152,10 +154,11 @@ describe("githubAppRouter", () => {
 		app.use(
 			"/account/github",
 			// Selecting a repo repoints clientHolder to whatever buildClient returns for that
-			// installation — tests always hand back the same fixture-configured StubGitHubClient
-			// regardless of installationId, since a real buildInstallationClient would attempt
-			// real GitHub auth with the fake appId/privateKey above.
-			githubAppRouter(refreshDeps, "quire-review", () => client, listRepos, getInstallationAccount, false),
+			// installation — defaults to always handing back the same fixture-configured
+			// StubGitHubClient regardless of installationId, since a real buildInstallationClient
+			// would attempt real GitHub auth with the fake appId/privateKey above. Tests exercising
+			// the multi-installation client-repoint/rollback behavior pass their own buildClient.
+			githubAppRouter(refreshDeps, "quire-review", buildClient, listRepos, getInstallationAccount, false),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
@@ -453,6 +456,28 @@ describe("githubAppRouter", () => {
 		expect(body["failedAccounts"]).toEqual(["dead-org"]);
 	});
 
+	it("dedupes concurrent /repos calls against the same installation into a single upstream fetch", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		let resolveFetch: (repos: ReadonlyArray<RepoSummary>) => void = () => undefined;
+		const gate = new Promise<ReadonlyArray<RepoSummary>>((resolve) => {
+			resolveFetch = resolve;
+		});
+		const listRepos = jest.fn(async () => gate);
+		setup(listRepos, new StubGitHubClient(), new StubLlmProvider(), {
+			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+		});
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const first = call(server, "GET", "/account/github/repos");
+		const second = call(server, "GET", "/account/github/repos");
+		resolveFetch([repo({ fullName: "acme-corp/widgets", installationId: 555, accountLogin: "acme-corp" })]);
+		const [firstResult, secondResult] = await Promise.all([first, second]);
+
+		expect(firstResult.status).toBe(200);
+		expect(secondResult.status).toBe(200);
+		expect(listRepos).toHaveBeenCalledTimes(1);
+	});
+
 	it("returns 400 for /repos when no installation is bound", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		setup();
@@ -521,6 +546,48 @@ describe("githubAppRouter", () => {
 
 		expect(status).toBe(400);
 		expect(body["error"]).toBe("Unknown installation");
+	});
+
+	it("restores the previous client and selection when a repo selection's ingest fails", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const workingClient = new StubGitHubClient();
+		workingClient.addFixture("acme-corp", "widgets", makePrFixture({ owner: "acme-corp", repo: "widgets" }));
+		class FailingClient extends StubGitHubClient {
+			override async listOpenPullRequests(): Promise<never> {
+				throw new Error("GitHub API unavailable");
+			}
+		}
+		const failingClient = new FailingClient();
+		const provider = new StubLlmProvider();
+		provider.queueCompletion('["adds OTP login"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		const { state, refreshDeps } = setup(
+			async () => [],
+			workingClient,
+			provider,
+			{
+				installations: [
+					{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+					{ installationId: 777, accountLogin: "octocat", accountType: "User", boundAt: "2026-06-30T00:00:00.000Z" },
+				],
+			},
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			(installationId) => (installationId === 777 ? failingClient : workingClient),
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const first = await call(server, "POST", "/account/github/repos/select", { owner: "acme-corp", name: "widgets", installationId: 555 });
+		expect(first.status).toBe(200);
+		expect(state.bundles.size).toBe(1);
+
+		const second = await call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "broken-repo", installationId: 777 });
+
+		expect(second.status).toBeGreaterThanOrEqual(400);
+		// The failed selection must not leave the shared client pointed at the installation
+		// that just failed, nor lose the previously-selected repo's already-ingested bundles.
+		expect(refreshDeps.clientHolder.getClient()).toBe(workingClient);
+		expect(refreshDeps.accountState.current.selectedRepo).toEqual({ owner: "acme-corp", name: "widgets", installationId: 555 });
+		expect(state.bundles.size).toBe(1);
 	});
 
 	describe("POST /repos/refresh", () => {
@@ -613,12 +680,40 @@ describe("githubAppRouter", () => {
 		});
 		await new Promise((resolve) => server.once("listening", resolve));
 
-		const { status } = await call(server, "POST", "/account/github/disconnect/555");
+		const { status, body } = await call(server, "POST", "/account/github/disconnect/555");
 
 		expect(status).toBe(200);
-		const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { installations: unknown[]; selectedRepo?: unknown };
-		expect(persisted.installations).toEqual([]);
-		expect(persisted.selectedRepo).toBeUndefined();
+		expect(body).toEqual({ disconnected: 555, remaining: 0 });
+		// Disconnecting the last installation tears down the file the same way disconnect-all
+		// does, rather than leaving a near-empty `{"installations":[]}` behind.
+		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+	});
+
+	it("rejects a non-numeric installation id on disconnect", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const { refreshDeps } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+		});
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "POST", "/account/github/disconnect/not-a-number");
+
+		expect(status).toBe(400);
+		expect(body["error"]).toBe("Invalid installation id");
+		expect(refreshDeps.accountState.current.installations).toHaveLength(1);
+	});
+
+	it("rejects a negative installation id on disconnect", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+		});
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "POST", "/account/github/disconnect/-1");
+
+		expect(status).toBe(400);
+		expect(body["error"]).toBe("Invalid installation id");
 	});
 
 	it("disconnect-all wipes every installation and the persisted file", async () => {
