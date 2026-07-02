@@ -175,7 +175,8 @@
     align-items: center;
   }
   .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
-  .queue-entry-actions { display: flex; align-items: center; gap: var(--space-3); }
+  .queue-entry-actions { display: flex; align-items: center; gap: var(--space-2); }
+  .queue-entry-actions .btn { padding: var(--space-1) var(--space-3); }
 
   .status-badge {
     font-size: var(--text-xs);
@@ -305,6 +306,16 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="detail-modal-backdrop" style="display:none">
+  <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
+    <h3 class="modal-title" id="detail-modal-title">Bundle detail</h3>
+    <div id="detail-modal-body"><div class="empty">Loading&hellip;</div></div>
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-detail-modal-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 function showTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
@@ -341,12 +352,14 @@ function driftBadge(drift) {
   return '<span class="badge badge-flagged">Drift flagged</span>';
 }
 
-function renderSignals(drift) {
+function renderSignals(drift, members) {
   if (drift.status !== 'flagged') return '';
   const items = drift.signals.map(s => {
-    if (s.kind === 'effectList') return `Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
-    if (s.kind === 'footprintAnomaly') return `Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
-    return escapeHtml(s.description);
+    const pr = members && members.find(m => m.id === s.prId);
+    const prefix = pr ? `[${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}] ` : '';
+    if (s.kind === 'effectList') return `${prefix}Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
+    if (s.kind === 'footprintAnomaly') return `${prefix}Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
+    return `${prefix}${escapeHtml(s.description)}`;
   });
   return `<div class="drift-signals"><strong>Drift signals (noted, not an error)</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
 }
@@ -354,9 +367,10 @@ function renderSignals(drift) {
 function cardHtml(card, shelfMode) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
   const bundleId = escapeHtml(card.bundleId);
+  const detailsBtn = `<button class="btn" onclick="showBundleDetail('${bundleId}')">Details</button>`;
   const gestures = shelfMode
-    ? `<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
-    : `<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept</button>
+    ? `${detailsBtn}<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
+    : `${detailsBtn}<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept</button>
        <button class="btn btn-defer"  onclick="gesture('${bundleId}','defer')">Defer</button>
        <button class="btn btn-reject" onclick="gesture('${bundleId}','reject')">Reject</button>`;
   return `<div class="card" id="card-${bundleId}">
@@ -370,6 +384,108 @@ function cardHtml(card, shelfMode) {
     <div class="gestures">${gestures}</div>
   </div>`;
 }
+
+// --- Bundle detail modal ---
+const detailModalBackdrop = document.getElementById('detail-modal-backdrop');
+const detailModalBody = document.getElementById('detail-modal-body');
+let queueEntries = [];
+
+function ciStatusBadge(status) {
+  const cls = status === 'success' ? 'badge-clean' : status === 'failure' ? 'badge-flagged' : 'badge-neutral';
+  return `<span class="badge ${cls}">CI: ${escapeHtml(status)}</span>`;
+}
+
+function prDriftBadges(prId, drift) {
+  if (!drift || drift.status !== 'flagged') return '';
+  const signals = drift.signals.filter(s => s.prId === prId);
+  const footprintCount = signals.filter(s => s.kind === 'footprintAnomaly').length;
+  const behavioralCount = signals.filter(s => s.kind === 'behavioralDelta').length;
+  const effectCount = signals.filter(s => s.kind === 'effectList').length;
+  const badges = [];
+  // footprintAnomaly/behavioralDelta are grounded in static analysis or confirmed
+  // behavior, not an LLM judgment call — treated as the more severe tier (red).
+  // effectList is the matcher's best-effort read on declared vs. actual effects,
+  // more prone to false positives — the existing "flagged" tier (amber).
+  if (footprintCount > 0) badges.push(`<span class="badge badge-critical">Footprint: ${footprintCount}</span>`);
+  if (behavioralCount > 0) badges.push(`<span class="badge badge-critical">Behavioral: ${behavioralCount}</span>`);
+  if (effectCount > 0) badges.push(`<span class="badge badge-flagged">Effects: ${effectCount}</span>`);
+  return badges.join('');
+}
+
+function prMemberListHtml(members, drift) {
+  if (!members.length) return '<div class="empty">No member PRs.</div>';
+  return '<div class="pr-member-list">' + members.map(pr => {
+    const url = `https://github.com/${pr.repoOwner}/${pr.repoName}/pull/${pr.number}`;
+    return `<div class="pr-member-row">
+      <div class="pr-member-info">
+        <a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}</a>
+        <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)}</span>
+      </div>
+      <div class="pr-member-tags">
+        ${prDriftBadges(pr.id, drift)}
+        ${ciStatusBadge(pr.ciStatus)}
+        <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function detailBodyHtml(detail, opts) {
+  opts = opts || {};
+  return `
+    <div class="card-direction">${escapeHtml(detail.directionSummary || detail.direction || '')}</div>
+    ${detail.effectSummary ? `<p class="residual">${escapeHtml(detail.effectSummary)}</p>` : ''}
+    ${detail.blastRadius !== undefined ? `<div class="card-meta">
+      <span class="badge badge-neutral">Blast radius: ${detail.blastRadius} files</span>
+      ${driftBadge(detail.drift)} ${(detail.flags || []).map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('')}
+    </div>` : ''}
+    ${detail.drift ? renderSignals(detail.drift, detail.members) : ''}
+    ${detail.residualDisclosure ? `<div class="residual">${escapeHtml(detail.residualDisclosure)}</div>` : ''}
+    ${opts.queueMeta ? `<div class="card-meta">
+      <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(opts.queueMeta.status)}</span>
+      <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
+    </div>` : ''}
+    <h4>Member PRs</h4>
+    ${prMemberListHtml(detail.members || [], detail.drift)}
+  `;
+}
+
+function openDetailModal(html) {
+  detailModalBody.innerHTML = html;
+  detailModalBackdrop.style.display = 'flex';
+}
+
+function closeDetailModal() {
+  detailModalBackdrop.style.display = 'none';
+}
+
+async function showBundleDetail(bundleId) {
+  openDetailModal('<div class="empty">Loading&hellip;</div>');
+  const res = await fetch(`/bundles/${bundleId}`);
+  if (res.status === 404) {
+    detailModalBody.innerHTML = '<div class="empty">This bundle is no longer available (it may have just been actioned).</div>';
+    return;
+  }
+  const detail = await res.json();
+  detailModalBody.innerHTML = detailBodyHtml(detail);
+}
+
+function showQueueDetail(bundleId) {
+  const entry = queueEntries.find(e => e.bundleId === bundleId);
+  if (!entry) return;
+  openDetailModal(detailBodyHtml(
+    { direction: entry.bundle.direction, effectSummary: entry.bundle.effectSummary, members: entry.bundle.members },
+    { queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt } },
+  ));
+}
+
+document.getElementById('btn-detail-modal-close').addEventListener('click', closeDetailModal);
+detailModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === detailModalBackdrop) closeDetailModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && detailModalBackdrop.style.display !== 'none') closeDetailModal();
+});
 
 async function loadReview() {
   const status = await api('GET', '/account/github/status');
@@ -406,12 +522,14 @@ async function loadShelf() {
 
 async function loadQueue() {
   const entries = await api('GET', '/queue');
+  queueEntries = entries;
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry">
     <div><div>${escapeHtml(e.bundle.direction)}</div><div class="entry-id">${escapeHtml(e.bundleId)}</div></div>
     <div class="queue-entry-actions">
       <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+      <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
       ${e.status === 'queued' ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
     </div>
   </div>`).join('');
@@ -437,7 +555,11 @@ async function promote(bundleId) {
 }
 
 document.getElementById('btn-process').addEventListener('click', async () => {
-  await api('POST', '/queue/process');
+  const result = await api('POST', '/queue/process');
+  if (result.error) {
+    alert('Could not process queue: ' + result.error);
+    return;
+  }
   loadQueue();
 });
 

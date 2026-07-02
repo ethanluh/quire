@@ -194,6 +194,15 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(decidedStore.isDecided("b-3-pr-1")).toBe(true);
 	});
 
+	it("keeps the full bundle alongside the card on defer, for the detail view", async () => {
+		state.bundles.set("b-3b", makeBundle("b-3b"));
+		state.cards.set("b-3b", makeCard("b-3b"));
+
+		await gesture("b-3b", "defer");
+
+		expect(state.shelf.get("b-3b")?.bundle).toEqual(makeBundle("b-3b"));
+	});
+
 	it("posts a review card comment to each member PR on accept", async () => {
 		state.bundles.set("b-4", makeBundle("b-4"));
 		state.cards.set("b-4", makeCard("b-4"));

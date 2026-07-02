@@ -96,7 +96,7 @@ describe("runCheapScreen — screen failure must flag, never clear (INV-3)", () 
 		expect(verdict.status).toBe("flagged");
 		if (verdict.status === "flagged") {
 			expect(verdict.signals).toEqual([
-				{ kind: "effectList", orphanClauses: ["adds rate limiting to login endpoint"] },
+				{ kind: "effectList", prId: "pr-1", orphanClauses: ["adds rate limiting to login endpoint"] },
 			]);
 		}
 	});

@@ -111,6 +111,7 @@ describe("runCheapScreen — INV-3: clean only when zero signals", () => {
 		if (verdict.status === "flagged") {
 			const signal = verdict.signals.find(s => s.kind === "effectList");
 			expect(signal).toBeDefined();
+			expect(signal?.prId).toBe(pr.id);
 		}
 	});
 
