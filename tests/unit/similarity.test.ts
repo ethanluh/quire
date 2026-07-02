@@ -49,6 +49,26 @@ describe("textSimilarity — empty inputs must not read as perfect similarity", 
 		};
 		await expect(textSimilarity("", "", zeroVectorProvider)).resolves.toBe(0);
 	});
+
+	it("returns 0 even when a real (non-zero-vector) provider returns an identical embedding for empty input", async () => {
+		// A real embedding-capable provider (e.g. a connected Gemini account) is
+		// deterministic: embed("") always returns the same real, non-zero vector, since
+		// it's a stateless call keyed only on model + input text. Two PRs with no
+		// extracted effects must not read as identical just because their shared "no
+		// evidence" text happens to embed the same way — this must be caught before any
+		// embed() call is made, not left to depend on a particular provider's behavior.
+		const realEmbeddingProvider: EmbeddingProvider = {
+			embed: async () => [0.42, 0.17, 0.9],
+		};
+		await expect(textSimilarity("", "", realEmbeddingProvider)).resolves.toBe(0);
+	});
+
+	it("returns 0 for whitespace-only input compared against another whitespace-only input", async () => {
+		const realEmbeddingProvider: EmbeddingProvider = {
+			embed: async () => [0.42, 0.17, 0.9],
+		};
+		await expect(textSimilarity("   ", "\t", realEmbeddingProvider)).resolves.toBe(0);
+	});
 });
 
 describe("clusterPRs — PRs with no extracted effects must not spuriously merge", () => {
@@ -75,6 +95,36 @@ describe("clusterPRs — PRs with no extracted effects must not spuriously merge
 
 		expect(failures).toEqual([]);
 		expect(clusters).toHaveLength(3);
+		for (const cluster of clusters) {
+			expect(cluster).toHaveLength(1);
+		}
+	});
+});
+
+describe("clusterPRs — a real embedding provider must not merge PRs that share no extracted effects", () => {
+	it("keeps PRs with empty effect lists in their own singleton clusters even against a provider that returns identical non-zero vectors for any input", async () => {
+		const prA = makePR("pr-a");
+		const prB = makePR("pr-b");
+
+		const effectsByPr = new Map([
+			["pr-a", []],
+			["pr-b", []],
+		]);
+
+		// Simulates a live Gemini connection: embed() hits a real API and returns the same
+		// deterministic, non-zero vector for any input, including "".
+		const realEmbeddingProvider: EmbeddingProvider = {
+			embed: async () => [0.42, 0.17, 0.9],
+		};
+		const { clusters, failures } = await clusterPRs(
+			[prA, prB],
+			effectsByPr,
+			realEmbeddingProvider,
+			{ threshold: 0.75 },
+		);
+
+		expect(failures).toEqual([]);
+		expect(clusters).toHaveLength(2);
 		for (const cluster of clusters) {
 			expect(cluster).toHaveLength(1);
 		}

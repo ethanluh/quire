@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, jest } from "@jest/globals";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
@@ -152,6 +152,47 @@ describe("llmAccountRouter", () => {
 		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
 	});
 
+	it("does not swap the provider/state when saveAccount fails, so a persist failure can't leave an unpersisted key silently active", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-llm-router-"));
+		// Force saveAccount to fail: make the account path's parent a file, not a
+		// directory, so writeJsonFileAtomic's mkdir(dirname(path), {recursive:true}) throws.
+		const blockerPath = join(dir, "blocker");
+		await writeFile(blockerPath, "not a directory");
+		const badAccountPath = join(blockerPath, "llm-account.json");
+
+		const provider = workingProvider("anthropic");
+		const holder = new LlmProviderHolder(workingProvider("initial"));
+		const setProviderSpy = jest.spyOn(holder, "setProvider");
+		const state = createLlmAccountState(undefined);
+		const app = express();
+		app.use(express.json());
+		app.use(
+			"/account/llm",
+			llmAccountRouter(
+				state,
+				badAccountPath,
+				holder,
+				() => ({ provider, description: "anthropic" }),
+				() => ({ provider: workingProvider("fallback"), description: "fallback" }),
+			),
+		);
+		app.use(errorHandler);
+		server = app.listen(0);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status } = await call(
+			server,
+			"POST",
+			"/account/llm/connect",
+			{ provider: "anthropic", apiKey: "sk-ant-abc" },
+			ADMIN_HEADERS,
+		);
+
+		expect(status).toBe(500);
+		expect(setProviderSpy).not.toHaveBeenCalled();
+		expect(state.current).toBeUndefined();
+	});
+
 	it("rejects connect attempts missing the admin header (CSRF guard) without storing anything", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-llm-router-"));
 		const { accountPath } = setup(() => ({ provider: workingProvider("anthropic"), description: "anthropic" }));
@@ -191,6 +232,41 @@ describe("llmAccountRouter", () => {
 
 		const statusResult = await call(server, "GET", "/account/llm/status");
 		expect(statusResult.body).toEqual({ connected: false });
+	});
+
+	it("does not clear state or the persisted file when the fallback resolver throws", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-llm-router-"));
+		const existing: ConnectedLlmAccount = { provider: "anthropic", apiKey: "sk-1", connectedAt: "now" };
+		const holder = new LlmProviderHolder(workingProvider("anthropic"));
+		const setProviderSpy = jest.spyOn(holder, "setProvider");
+		const state = createLlmAccountState(existing);
+		const accountPath = join(dir, "llm-account.json");
+		await saveAccount(accountPath, existing);
+
+		const app = express();
+		app.use(express.json());
+		app.use(
+			"/account/llm",
+			llmAccountRouter(
+				state,
+				accountPath,
+				holder,
+				() => ({ provider: workingProvider("anthropic"), description: "anthropic" }),
+				() => {
+					throw new Error("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY to be set");
+				},
+			),
+		);
+		app.use(errorHandler);
+		server = app.listen(0);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status } = await call(server, "POST", "/account/llm/disconnect", undefined, ADMIN_HEADERS);
+
+		expect(status).toBe(500);
+		expect(setProviderSpy).not.toHaveBeenCalled();
+		expect(state.current).toEqual(existing);
+		expect(await loadAccount(accountPath)).toEqual(existing);
 	});
 
 	it("rejects disconnect attempts missing the admin header", async () => {

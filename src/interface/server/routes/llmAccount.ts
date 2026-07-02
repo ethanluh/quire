@@ -54,9 +54,13 @@ export function llmAccountRouter(
 				return;
 			}
 
+			// Persist before swapping in the new provider: if saveAccount() throws (disk
+			// full, permissions), nothing in memory has changed yet, so the error response
+			// below matches reality instead of the pipeline silently running an unpersisted
+			// key that a later restart would revert without warning.
+			await saveAccount(accountPath, account);
 			llmProviderHolder.setProvider(candidate.provider);
 			llmAccountState.current = account;
-			await saveAccount(accountPath, account);
 
 			res.json({ connected: true, provider: account.provider, connectedAt: account.connectedAt });
 		} catch (err) {
@@ -66,9 +70,14 @@ export function llmAccountRouter(
 
 	router.post("/disconnect", localOnly, requireAdminHeader, async (_req, res, next) => {
 		try {
+			// Resolve the fallback before mutating any state: if it throws (e.g. a stale
+			// LLM_PROVIDER env var with no matching key set), nothing has changed yet, so
+			// the holder/state/disk stay consistent instead of the account being cleared
+			// while the holder is left silently serving the just-revoked provider.
+			const fallback = resolveFallback();
 			llmAccountState.current = undefined;
 			await clearAccount(accountPath);
-			llmProviderHolder.setProvider(resolveFallback().provider);
+			llmProviderHolder.setProvider(fallback.provider);
 			res.json({ connected: false });
 		} catch (err) {
 			next(err);

@@ -39,4 +39,14 @@ describe("LlmProviderHolder", () => {
 		// calls now reflects only the second provider's history, not a merge of both.
 		expect(holder.calls).toHaveLength(1);
 	});
+
+	it("snapshot() returns a plain reference unaffected by a later setProvider() call", async () => {
+		const holder = new LlmProviderHolder(makeProvider("first"));
+		const snapshot = holder.snapshot();
+
+		holder.setProvider(makeProvider("second"));
+		const response = await snapshot.complete([{ role: "user", content: "hi" }]);
+
+		expect(response).toBe("first: 1 messages");
+	});
 });
