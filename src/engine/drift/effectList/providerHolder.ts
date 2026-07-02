@@ -16,6 +16,15 @@ export class LlmProviderHolder implements LlmProvider {
 		this.current = provider;
 	}
 
+	// Returns whatever provider is current right now, as a plain (non-holder) reference.
+	// A caller running a multi-step operation that compares results against each other
+	// (e.g. one ingestion run clustering many PRs) should snapshot once up front rather
+	// than reading through the holder on every call, so a connect/disconnect that happens
+	// mid-run can't split that one run across two different providers/models.
+	snapshot(): LlmProvider {
+		return this.current;
+	}
+
 	get calls(): ReadonlyArray<LlmCall> {
 		return this.current.calls;
 	}
