@@ -25,6 +25,11 @@ describe("GeminiLlmProvider", () => {
 		jest.restoreAllMocks();
 	});
 
+	it("declares that it has a real embeddings endpoint", () => {
+		const provider = new GeminiLlmProvider({ apiKey: "gemini-test" });
+		expect(provider.supportsEmbeddings).toBe(true);
+	});
+
 	describe("complete", () => {
 		it("moves the system message to systemInstruction and maps assistant -> model", async () => {
 			const fetchMock = mockFetchOnce(200, {

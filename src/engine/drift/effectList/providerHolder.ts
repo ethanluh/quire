@@ -33,6 +33,10 @@ export class LlmProviderHolder implements LlmProvider {
 		return this.current.modelKey;
 	}
 
+	get supportsEmbeddings(): boolean {
+		return this.current.supportsEmbeddings;
+	}
+
 	complete(messages: ReadonlyArray<LlmMessage>, opts?: LlmCallOptions): Promise<string> {
 		return this.current.complete(messages, opts);
 	}

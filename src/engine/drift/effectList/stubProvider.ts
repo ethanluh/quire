@@ -9,6 +9,8 @@ export class StubLlmProvider implements LlmProvider {
 	// modelKeys to exercise cache-invalidation-on-provider-change behavior.
 	constructor(readonly modelKey: string = "stub") {}
 
+	readonly supportsEmbeddings = false;
+
 	get calls(): ReadonlyArray<LlmCall> {
 		return this._calls;
 	}

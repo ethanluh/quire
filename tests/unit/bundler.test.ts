@@ -17,6 +17,10 @@ class FlakyProvider implements LlmProvider {
 		return this.inner.modelKey;
 	}
 
+	get supportsEmbeddings(): boolean {
+		return this.inner.supportsEmbeddings;
+	}
+
 	queueCompletion(response: string): void {
 		this.inner.queueCompletion(response);
 	}
@@ -71,6 +75,10 @@ describe("buildBundles — clusters on drift-check evidence, not declaredDirecti
 		const stub = new StubLlmProvider();
 		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow to the auth endpoint"]));
 		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow to the auth endpoint"]));
+		// StubLlmProvider.supportsEmbeddings is false, so clustering compares pr-b against
+		// pr-a's centroid via a single classify() call (clusterClassifier.ts) instead of
+		// cosine similarity — "1" means "matches the first (only) existing bundle".
+		stub.queueCompletion("1");
 
 		const prs = [
 			makePR("pr-a", "add passwordless auth"),
@@ -185,6 +193,7 @@ describe("buildBundles — seeded clustering from a prior run's bundles", () => 
 		const stub = new StubLlmProvider();
 		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
 		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+		stub.queueCompletion("1"); // pr-b's classify() call matches pr-a's centroid
 
 		const prA = makePR("pr-a", "add passwordless auth");
 		const prB = makePR("pr-b", "add passwordless auth");
@@ -197,7 +206,7 @@ describe("buildBundles — seeded clustering from a prior run's bundles", () => 
 		const second: { bundles: ReadonlyArray<Bundle> } = await buildBundles(
 			[prA], stub, { similarityThreshold: 0.75 }, cache, [priorBundle],
 		);
-		expect(stub.calls).toHaveLength(2); // no new extraction; still just the two from setup
+		expect(stub.calls).toHaveLength(3); // no new extraction/classification; still just the three from setup
 		expect(second.bundles).toHaveLength(1);
 		expect(second.bundles[0]?.members.map((m) => m.id)).toEqual(["pr-a"]);
 	});

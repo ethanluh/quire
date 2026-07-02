@@ -37,6 +37,7 @@ async function call(
 function workingProvider(name: string): LlmProvider {
 	return {
 		modelKey: `stub:${name}`,
+		supportsEmbeddings: false,
 		calls: [],
 		async complete() {
 			return `${name} ok`;
@@ -50,6 +51,7 @@ function workingProvider(name: string): LlmProvider {
 function failingProvider(message: string): LlmProvider {
 	return {
 		modelKey: "stub:failing",
+		supportsEmbeddings: false,
 		calls: [],
 		async complete(): Promise<string> {
 			throw new Error(message);
@@ -65,6 +67,7 @@ function failingProvider(message: string): LlmProvider {
 function embedRestrictedProvider(message: string): LlmProvider {
 	return {
 		modelKey: "stub:embed-restricted",
+		supportsEmbeddings: true,
 		calls: [],
 		async complete() {
 			return "ok";

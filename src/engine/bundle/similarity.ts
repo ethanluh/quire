@@ -1,5 +1,6 @@
 import type { PullRequest } from "../types/core.js";
-import type { EmbeddingProvider } from "../drift/effectList/provider.js";
+import type { LlmProvider } from "../drift/effectList/provider.js";
+import { classifyBestMatch } from "../drift/effectList/clusterClassifier.js";
 import { settleWithConcurrency } from "../util/concurrency.js";
 
 const CENTROID_COMPARISON_CONCURRENCY = 4;
@@ -17,39 +18,27 @@ function cosineSimilarity(a: ReadonlyArray<number>, b: ReadonlyArray<number>): n
 	return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-function jaccardSimilarity(a: string, b: string): number {
-	const tokensA = new Set(a.toLowerCase().split(/\s+/).filter(Boolean));
-	const tokensB = new Set(b.toLowerCase().split(/\s+/).filter(Boolean));
-	let intersection = 0;
-	for (const t of tokensA) {
-		if (tokensB.has(t)) intersection++;
-	}
-	const union = tokensA.size + tokensB.size - intersection;
-	return union === 0 ? 0 : intersection / union;
-}
-
-// An embed() failure (real API error/outage) is let through rather than caught here,
-// so it propagates to the caller instead of being silently indistinguishable from a
-// provider's intentional all-zero-vector opt-out (see provider.ts's embed() contract).
+// Only ever called for a provider with supportsEmbeddings = true (see clusterPRs below) —
+// a provider that opts out of embeddings never reaches this function, so it doesn't need
+// to defend against all-zero/empty vectors itself.
+//
+// An embed() failure (real API error/outage) is let through rather than caught here, so it
+// propagates to the caller instead of being silently swallowed.
 export async function textSimilarity(
 	a: string,
 	b: string,
-	provider: EmbeddingProvider,
+	provider: Pick<LlmProvider, "embed">,
 ): Promise<number> {
 	// No extracted effects means no evidence of shared direction, regardless of what a
-	// given provider's embed() happens to return for empty/whitespace-only input. The stub
-	// provider and Anthropic (no embeddings endpoint) signal "no real embedding" with an
-	// all-zero vector, which falls back to Jaccard below — but a real embedding-capable
-	// provider like Gemini returns a real, deterministic, non-zero vector even for empty
-	// input, so two such PRs would otherwise score as identical (cosine similarity 1.0)
-	// no matter which provider is active. Checking this before any embed() call fixes the
-	// invariant at the right layer instead of relying on a particular provider's behavior
-	// for degenerate input (INV-1/INV-3: absence of evidence must never become evidence).
+	// given provider's embed() happens to return for empty/whitespace-only input — a real
+	// embedding-capable provider like Gemini returns a real, deterministic, non-zero vector
+	// even for empty input, so two such PRs would otherwise score as identical (cosine
+	// similarity 1.0) no matter which provider is active. Checking this before any embed()
+	// call fixes the invariant at the right layer instead of relying on a particular
+	// provider's behavior for degenerate input (INV-1/INV-3: absence of evidence must never
+	// become evidence).
 	if (a.trim() === "" || b.trim() === "") return 0;
 	const [vecA, vecB] = await Promise.all([provider.embed(a), provider.embed(b)]);
-	const allZeroA = vecA.every((v) => v === 0);
-	const allZeroB = vecB.every((v) => v === 0);
-	if (allZeroA || allZeroB) return jaccardSimilarity(a, b);
 	return cosineSimilarity(vecA, vecB);
 }
 
@@ -99,7 +88,7 @@ export interface EmbeddingCache {
 export async function clusterPRs(
 	prs: ReadonlyArray<PullRequest>,
 	effectsByPr: ReadonlyMap<string, ReadonlyArray<string>>,
-	provider: EmbeddingProvider,
+	provider: Pick<LlmProvider, "embed" | "complete" | "supportsEmbeddings">,
 	config: ClusterConfig,
 	seeds: ReadonlyArray<ClusterSeed> = [],
 	embeddingCache?: EmbeddingCache,
@@ -139,15 +128,20 @@ export async function clusterPRs(
 		promise.catch(() => embedCache.delete(text));
 		return promise;
 	}
-	const cachingProvider: EmbeddingProvider = { embed: cachedEmbed };
+	const cachingProvider: Pick<LlmProvider, "embed"> = { embed: cachedEmbed };
 
-	for (const pr of prs) {
-		const prEffectText = (effectsByPr.get(pr.id) ?? []).join(". ");
+	// Picks the best-matching existing centroid for one PR, or -1 to start a new cluster.
+	// Two strategies, chosen once per provider rather than inferred per call (see
+	// LlmProvider.supportsEmbeddings): cosine similarity over real embed() vectors when the
+	// provider has them, otherwise a single LLM classification call against every centroid
+	// at once (clusterClassifier.ts) — cheaper than one LLM call per centroid, and avoids
+	// falling back to a weak word-overlap heuristic for providers with no embeddings
+	// endpoint (e.g. Anthropic).
+	async function bestMatch(prEffectText: string): Promise<number> {
+		if (!provider.supportsEmbeddings) return classifyBestMatch(prEffectText, centroids, provider);
+
 		// Comparisons against every existing centroid are independent of each other for
 		// this PR, so they run concurrently (capped) instead of one round-trip at a time.
-		// A failure here must not discard clustering progress made for every other PR —
-		// skip this PR for this round instead, the same way extraction failures are
-		// isolated per-PR in buildBundles().
 		const settled = await settleWithConcurrency(
 			centroids,
 			CENTROID_COMPARISON_CONCURRENCY,
@@ -155,11 +149,7 @@ export async function clusterPRs(
 		);
 		const firstFailure = settled.find((r) => r.status === "rejected");
 		if (firstFailure !== undefined && firstFailure.status === "rejected") {
-			failures.push({
-				pr,
-				error: firstFailure.reason instanceof Error ? firstFailure.reason.message : String(firstFailure.reason),
-			});
-			continue;
+			throw firstFailure.reason;
 		}
 
 		let bestIdx = -1;
@@ -172,7 +162,23 @@ export async function clusterPRs(
 				bestIdx = i;
 			}
 		}
-		if (bestScore >= config.threshold && bestIdx >= 0) {
+		return bestScore >= config.threshold ? bestIdx : -1;
+	}
+
+	for (const pr of prs) {
+		const prEffectText = (effectsByPr.get(pr.id) ?? []).join(". ");
+		// A failure here must not discard clustering progress made for every other PR —
+		// skip this PR for this round instead, the same way extraction failures are
+		// isolated per-PR in buildBundles().
+		let bestIdx: number;
+		try {
+			bestIdx = await bestMatch(prEffectText);
+		} catch (err) {
+			failures.push({ pr, error: err instanceof Error ? err.message : String(err) });
+			continue;
+		}
+
+		if (bestIdx >= 0) {
 			clusters[bestIdx]!.push(pr);
 		} else {
 			clusters.push([pr]);

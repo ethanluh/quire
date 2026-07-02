@@ -27,6 +27,10 @@ class FlakyProvider implements LlmProvider {
 		return this.inner.modelKey;
 	}
 
+	get supportsEmbeddings(): boolean {
+		return this.inner.supportsEmbeddings;
+	}
+
 	queueCompletion(response: string): void {
 		this.inner.queueCompletion(response);
 	}

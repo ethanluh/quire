@@ -48,6 +48,8 @@ export class GeminiLlmProvider implements LlmProvider {
 		return `gemini:${this.model}+${this.embeddingModel}`;
 	}
 
+	readonly supportsEmbeddings = true;
+
 	async complete(messages: ReadonlyArray<LlmMessage>, opts?: LlmCallOptions): Promise<string> {
 		const system = messages.find((m) => m.role === "system")?.content;
 		// Gemini has no "system" role in contents and calls the assistant turn "model".

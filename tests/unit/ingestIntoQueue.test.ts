@@ -25,6 +25,7 @@ function taggedProvider(tag: string): LlmProvider {
 	const calls: LlmCall[] = [];
 	return {
 		modelKey: `stub:${tag}`,
+		supportsEmbeddings: false,
 		get calls(): ReadonlyArray<LlmCall> {
 			return calls;
 		},
