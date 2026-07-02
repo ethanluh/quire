@@ -92,7 +92,10 @@ function requireEnv(name: string): string {
 async function main(): Promise<void> {
 	const app = express();
 
-	const publicUrl = process.env["QUIRE_PUBLIC_URL"];
+	// `KEY=` (present but empty) in a .env file sets process.env.KEY to "", not undefined —
+	// normalize that to undefined here so every fallback below (`??`) actually triggers.
+	const rawPublicUrl = process.env["QUIRE_PUBLIC_URL"];
+	const publicUrl = rawPublicUrl !== undefined && rawPublicUrl !== "" ? rawPublicUrl : undefined;
 	const isProduction = publicUrl !== undefined && publicUrl.startsWith("https://");
 
 	let sessionSecret = process.env["QUIRE_SESSION_SECRET"];
@@ -104,8 +107,9 @@ async function main(): Promise<void> {
 				"(e.g. `openssl rand -hex 32`).",
 		);
 	}
-	const allowlist = createAllowlist(process.env["QUIRE_ALLOWED_GITHUB_LOGINS"]);
-	if (process.env["QUIRE_ALLOWED_GITHUB_LOGINS"] === undefined) {
+	const allowedLogins = process.env["QUIRE_ALLOWED_GITHUB_LOGINS"];
+	const allowlist = createAllowlist(allowedLogins);
+	if (allowedLogins === undefined || allowedLogins === "") {
 		console.warn("QUIRE_ALLOWED_GITHUB_LOGINS not set — any GitHub account can sign in. Set this before hosting.");
 	}
 
@@ -124,7 +128,7 @@ async function main(): Promise<void> {
 
 	const webhookSecret = process.env["GITHUB_APP_WEBHOOK_SECRET"];
 	const webhookConfig: WebhookConfig | undefined =
-		webhookSecret !== undefined && webhookSecret !== "" && publicUrl !== undefined && publicUrl !== ""
+		webhookSecret !== undefined && webhookSecret !== "" && publicUrl !== undefined
 			? { publicUrl, secret: webhookSecret }
 			: undefined;
 
