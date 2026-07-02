@@ -230,6 +230,25 @@ body {
 	flex: 0 0 auto;
 }
 
+/* Below this width the tags cluster is too wide to sit beside the info column
+   without squeezing the repo link into an unreadable ellipsis truncation —
+   stack instead of crowd. */
+@media (max-width: 700px) {
+	.pr-member-row {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.pr-member-info a {
+		overflow: visible;
+		white-space: normal;
+	}
+
+	.pr-member-tags {
+		flex-wrap: wrap;
+	}
+}
+
 /* Tabs */
 .tabs {
 	display: flex;
