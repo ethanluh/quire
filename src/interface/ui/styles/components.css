@@ -136,6 +136,12 @@ body {
 	box-shadow: var(--focus-ring);
 }
 
+.btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+	pointer-events: none;
+}
+
 .btn-accept { color: var(--color-accept); --btn-color: var(--color-accept); }
 .btn-defer  { color: var(--color-defer); --btn-color: var(--color-defer); }
 .btn-reject { color: var(--color-reject); --btn-color: var(--color-reject); }
