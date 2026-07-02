@@ -8,12 +8,14 @@ export interface ConnectedLlmAccount {
 }
 
 function isConnectedLlmAccount(value: unknown): value is ConnectedLlmAccount {
+	if (typeof value !== "object" || value === null) return false;
+	const v = value as Record<string, unknown>;
 	return (
-		typeof value === "object" &&
-		value !== null &&
-		((value as Record<string, unknown>)["provider"] === "anthropic" ||
-			(value as Record<string, unknown>)["provider"] === "gemini") &&
-		typeof (value as Record<string, unknown>)["apiKey"] === "string"
+		(v["provider"] === "anthropic" || v["provider"] === "gemini") &&
+		typeof v["apiKey"] === "string" &&
+		v["apiKey"].length > 0 &&
+		typeof v["connectedAt"] === "string" &&
+		v["connectedAt"].length > 0
 	);
 }
 

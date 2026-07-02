@@ -79,4 +79,34 @@ describe("fetchWithRetry", () => {
 		await expect(fetchWithRetry("Test", "https://example.com", {})).rejects.toBe(networkError);
 		expect(fetchMock).toHaveBeenCalledTimes(3);
 	});
+
+	it("passes an AbortSignal to fetch so a request can be bounded by a timeout", async () => {
+		const fetchMock = jest.fn((_url: string, _init: RequestInit) => Promise.resolve(jsonResponse(200, { ok: true })));
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		await fetchWithRetry("Test", "https://example.com", {});
+
+		const callInit = fetchMock.mock.calls[0]?.[1];
+		expect(callInit?.signal).toBeInstanceOf(AbortSignal);
+	});
+
+	it("aborts a hung request instead of waiting forever, once the per-attempt timeout elapses", async () => {
+		// Simulates a black-holed connection: fetch() never resolves on its own, only
+		// reacting to the abort signal — the same way a real fetch() implementation would.
+		const fetchMock = jest.fn((_url: string, init: RequestInit) => {
+			return new Promise((_resolve, reject) => {
+				const signal = init.signal as AbortSignal;
+				const onAbort = () => reject(new DOMException("The operation was aborted.", "AbortError"));
+				if (signal.aborted) {
+					onAbort();
+					return;
+				}
+				signal.addEventListener("abort", onAbort);
+			});
+		});
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		await expect(fetchWithRetry("Test", "https://example.com", {}, 20)).rejects.toThrow(/aborted/i);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
 });
