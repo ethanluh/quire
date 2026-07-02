@@ -6,6 +6,7 @@ function makeProvider(name: string): LlmProvider {
 	const calls: LlmCall[] = [];
 	return {
 		modelKey: `stub:${name}`,
+		supportsEmbeddings: true,
 		get calls() {
 			return calls;
 		},

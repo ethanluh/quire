@@ -17,6 +17,11 @@ describe("AnthropicLlmProvider", () => {
 		jest.restoreAllMocks();
 	});
 
+	it("declares that it has no embeddings endpoint", () => {
+		const provider = new AnthropicLlmProvider({ apiKey: "sk-test" });
+		expect(provider.supportsEmbeddings).toBe(false);
+	});
+
 	it("sends the system message separately and turns the rest into the messages array", async () => {
 		const fetchMock = mockFetchOnce(200, { content: [{ type: "text", text: '["adds OTP login"]' }] });
 		const provider = new AnthropicLlmProvider({ apiKey: "sk-test" });
