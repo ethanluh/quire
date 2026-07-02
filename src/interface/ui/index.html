@@ -672,17 +672,20 @@ llmDisconnectBtn.addEventListener('click', async () => {
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
+  const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isSelected
       ? '<span class="badge badge-clean">Selected</span>'
-      : `<button class="btn btn-defer" onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">Select</button>`}
+      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">${isTarget ? 'Selecting…' : 'Select'}</button>`}
   </div>`;
 }
 
 let loadedRepos = [];
 let loadedSelectedRepo = null;
+let repoSelectionInProgress = false;
+let repoSelectionTarget = null;
 
 function renderRepoList() {
   const listEl = document.getElementById('repo-list');
@@ -714,31 +717,41 @@ async function loadRepos(selectedRepo) {
 document.getElementById('repo-search').addEventListener('input', renderRepoList);
 
 async function selectRepo(owner, name) {
-  const result = await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
-  if (result.error) {
-    showAccountResult('Error: ' + result.error, true);
-    return;
+  repoSelectionInProgress = true;
+  repoSelectionTarget = { owner, name };
+  renderRepoList();
+  showAccountResult(`Selecting ${owner}/${name} — fetching and ingesting pull requests…`, false);
+  try {
+    const result = await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
+    if (result.error) {
+      showAccountResult('Error: ' + result.error, true);
+      return;
+    }
+    const skipped = result.skipped || [];
+    const parts = [`Selected ${owner}/${name}.`, `${result.bundlesCreated || 0} bundle(s) created.`];
+    if (skipped.length) {
+      // Most commonly: the PR body has no <!-- declared-direction: ... --> marker
+      // (INV-1's fail-closed case) — surfaced so an empty/short queue isn't a silent mystery.
+      parts.push(`${skipped.length} PR(s) could not be ingested (e.g. missing declared-direction marker) and were skipped.`);
+    }
+    if (result.webhookRegistered) {
+      parts.push('Webhook registered — new PRs will be ingested automatically.');
+    } else if (result.webhookError) {
+      parts.push(`Webhook registration failed (${result.webhookError}) — falling back to periodic polling.`);
+    } else if (result.webhookDisabledReason) {
+      parts.push('Webhooks not configured — falling back to periodic polling.');
+    }
+    // loadAccount() resets account-result's visibility as part of its normal refresh, so the
+    // message has to be shown after it settles, not before (same ordering as the OAuth
+    // redirect handler above).
+    await loadAccount();
+    showAccountResult(parts.join(' '), false);
+    loadReview();
+  } finally {
+    repoSelectionInProgress = false;
+    repoSelectionTarget = null;
+    renderRepoList();
   }
-  const skipped = result.skipped || [];
-  const parts = [`Selected ${owner}/${name}.`, `${result.bundlesCreated || 0} bundle(s) created.`];
-  if (skipped.length) {
-    // Most commonly: the PR body has no <!-- declared-direction: ... --> marker
-    // (INV-1's fail-closed case) — surfaced so an empty/short queue isn't a silent mystery.
-    parts.push(`${skipped.length} PR(s) could not be ingested (e.g. missing declared-direction marker) and were skipped.`);
-  }
-  if (result.webhookRegistered) {
-    parts.push('Webhook registered — new PRs will be ingested automatically.');
-  } else if (result.webhookError) {
-    parts.push(`Webhook registration failed (${result.webhookError}) — falling back to periodic polling.`);
-  } else if (result.webhookDisabledReason) {
-    parts.push('Webhooks not configured — falling back to periodic polling.');
-  }
-  // loadAccount() resets account-result's visibility as part of its normal refresh, so the
-  // message has to be shown after it settles, not before (same ordering as the OAuth
-  // redirect handler above).
-  await loadAccount();
-  showAccountResult(parts.join(' '), false);
-  loadReview();
 }
 
 // Theme: "paper" (light, default) and "ink" (dark) — same tokens, see styles/tokens.css.
