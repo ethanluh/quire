@@ -17,6 +17,7 @@ function makeCard(bundleId: string): ReviewCard {
 		flags: [],
 		drift: { status: "clean" },
 		residualDisclosure: "behavioral confirm not run",
+		inputsHash: "hash-1",
 	};
 }
 

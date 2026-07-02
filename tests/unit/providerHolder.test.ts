@@ -5,6 +5,7 @@ import type { LlmCall, LlmMessage, LlmProvider } from "../../src/engine/drift/ef
 function makeProvider(name: string): LlmProvider {
 	const calls: LlmCall[] = [];
 	return {
+		modelKey: `stub:${name}`,
 		get calls() {
 			return calls;
 		},

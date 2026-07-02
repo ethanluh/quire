@@ -5,6 +5,7 @@ import { createServerState } from "../../src/interface/server/state.js";
 import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
+import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 import type { PullRequest } from "../../src/engine/types/core.js";
 import type { LlmCall, LlmMessage, LlmProvider } from "../../src/engine/drift/effectList/provider.js";
@@ -12,6 +13,7 @@ import type { LlmCall, LlmMessage, LlmProvider } from "../../src/engine/drift/ef
 function makePR(id: string): PullRequest {
 	return {
 		id, repoOwner: "org", repoName: "repo", number: 1,
+		headSha: `sha-${id}`,
 		declaredDirection: "add passwordless auth",
 		diff: { raw: "", hunks: [] },
 		filesTouched: [`src/${id}.ts`],
@@ -22,6 +24,7 @@ function makePR(id: string): PullRequest {
 function taggedProvider(tag: string): LlmProvider {
 	const calls: LlmCall[] = [];
 	return {
+		modelKey: `stub:${tag}`,
 		get calls(): ReadonlyArray<LlmCall> {
 			return calls;
 		},
@@ -53,6 +56,7 @@ describe("ingestIntoQueue — pins the LLM provider for the duration of one inge
 			provider: holder,
 			analyzer: new StubStaticAnalyzer(),
 			auditStore: new AuditStore(),
+			prCache: new PrEffectCache(),
 		};
 
 		// ingestIntoQueue snapshots the holder's current provider synchronously before its
@@ -77,6 +81,7 @@ describe("ingestIntoQueue — pins the LLM provider for the duration of one inge
 			provider,
 			analyzer: new StubStaticAnalyzer(),
 			auditStore: new AuditStore(),
+			prCache: new PrEffectCache(),
 		};
 
 		await ingestIntoQueue([prA], createServerState(), deps);

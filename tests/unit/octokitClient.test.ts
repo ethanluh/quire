@@ -259,6 +259,7 @@ describe("OctokitGitHubClient", () => {
 				flags: [],
 				drift: { status: "clean" },
 				residualDisclosure: "behavioral confirm not run",
+				inputsHash: "hash-1",
 			});
 
 			expect(createComment).toHaveBeenCalledWith(

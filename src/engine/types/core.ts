@@ -20,6 +20,9 @@ export interface PullRequest {
 	repoOwner: string;
 	repoName: string;
 	number: number;
+	// The head commit SHA at fetch time. Used to detect when a PR's content has changed
+	// since a prior pipeline run (see src/engine/cache/prCache.ts) — never a verdict input.
+	headSha: string;
 	declaredDirection: string;
 	diff: Diff;
 	filesTouched: ReadonlyArray<string>;
@@ -59,6 +62,11 @@ export interface ReviewCard {
 	flags: ReadonlyArray<string>;
 	drift: DriftVerdict;
 	residualDisclosure: string;
+	// Fingerprint of everything blastRadius/flags/drift are computed from (see
+	// computeInputsHash in review/card.ts) — lets a later pipeline run prove those fields
+	// are still valid without recomputing them, while directionSummary (declaredDirection
+	// is metadata, not a drift-check input, INV-1) is always refreshed independent of this.
+	inputsHash: string;
 }
 
 export type GestureAction = "accept" | "defer" | "reject";

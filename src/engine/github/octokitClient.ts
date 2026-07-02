@@ -186,6 +186,7 @@ export class OctokitGitHubClient implements GitHubClient {
 			repo,
 			title: pr.title,
 			body: pr.body ?? "",
+			headSha: pr.head.sha,
 			diff: diffResponse.data as string,
 			ciStatus,
 			declaredDirection: extractDeclaredDirection(pr.body, owner, repo, pr.number),

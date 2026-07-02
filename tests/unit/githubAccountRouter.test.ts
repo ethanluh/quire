@@ -24,6 +24,7 @@ import { createAccountState } from "../../src/interface/server/accountState.js";
 import type { RefreshDeps } from "../../src/interface/server/refreshRepoQueue.js";
 import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
+import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
@@ -84,6 +85,7 @@ function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 		repo: "hello-world",
 		title: "Add OTP login",
 		body: "",
+		headSha: "sha-1",
 		diff: "diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -0,0 +1 @@\n+export function login() {}\n",
 		ciStatus: "success",
 		declaredDirection: "add passwordless auth",
@@ -144,6 +146,7 @@ describe("githubAccountRouter", () => {
 			provider,
 			analyzer: new StubStaticAnalyzer(),
 			auditStore: depsOverrides.auditStore ?? new AuditStore(),
+			prCache: new PrEffectCache(),
 		};
 		const refreshDeps: RefreshDeps = {
 			accountState,

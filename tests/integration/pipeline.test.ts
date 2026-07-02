@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { orchestratePipeline } from "../../src/engine/pipeline/pipeline.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
+import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { PullRequest } from "../../src/engine/types/core.js";
@@ -20,6 +21,10 @@ class FlakyProvider implements LlmProvider {
 
 	get calls(): ReadonlyArray<LlmCall> {
 		return this.inner.calls;
+	}
+
+	get modelKey(): string {
+		return this.inner.modelKey;
 	}
 
 	queueCompletion(response: string): void {
@@ -44,6 +49,7 @@ function makePR(id: string, direction: string, overrides: Partial<PullRequest> =
 	return {
 		id, repoOwner: "org", repoName: "repo",
 		number: parseInt(id.replace(/\D/g, "") || "1"),
+		headSha: `sha-${id}`,
 		declaredDirection: direction,
 		diff: { raw: "", hunks: [] },
 		filesTouched: [`src/${id}.ts`],
@@ -79,7 +85,7 @@ describe("orchestratePipeline — integration", () => {
 			makePR("pr-ok", "add passwordless auth"),
 		];
 
-		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore);
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore });
 		expect(result.rejected.map(p => p.id)).toContain("pr-fail");
 		expect(result.bundles.length).toBe(1);
 		expect(result.bundles[0]?.members.map(m => m.id)).toContain("pr-ok");
@@ -91,7 +97,7 @@ describe("orchestratePipeline — integration", () => {
 		analyzer.setFootprint([]);
 
 		const prs = [makePR("pr-1", "add passwordless auth")];
-		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore);
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore });
 		expect(result.cards.length).toBe(1);
 		expect(result.cards[0]?.residualDisclosure).toBeTruthy();
 	});
@@ -102,7 +108,7 @@ describe("orchestratePipeline — integration", () => {
 		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
 		analyzer.setFootprint([]);
 		const prs = [makePR("pr-1", "add passwordless auth")];
-		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore);
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore });
 		// Pipeline returns cards/bundles — it does not call the merge queue itself
 		// The route handler calls queue.enqueue() on gesture; the pipeline is pure
 		expect(result.cards.length).toBeGreaterThan(0);
@@ -117,7 +123,7 @@ describe("orchestratePipeline — integration", () => {
 		analyzer.setFootprint(["src/pr-1.ts"]);
 
 		const prs = [makePR("pr-1", "add passwordless auth")];
-		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore);
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore });
 		expect(result.cards[0]?.drift.status).toBe("flagged");
 	});
 
@@ -128,7 +134,7 @@ describe("orchestratePipeline — integration", () => {
 
 		const direction = "add passwordless auth";
 		const prs = [makePR("pr-1", direction)];
-		await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore);
+		await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore });
 
 		// First LLM call is the extractor — direction must not be in any message
 		const extractorCall = stub.calls[0];
@@ -146,7 +152,7 @@ describe("orchestratePipeline — integration", () => {
 		analyzer.setFootprint([]);
 
 		const prs = [makePR("pr-1", "add passwordless auth")];
-		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore);
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore });
 		expect(result.cards.length).toBe(1);
 	});
 
@@ -167,7 +173,7 @@ describe("orchestratePipeline — integration", () => {
 		};
 
 		const prs = [makePR("pr-1", "add passwordless auth")];
-		await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore, sink);
+		await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore, sink });
 
 		expect(gateDecisions).toEqual([
 			expect.objectContaining({ prId: "pr-1", criterionName: "buildFailure", mode: "enforce", triggered: false }),
@@ -192,7 +198,7 @@ describe("orchestratePipeline — integration", () => {
 		};
 
 		const prs = [makePR("pr-1", "add passwordless auth")];
-		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, stub, analyzer, auditStore, sink);
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore, sink });
 
 		expect(result.error).toBeUndefined();
 		expect(result.cards.length).toBe(1);
@@ -219,7 +225,7 @@ describe("orchestratePipeline — integration", () => {
 			};
 			const prs = [makePR("pr-1", "add passwordless auth", { ciStatus: "failure" })];
 
-			const result = await orchestratePipeline(prs, config, stub, analyzer, brokenAuditStore);
+			const result = await orchestratePipeline(prs, config, { provider: stub, analyzer, auditStore: brokenAuditStore });
 
 			expect(result.error).toBeTruthy();
 			expect(result.cards).toHaveLength(0);
@@ -238,11 +244,103 @@ describe("orchestratePipeline — integration", () => {
 			makePR("pr-good", "add passwordless auth"),
 		];
 
-		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, provider, analyzer, auditStore);
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider, analyzer, auditStore });
 
 		expect(result.error).toContain("pr-bad");
 		expect(result.bundles.length).toBe(1);
 		expect(result.bundles[0]?.members.map((m) => m.id)).toEqual(["pr-good"]);
 		expect(result.cards.length).toBe(1);
+	});
+
+	describe("incremental re-run: unchanged PRs skip re-extraction, re-clustering, and re-screening", () => {
+		it("reuses the prior run's bundle and card when nothing changed", async () => {
+			const prCache = new PrEffectCache();
+			stub.queueCompletion('["adds OTP login"]'); // extractor
+			stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }])); // matcher
+			analyzer.setFootprint([]);
+
+			const prs = [makePR("pr-1", "add passwordless auth")];
+			const first = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore, prCache });
+			expect(stub.calls).toHaveLength(2);
+
+			const second = await orchestratePipeline(
+				prs,
+				DEFAULT_CONFIG,
+				{ provider: stub, analyzer, auditStore, prCache },
+				{ bundles: first.bundles, cards: new Map(first.cards.map((c) => [c.bundleId, c])) },
+			);
+
+			// No new LLM calls: extraction skipped (cache hit) and the matcher skipped
+			// (bundle id unchanged, no re-extracted member) — the prior card is reused as-is.
+			expect(stub.calls).toHaveLength(2);
+			expect(second.bundles).toEqual(first.bundles);
+			expect(second.cards).toEqual(first.cards);
+		});
+
+		it("refreshes directionSummary on reuse even when nothing else about the PR changed (declaredDirection edited, no new commit)", async () => {
+			const prCache = new PrEffectCache();
+			stub.queueCompletion('["adds OTP login"]');
+			stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+			analyzer.setFootprint([]);
+
+			const prs = [makePR("pr-1", "add passwordless auth")];
+			const first = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore, prCache });
+			expect(first.cards[0]?.directionSummary).toBe("add passwordless auth");
+
+			// PR body edited on GitHub (declaredDirection changed) with no new commit —
+			// headSha unchanged, so effect extraction and the drift matcher must not re-run.
+			const editedPrs = [{ ...prs[0]!, declaredDirection: "refactor auth token storage" }];
+			const second = await orchestratePipeline(
+				editedPrs,
+				DEFAULT_CONFIG,
+				{ provider: stub, analyzer, auditStore, prCache },
+				{ bundles: first.bundles, cards: new Map(first.cards.map((c) => [c.bundleId, c])) },
+			);
+
+			expect(stub.calls).toHaveLength(2); // no re-extraction, no re-screen
+			expect(second.cards[0]?.directionSummary).toBe("refactor auth token storage");
+			expect(second.bundles[0]?.members[0]?.declaredDirection).toBe("refactor auth token storage");
+			// The drift verdict itself is untouched — only the display field refreshed.
+			expect(second.cards[0]?.drift).toEqual(first.cards[0]?.drift);
+		});
+
+		it("re-screens only the bundle whose member actually changed", async () => {
+			const prCache = new PrEffectCache();
+			stub.queueCompletion('["adds OTP login"]'); // pr-1 extractor
+			stub.queueCompletion('["migrates database connection pooling"]'); // pr-2 extractor
+			stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }])); // pr-1 matcher
+			stub.queueCompletion(JSON.stringify([{ clause: "migrates database connection pooling", matchedDirection: true }])); // pr-2 matcher
+			analyzer.setFootprint([]);
+
+			const pr1 = makePR("pr-1", "add passwordless auth");
+			const pr2 = makePR("pr-2", "migrate database");
+			const first = await orchestratePipeline(
+				[pr1, pr2], DEFAULT_CONFIG, { provider: stub, analyzer, auditStore, prCache },
+			);
+			expect(first.bundles).toHaveLength(2);
+			expect(stub.calls).toHaveLength(4);
+
+			// pr-2 gets a new commit (headSha changes); pr-1 is untouched.
+			stub.queueCompletion('["migrates database connection pooling with retries"]'); // pr-2 re-extraction
+			stub.queueCompletion(JSON.stringify([{ clause: "migrates database connection pooling with retries", matchedDirection: true }])); // pr-2 re-screen
+
+			const pr2Updated = { ...pr2, headSha: "sha-pr-2-v2" };
+			const second = await orchestratePipeline(
+				[pr1, pr2Updated],
+				DEFAULT_CONFIG,
+				{ provider: stub, analyzer, auditStore, prCache },
+				{ bundles: first.bundles, cards: new Map(first.cards.map((c) => [c.bundleId, c])) },
+			);
+
+			// Only pr-2's extraction + matcher re-ran (2 new calls) — pr-1's bundle/card
+			// carried over untouched.
+			expect(stub.calls).toHaveLength(6);
+			const pr1Bundle = second.bundles.find((b) => b.members.some((m) => m.id === "pr-1"));
+			const pr1CardBefore = first.cards.find((c) => c.bundleId === pr1Bundle?.id);
+			const pr1CardAfter = second.cards.find((c) => c.bundleId === pr1Bundle?.id);
+			// Reused (not the literal same object — directionSummary is always refreshed,
+			// see reuseReviewCard), but every other field is unchanged.
+			expect(pr1CardAfter).toEqual(pr1CardBefore);
+		});
 	});
 });

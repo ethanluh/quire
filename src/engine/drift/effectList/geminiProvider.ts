@@ -40,6 +40,14 @@ export class GeminiLlmProvider implements LlmProvider {
 		return this._calls;
 	}
 
+	// Combines both sub-models into one identity: a change to either the completion
+	// model or the embedding model must invalidate cached effects/embeddings, since
+	// either one changing means cached output no longer reflects what this provider
+	// would currently produce.
+	get modelKey(): string {
+		return `gemini:${this.model}+${this.embeddingModel}`;
+	}
+
 	async complete(messages: ReadonlyArray<LlmMessage>, opts?: LlmCallOptions): Promise<string> {
 		const system = messages.find((m) => m.role === "system")?.content;
 		// Gemini has no "system" role in contents and calls the assistant turn "model".

@@ -33,6 +33,7 @@ export function normalizePR(incoming: IncomingPR): PullRequest {
 		repoOwner: incoming.repoOwner,
 		repoName: incoming.repoName,
 		number: incoming.number,
+		headSha: incoming.headSha,
 		declaredDirection: incoming.declaredDirection,
 		diff: incoming.diff,
 		filesTouched,
