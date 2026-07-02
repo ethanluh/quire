@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { loadAuditStore } from "../../engine/gate/auditStore.js";
 import { MergeQueue } from "../../engine/queue/mergeQueue.js";
 import { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
+import { PrEffectCache } from "../../engine/cache/prCache.js";
 import type { GitHubClient } from "../../engine/github/client.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { OctokitGitHubClient } from "../../engine/github/octokitClient.js";
@@ -45,6 +46,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "../../../data");
 const QUEUE_PATH = join(DATA_DIR, "queue.json");
 const DECIDED_PRS_PATH = join(DATA_DIR, "decided-prs.json");
+const PR_CACHE_PATH = join(DATA_DIR, "pr-cache.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
 const GATE_LOG_PATH = join(DATA_DIR, "instrumentation/gate-decisions.ndjson");
 const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjson");
@@ -84,6 +86,9 @@ async function main(): Promise<void> {
 
 	const decidedStore = new DecidedPrStore(DECIDED_PRS_PATH);
 	await decidedStore.load();
+
+	const prCache = new PrEffectCache(PR_CACHE_PATH);
+	await prCache.load();
 
 	const oauthClientId = process.env["GITHUB_OAUTH_CLIENT_ID"];
 	const oauthClientSecret = process.env["GITHUB_OAUTH_CLIENT_SECRET"];
@@ -138,6 +143,7 @@ async function main(): Promise<void> {
 		provider: llmProviderHolder,
 		analyzer,
 		auditStore,
+		prCache,
 		instrumentationSink,
 	};
 

@@ -71,18 +71,41 @@ export interface ClusterResult {
 	failures: ReadonlyArray<ClusteringFailure>;
 }
 
+// One pre-existing cluster carried over from a prior clusterPRs() call, so its members
+// don't need to be re-compared against every centroid again (see buildBundles()'s caller
+// for how this is derived from the prior run's Bundle.effectSummary/members).
+export interface ClusterSeed {
+	centroidText: string;
+	members: ReadonlyArray<PullRequest>;
+}
+
+// Cross-run embedding memoization, keyed on the embedded text itself (structurally
+// satisfied by PrEffectCache — kept as a narrow interface here so this module doesn't
+// depend on the concrete cache implementation).
+export interface EmbeddingCache {
+	getEmbedding(text: string): ReadonlyArray<number> | undefined;
+	putEmbedding(text: string, vector: ReadonlyArray<number>): Promise<void>;
+}
+
 // Clusters on extracted-effect text, never on declaredDirection (INV-1): membership
 // must rest on the independent evidence the drift check produces, not the untrusted
 // declared-direction prior. effectsByPr is expected to come from extraction that ran
 // blind to declaredDirection (INV-2).
+//
+// `prs` should contain only PRs not already carried over via `seeds` — every PR passed
+// here is compared against every seed centroid plus any centroid created earlier in this
+// same call, exactly as if `seeds` didn't exist, just without re-doing the comparisons
+// `seeds`' own members already settled in a prior call.
 export async function clusterPRs(
 	prs: ReadonlyArray<PullRequest>,
 	effectsByPr: ReadonlyMap<string, ReadonlyArray<string>>,
 	provider: EmbeddingProvider,
 	config: ClusterConfig,
+	seeds: ReadonlyArray<ClusterSeed> = [],
+	embeddingCache?: EmbeddingCache,
 ): Promise<ClusterResult> {
-	const clusters: PullRequest[][] = [];
-	const centroids: string[] = [];
+	const clusters: PullRequest[][] = seeds.map((s) => [...s.members]);
+	const centroids: string[] = seeds.map((s) => s.centroidText);
 	const failures: ClusteringFailure[] = [];
 
 	// Caches in-flight/resolved embeddings by text for the life of this call, since a
@@ -95,7 +118,14 @@ export async function clusterPRs(
 	function cachedEmbed(text: string): Promise<ReadonlyArray<number>> {
 		const cached = embedCache.get(text);
 		if (cached !== undefined) return cached;
-		const promise = provider.embed(text);
+		const persisted = embeddingCache?.getEmbedding(text);
+		const promise =
+			persisted !== undefined
+				? Promise.resolve(persisted)
+				: provider.embed(text).then(async (vector) => {
+						await embeddingCache?.putEmbedding(text, vector);
+						return vector;
+					});
 		embedCache.set(text, promise);
 		promise.catch(() => embedCache.delete(text));
 		return promise;

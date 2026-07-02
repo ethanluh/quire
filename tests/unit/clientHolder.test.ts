@@ -12,6 +12,7 @@ function makeFixture(number: number): RawPRPayload {
 		title: "t",
 		body: "",
 		diff: "",
+		headSha: `sha-${number}`,
 		ciStatus: "success",
 		declaredDirection: "direction",
 		filesTouched: [],

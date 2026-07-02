@@ -6,6 +6,7 @@ const BASE_PAYLOAD = {
 	repoOwner: "org",
 	repoName: "repo",
 	number: 1,
+	headSha: "sha-1",
 	declaredDirection: "add passwordless auth",
 	diff: {
 		raw: "",
