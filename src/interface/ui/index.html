@@ -27,8 +27,7 @@
     color: var(--color-text-primary);
   }
   header .subtitle { font-size: var(--text-sm); color: var(--color-text-muted); }
-  header .btn-theme { margin-left: auto; }
-  header a.btn { text-decoration: none; }
+  header .btn-settings { margin-left: auto; }
 
   .tabs { padding: var(--space-3) var(--space-6) 0; background: var(--color-surface-page); }
 
@@ -144,21 +143,6 @@
   .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 64px; justify-content: center; }
   .repo-entry .badge-priority { font-size: var(--text-xs); flex: 0 0 auto; white-space: nowrap; }
 
-  .ingest-form p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
-  .ingest-form textarea {
-    width: 100%;
-    height: 220px;
-    background: var(--color-surface-overlay);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    color: var(--color-text-primary);
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    padding: var(--space-3);
-    resize: vertical;
-  }
-  .ingest-form textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-  .ingest-form .btn-ingest { margin-top: var(--space-3); }
   .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
   .result-msg.error { color: var(--color-reject); }
 
@@ -194,10 +178,7 @@
   <h1>Quire</h1>
   <span class="subtitle">Direction triage for swarm PRs</span>
   <span class="subtitle" id="signed-in-as" style="display:none"></span>
-  <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
-  <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
-  <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
-  <button class="btn btn-defer" id="btn-signout" style="display:none">Sign out</button>
+  <button class="btn btn-defer btn-settings" id="btn-settings" title="Settings" style="display:none">&#9881; Settings</button>
 </header>
 
 <div class="modal-backdrop" id="signin-gate" style="display:none">
@@ -215,8 +196,6 @@
   <div class="tab active" data-tab="review">Review queue</div>
   <div class="tab" data-tab="shelf">Shelf</div>
   <div class="tab" data-tab="queue">Merge queue</div>
-  <div class="tab" data-tab="ingest">Ingest</div>
-  <div class="tab" data-tab="account">Account</div>
 </div>
 
 <div id="pane-review" class="pane active">
@@ -241,48 +220,64 @@
   <button class="btn btn-accept" style="margin-top:16px" id="btn-process">Process next</button>
 </div>
 
-<div id="pane-ingest" class="pane">
-  <div class="ingest-form">
-    <p>Paste a PR payload (or array of payloads) as JSON:</p>
-    <textarea id="ingest-payload" placeholder='{"id":"pr-1","repoOwner":"org","repoName":"repo","number":1,"declaredDirection":"add passwordless auth","diff":{"raw":"...","hunks":[]},"ciStatus":"success"}'></textarea>
-    <button class="btn btn-defer btn-ingest" id="btn-ingest">Ingest</button>
-    <div id="ingest-result" class="result-msg" style="display:none"></div>
-  </div>
-</div>
+<div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
+  <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <h3 class="modal-title" id="settings-modal-title">Settings</h3>
 
-<div id="pane-account" class="pane">
-  <div class="account-panel">
-    <div class="account-status" id="account-status">Checking connection&hellip;</div>
-    <div id="account-connect-form">
-      <p>Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
-      <div class="account-connect-actions">
-        <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
+    <div class="settings-section">
+      <h4>Preferences</h4>
+      <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+      <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
+    </div>
+
+    <div class="settings-section">
+      <h4>Session</h4>
+      <button class="btn btn-defer" id="btn-signout">Sign out</button>
+    </div>
+
+    <div class="settings-section account-panel">
+      <h4>GitHub connection</h4>
+      <div class="account-status" id="account-status">Checking connection&hellip;</div>
+      <div id="account-connect-form">
+        <p>Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
+        <div class="account-connect-actions">
+          <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
+        </div>
+      </div>
+      <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
+      <div id="account-result" class="result-msg" style="display:none"></div>
+
+      <div class="repo-panel" id="repo-panel" style="display:none">
+        <h3>Repository to work on</h3>
+        <div class="automation-status" id="automation-status" style="display:none"></div>
+        <label class="auto-merge-toggle">
+          <input type="checkbox" id="chk-auto-merge">
+          Automatically merge accepted bundles (skips the manual "Process next" step)
+        </label>
+        <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
+        <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
       </div>
     </div>
-    <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
-    <div id="account-result" class="result-msg" style="display:none"></div>
 
-    <div class="repo-panel" id="repo-panel" style="display:none">
-      <h3>Repository to work on</h3>
-      <div class="automation-status" id="automation-status" style="display:none"></div>
-      <label class="auto-merge-toggle">
-        <input type="checkbox" id="chk-auto-merge">
-        Automatically merge accepted bundles (skips the manual "Process next" step)
-      </label>
-      <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
-      <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
+    <div class="settings-section account-panel">
+      <h4>LLM provider</h4>
+      <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles. Falls back to <code>.env</code> configuration (or a stub with no real extraction) when disconnected.</p>
+      <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
+      <div id="llm-connect-form">
+        <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
+      </div>
+      <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
+      <div id="llm-account-result" class="result-msg" style="display:none"></div>
     </div>
-  </div>
 
-  <div class="account-panel">
-    <h3>LLM provider</h3>
-    <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles. Falls back to <code>.env</code> configuration (or a stub with no real extraction) when disconnected.</p>
-    <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
-    <div id="llm-connect-form">
-      <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
+    <div class="settings-section">
+      <h4>Danger zone</h4>
+      <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
     </div>
-    <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
-    <div id="llm-account-result" class="result-msg" style="display:none"></div>
+
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-settings-modal-close">Close</button>
+    </div>
   </div>
 </div>
 
@@ -324,8 +319,25 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
-    if (tab.dataset.tab === 'account') { loadAccount(); loadLlmAccount(); }
   });
+});
+
+const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
+function openSettingsModal() {
+  settingsModalBackdrop.style.display = 'flex';
+  loadAccount();
+  loadLlmAccount();
+}
+function closeSettingsModal() {
+  settingsModalBackdrop.style.display = 'none';
+}
+document.getElementById('btn-settings').addEventListener('click', openSettingsModal);
+document.getElementById('btn-settings-modal-close').addEventListener('click', closeSettingsModal);
+settingsModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === settingsModalBackdrop) closeSettingsModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && settingsModalBackdrop.style.display !== 'none') closeSettingsModal();
 });
 
 async function api(method, path, body) {
@@ -562,28 +574,6 @@ document.getElementById('btn-process').addEventListener('click', async () => {
   loadQueue();
 });
 
-document.getElementById('btn-ingest').addEventListener('click', async () => {
-  const raw = document.getElementById('ingest-payload').value.trim();
-  const el = document.getElementById('ingest-result');
-  try {
-    const body = JSON.parse(raw);
-    const result = await api('POST', '/prs/ingest', body);
-    if (result.error) {
-      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created. ${result.error}`;
-      el.className = 'result-msg error';
-    } else {
-      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
-      el.className = 'result-msg';
-    }
-    el.style.display = 'block';
-    loadReview();
-  } catch (e) {
-    el.textContent = 'Error: ' + e.message;
-    el.className = 'result-msg error';
-    el.style.display = 'block';
-  }
-});
-
 const clearAllBtn = document.getElementById('btn-clear-all');
 clearAllBtn.style.display = 'inline-block';
 clearAllBtn.addEventListener('click', async () => {
@@ -605,18 +595,19 @@ clearAllBtn.addEventListener('click', async () => {
 const signinGate = document.getElementById('signin-gate');
 const signedInAsEl = document.getElementById('signed-in-as');
 const signoutBtn = document.getElementById('btn-signout');
+const settingsBtn = document.getElementById('btn-settings');
 
 function showSigninGate() {
   signinGate.style.display = 'flex';
   signedInAsEl.style.display = 'none';
-  signoutBtn.style.display = 'none';
+  settingsBtn.style.display = 'none';
 }
 
 function hideSigninGate(login) {
   signinGate.style.display = 'none';
   signedInAsEl.textContent = `Signed in as ${login}`;
   signedInAsEl.style.display = 'inline';
-  signoutBtn.style.display = 'inline-block';
+  settingsBtn.style.display = 'inline-block';
 }
 
 document.getElementById('btn-signin').addEventListener('click', async () => {
@@ -721,7 +712,7 @@ installBtn.addEventListener('click', async () => {
   history.replaceState(null, '', location.pathname);
   const signedIn = await checkSignedIn();
   if (!signedIn) return;
-  showTab('account');
+  openSettingsModal();
   await loadAccount();
   if (result === 'error') {
     showAccountResult('GitHub connection failed: ' + (params.get('reason') || 'unknown error'), true);
