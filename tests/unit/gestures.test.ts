@@ -84,6 +84,7 @@ describe("gesturesRouter — review queue removal", () => {
 	let state: ReturnType<typeof createServerState>;
 	let dataDir: string;
 	let github: StubGitHubClient;
+	let queue: MergeQueue;
 	let decidedStore: DecidedPrStore;
 	let accountState: AccountState;
 
@@ -91,7 +92,7 @@ describe("gesturesRouter — review queue removal", () => {
 		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
 		state = createServerState();
 		github = new StubGitHubClient();
-		const queue = new MergeQueue(join(dataDir, "queue.json"), github);
+		queue = new MergeQueue(join(dataDir, "queue.json"), github);
 		await queue.load();
 		decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
 		await decidedStore.load();
@@ -160,6 +161,9 @@ describe("gesturesRouter — review queue removal", () => {
 
 		expect(await res.json()).toEqual({ status: "queued", bundleId: "b-1c" });
 		expect(github.mergedPrs).toEqual([]);
+
+		const entries = await queue.listEntries();
+		expect(entries[0]?.card).toEqual(makeCard("b-1c"));
 	});
 
 	it("removes the card from the review queue on reject", async () => {

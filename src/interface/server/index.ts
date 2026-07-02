@@ -180,7 +180,7 @@ async function main(): Promise<void> {
 	app.use("/prs", prsRouter(state, pipelineDeps, queue));
 	app.use("/bundles", bundlesRouter(state));
 	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github, decidedStore, accountState));
-	app.use("/queue", queueRouter(queue));
+	app.use("/queue", queueRouter(queue, state, decidedStore));
 	app.use("/shelf", shelfRouter(state, decidedStore));
 	app.use("/audit", auditRouter(auditStore));
 	app.use(

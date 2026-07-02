@@ -1,4 +1,4 @@
-import type { Bundle } from "../types/core.js";
+import type { Bundle, ReviewCard } from "../types/core.js";
 import type { GitHubClient } from "../github/client.js";
 import type { MergeQueueEntry, QueueState } from "../types/queue.js";
 import { loadState, saveState } from "./persistence.js";
@@ -19,10 +19,11 @@ export class MergeQueue {
 		await saveState(this.statePath, this.state);
 	}
 
-	async enqueue(bundle: Bundle): Promise<void> {
+	async enqueue(bundle: Bundle, card?: ReviewCard): Promise<void> {
 		const entry: MergeQueueEntry = {
 			bundleId: bundle.id,
 			bundle,
+			...(card !== undefined ? { card } : {}),
 			enqueuedAt: new Date().toISOString(),
 			status: "queued",
 			revertedPrIds: [],
@@ -91,11 +92,12 @@ export class MergeQueue {
 		return this.state.entries.find((e) => e.bundleId === bundleId);
 	}
 
-	async removeQueued(bundleId: string): Promise<void> {
+	async removeQueued(bundleId: string): Promise<MergeQueueEntry | undefined> {
 		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "queued");
-		if (entry === undefined) return;
+		if (entry === undefined) return undefined;
 		this.state = { entries: this.state.entries.filter((e) => e.bundleId !== bundleId) };
 		await this.persist();
+		return entry;
 	}
 
 	async clear(): Promise<void> {
