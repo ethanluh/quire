@@ -42,6 +42,7 @@ export function buildReviewCard(
 		drift,
 		residualDisclosure: RESIDUAL_DISCLOSURE, // INV-6: always set
 		inputsHash: computeInputsHash(bundle),
+		memberCount: bundle.members.length,
 	};
 }
 
@@ -55,5 +56,6 @@ export function reuseReviewCard(bundle: Bundle, priorCard: ReviewCard): ReviewCa
 		...priorCard,
 		bundleId: bundle.id,
 		directionSummary: bundle.direction,
+		memberCount: bundle.members.length,
 	};
 }

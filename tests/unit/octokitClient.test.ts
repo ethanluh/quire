@@ -335,6 +335,7 @@ describe("OctokitGitHubClient", () => {
 				drift: { status: "clean" },
 				residualDisclosure: "behavioral confirm not run",
 				inputsHash: "hash-1",
+				memberCount: 0,
 			});
 
 			expect(createComment).toHaveBeenCalledWith(
@@ -359,6 +360,7 @@ describe("OctokitGitHubClient", () => {
 					drift: { status: "clean" },
 					residualDisclosure: "behavioral confirm not run",
 					inputsHash: "hash-1",
+					memberCount: 0,
 				}),
 			).rejects.toThrow(InsufficientGitHubPermissionError);
 		});
