@@ -106,7 +106,17 @@
     border-radius: var(--radius-md); color: var(--color-text-primary); font-family: var(--font-mono);
     font-size: var(--text-sm); padding: var(--space-3);
   }
-  .account-panel select { margin-bottom: var(--space-3); }
+  .account-panel select {
+    margin-bottom: var(--space-3);
+    appearance: none;
+    -webkit-appearance: none;
+    font-family: var(--font-body);
+    background-image: var(--select-chevron);
+    background-repeat: no-repeat;
+    background-position: right var(--space-3) center;
+    background-size: 12px;
+    padding-right: var(--space-8);
+  }
   .account-panel .btn { margin-top: var(--space-3); width: 100%; text-align: center; }
   .account-panel + .account-panel { margin-top: var(--space-6); }
   .account-status { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); font-size: var(--text-sm); }
@@ -317,6 +327,22 @@ const STAMP_DEADZONE = 24;
 async function loadReview() {
   reviewCards = await api('GET', '/bundles');
   renderStack();
+}
+
+// Pulls the selected repo's current PRs from GitHub before rendering, so a fresh page
+// load/reload reflects reality instead of whatever's been cached in server memory since
+// the last webhook or reconcile tick. Best-effort: a failed refresh still falls back to
+// rendering whatever's already there. Skipped on non-local UI since /repos/refresh is
+// localOnly-gated the same way the rest of the repo-management endpoints are.
+async function refreshAndLoadReview() {
+  if (isLocalUi) {
+    try {
+      await api('POST', '/account/github/repos/refresh', undefined, { 'X-Quire-Admin': '1' });
+    } catch (err) {
+      console.error('PR refresh failed', err);
+    }
+  }
+  loadReview();
 }
 
 function renderStack() {
@@ -708,7 +734,7 @@ async function selectRepo(owner, name) {
 const THEME_KEY = 'quire-theme';
 document.documentElement.setAttribute('data-theme', localStorage.getItem(THEME_KEY) === 'ink' ? 'ink' : 'paper');
 
-loadReview();
+refreshAndLoadReview();
 </script>
 </body>
 </html>

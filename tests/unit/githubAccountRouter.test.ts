@@ -542,6 +542,100 @@ describe("githubAccountRouter", () => {
 		expect(card?.directionSummary).toBe("direction two");
 	});
 
+	describe("POST /repos/refresh", () => {
+		it("is a no-op when no account is connected", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const { state } = setup(async () => ({ login: "octocat", scopes: [] }));
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh", undefined, ADMIN_HEADERS);
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(false);
+			expect(state.bundles.size).toBe(0);
+		});
+
+		it("is a no-op when an account is connected but no repo is selected", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const { state } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh", undefined, ADMIN_HEADERS);
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(false);
+			expect(state.bundles.size).toBe(0);
+		});
+
+		it("re-fetches and re-ingests the already-selected repo's open PRs", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const client = new StubGitHubClient();
+			client.addFixture("octocat", "hello-world", makePrFixture());
+			const provider = new StubLlmProvider();
+			provider.queueCompletion('["adds OTP login"]');
+			provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+			const { state } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				client,
+				provider,
+				{
+					login: "octocat",
+					token: "ghp_abc",
+					scopes: [],
+					connectedAt: "2026-06-30T00:00:00.000Z",
+					selectedRepo: { owner: "octocat", name: "hello-world" },
+				},
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh", undefined, ADMIN_HEADERS);
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(true);
+			expect(body["bundlesCreated"]).toBe(1);
+			expect(state.bundles.size).toBe(1);
+			const [card] = [...state.cards.values()];
+			expect(card?.directionSummary).toBe("add passwordless auth");
+		});
+
+		it("reports needsReconnect instead of a 5xx when the token can't be refreshed", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{
+					login: "octocat",
+					token: "ghp_abc",
+					scopes: [],
+					connectedAt: "2026-06-30T00:00:00.000Z",
+					selectedRepo: { owner: "octocat", name: "hello-world" },
+					// Expired with no refresh token and no OAuth configured (setup()'s default) —
+					// ensureValidAccessToken can't recover this and throws NeedsReconnectError.
+					tokenExpiresAt: "2020-01-01T00:00:00.000Z",
+				},
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh", undefined, ADMIN_HEADERS);
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(false);
+			expect(body["needsReconnect"]).toBe(true);
+		});
+	});
+
 	it("surfaces a partial pipeline failure in the response instead of silently succeeding", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
 		const client = new StubGitHubClient();

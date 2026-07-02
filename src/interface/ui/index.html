@@ -66,7 +66,8 @@
 
   .account-panel p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
   .account-connect-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-  .account-panel input, .account-panel select {
+  .account-panel input, .account-panel select,
+  .modal-backdrop input, .modal-backdrop select {
     width: 100%;
     max-width: 480px;
     background: var(--color-surface-overlay);
@@ -77,8 +78,19 @@
     font-size: var(--text-sm);
     padding: var(--space-2) var(--space-3);
   }
-  .account-panel input:focus-visible, .account-panel select:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-  .account-panel select { margin-bottom: var(--space-3); }
+  .account-panel input:focus-visible, .account-panel select:focus-visible,
+  .modal-backdrop input:focus-visible, .modal-backdrop select:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .account-panel select, .modal-backdrop select {
+    margin-bottom: var(--space-3);
+    appearance: none;
+    -webkit-appearance: none;
+    font-family: var(--font-body);
+    background-image: var(--select-chevron);
+    background-repeat: no-repeat;
+    background-position: right var(--space-3) center;
+    background-size: 12px;
+    padding-right: var(--space-8);
+  }
   .account-panel + .account-panel { margin-top: var(--space-6); }
   .account-status {
     display: flex;
@@ -348,6 +360,22 @@ async function loadReview() {
   const cards = await api('GET', '/bundles');
   const el = document.getElementById('card-list');
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, false)).join('') : '<div class="empty">No bundles in review queue.</div>';
+}
+
+// Pulls the selected repo's current PRs from GitHub before rendering, so a fresh page
+// load/reload reflects reality instead of whatever's been cached in server memory since
+// the last webhook or reconcile tick. Best-effort: a failed refresh still falls back to
+// rendering whatever's already there. Skipped on non-local UI since /repos/refresh is
+// localOnly-gated the same way the rest of the repo-management endpoints are.
+async function refreshAndLoadReview() {
+  if (isLocalUi) {
+    try {
+      await api('POST', '/account/github/repos/refresh', undefined, { 'X-Quire-Admin': '1' });
+    } catch (err) {
+      console.error('PR refresh failed', err);
+    }
+  }
+  loadReview();
 }
 
 async function loadShelf() {
@@ -718,7 +746,7 @@ if (location.search.includes('desktop=1')) {
 if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop') {
   location.replace('mobile.html');
 } else {
-  loadReview();
+  refreshAndLoadReview();
 }
 document.getElementById('link-mobile').addEventListener('click', () => {
   localStorage.removeItem(VIEW_PREF_KEY);

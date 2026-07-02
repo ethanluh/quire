@@ -11,7 +11,8 @@ import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
 import { OAuthExchangeError } from "../../../engine/github/oauth.js";
-import { clearRepoFromQueue, enqueueRefresh } from "../refreshRepoQueue.js";
+import { NeedsReconnectError } from "../../../engine/github/tokenRefresh.js";
+import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { localOnly } from "../middleware/localOnly.js";
 import { requireAdminHeader } from "../middleware/requireAdminHeader.js";
@@ -192,6 +193,33 @@ export function githubAccountRouter(
 			}
 		},
 	);
+
+	// A cheap, no-bookkeeping refresh of whatever repo is already selected — reused by the
+	// frontend on every page load/reload so the review queue reflects GitHub's current state
+	// rather than whatever happened to be in memory since the last webhook or reconcile tick.
+	// Unlike /repos/select, this never touches webhooks or persisted account state.
+	router.post("/repos/refresh", localOnly, requireAdminHeader, async (_req, res, next) => {
+		try {
+			const account = accountState.current;
+			const repo = account?.selectedRepo;
+			if (account === undefined || repo === undefined) {
+				res.json({ refreshed: false });
+				return;
+			}
+			const summary = await enqueueRefresh(repo.owner, repo.name, refreshDeps);
+			res.json({ refreshed: true, repo, ...summary });
+		} catch (err) {
+			if (err instanceof NeedsReconnectError) {
+				res.json({ refreshed: false, needsReconnect: true });
+				return;
+			}
+			if (err instanceof AccountChangedError) {
+				res.json({ refreshed: false });
+				return;
+			}
+			next(err);
+		}
+	});
 
 	router.post("/connect", localOnly, requireAdminHeader, validateBody(ConnectSchema), async (req, res, next) => {
 		try {
