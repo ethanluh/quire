@@ -24,7 +24,6 @@
     letter-spacing: var(--tracking-tight); color: var(--color-text-primary);
   }
   header .subtitle { font-size: var(--text-xs); color: var(--color-text-muted); flex: 1; }
-  header a { font-size: var(--text-sm); color: var(--color-brand); text-decoration: none; }
 
   main { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--color-surface-page); }
   .pane { display: none; padding: var(--space-4); height: 100%; }
@@ -94,13 +93,6 @@
   .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
   .status-landed  { background: var(--color-accept-wash); color: var(--color-accept); }
 
-  .ingest-form p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
-  .ingest-form textarea {
-    width: 100%; height: 40vh; background: var(--color-surface-overlay); border: 1px solid var(--color-border);
-    border-radius: var(--radius-md); color: var(--color-text-primary); font-family: var(--font-mono);
-    font-size: var(--text-sm); padding: var(--space-3); resize: vertical;
-  }
-  .ingest-form .btn-ingest { margin-top: var(--space-3); width: 100%; text-align: center; }
   .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
   .result-msg.error { color: var(--color-reject); }
 
@@ -121,7 +113,7 @@
     background-size: 12px;
     padding-right: var(--space-8);
   }
-  .account-panel .btn { margin-top: var(--space-3); width: 100%; text-align: center; }
+  .account-panel .btn, .settings-section .btn { margin-top: var(--space-3); width: 100%; text-align: center; }
   .account-panel + .account-panel { margin-top: var(--space-6); }
   .account-status { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); font-size: var(--text-sm); }
   .account-status .login { font-weight: var(--weight-medium); color: var(--color-text-primary); }
@@ -182,8 +174,7 @@
   <h1>Quire</h1>
   <span class="subtitle">Mobile triage</span>
   <span class="subtitle" id="signed-in-as" style="display:none"></span>
-  <a href="index.html?desktop=1">Desktop view</a>
-  <button class="btn btn-defer" id="btn-signout" style="display:none">Sign out</button>
+  <button class="btn btn-defer btn-settings" id="btn-settings" title="Settings" style="display:none">&#9881;</button>
 </header>
 
 <div class="modal-backdrop" id="signin-gate" style="display:none">
@@ -222,17 +213,31 @@
     <button class="btn btn-accept" style="margin-top:14px" id="btn-process">Process next</button>
   </div>
 
-  <div id="pane-ingest" class="pane">
-    <div class="ingest-form">
-      <p>Paste a PR payload (or array of payloads) as JSON:</p>
-      <textarea id="ingest-payload" placeholder='{"id":"pr-1","repoOwner":"org","repoName":"repo","number":1,"declaredDirection":"add passwordless auth","diff":{"raw":"...","hunks":[]},"ciStatus":"success"}'></textarea>
-      <button class="btn btn-defer btn-ingest" id="btn-ingest">Ingest</button>
-      <div id="ingest-result" class="result-msg" style="display:none"></div>
-    </div>
-  </div>
+  </main>
 
-  <div id="pane-account" class="pane">
-    <div class="account-panel">
+<nav class="tabbar">
+  <div class="tab active" data-tab="review"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></span>Review</div>
+  <div class="tab" data-tab="shelf"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg></span>Shelf</div>
+  <div class="tab" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Queue</div>
+</nav>
+
+<div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
+  <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <h3 class="modal-title" id="settings-modal-title">Settings</h3>
+
+    <div class="settings-section">
+      <h4>Preferences</h4>
+      <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+      <a class="btn btn-defer" id="link-desktop" href="index.html?desktop=1">Desktop view</a>
+    </div>
+
+    <div class="settings-section">
+      <h4>Session</h4>
+      <button class="btn btn-defer" id="btn-signout">Sign out</button>
+    </div>
+
+    <div class="settings-section account-panel">
+      <h4>GitHub connection</h4>
       <div class="account-status" id="account-status">Checking connection&hellip;</div>
       <div id="account-connect-form">
         <p>Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
@@ -252,8 +257,8 @@
       </div>
     </div>
 
-    <div class="account-panel">
-      <h3>LLM provider</h3>
+    <div class="settings-section account-panel">
+      <h4>LLM provider</h4>
       <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
       <div id="llm-connect-form">
         <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles.</p>
@@ -267,16 +272,12 @@
       <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
       <div id="llm-account-result" class="result-msg" style="display:none"></div>
     </div>
-  </div>
-</main>
 
-<nav class="tabbar">
-  <div class="tab active" data-tab="review"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></span>Review</div>
-  <div class="tab" data-tab="shelf"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg></span>Shelf</div>
-  <div class="tab" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Queue</div>
-  <div class="tab" data-tab="ingest"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span>Ingest</div>
-  <div class="tab" data-tab="account"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/></svg></span>Account</div>
-</nav>
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-settings-modal-close">Close</button>
+    </div>
+  </div>
+</div>
 
 <div id="toast"></div>
 
@@ -301,8 +302,25 @@ tabs.forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
-    if (tab.dataset.tab === 'account') { loadAccount(); loadLlmAccount(); }
   });
+});
+
+const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
+function openSettingsModal() {
+  settingsModalBackdrop.style.display = 'flex';
+  loadAccount();
+  loadLlmAccount();
+}
+function closeSettingsModal() {
+  settingsModalBackdrop.style.display = 'none';
+}
+document.getElementById('btn-settings').addEventListener('click', openSettingsModal);
+document.getElementById('btn-settings-modal-close').addEventListener('click', closeSettingsModal);
+settingsModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === settingsModalBackdrop) closeSettingsModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && settingsModalBackdrop.style.display !== 'none') closeSettingsModal();
 });
 
 async function api(method, path, body) {
@@ -731,47 +749,25 @@ document.getElementById('btn-process').addEventListener('click', async () => {
   loadQueue();
 });
 
-// --- Ingest ---
-document.getElementById('btn-ingest').addEventListener('click', async () => {
-  const raw = document.getElementById('ingest-payload').value.trim();
-  const el = document.getElementById('ingest-result');
-  try {
-    const body = JSON.parse(raw);
-    const result = await api('POST', '/prs/ingest', body);
-    if (result.error) {
-      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created. ${result.error}`;
-      el.className = 'result-msg error';
-    } else {
-      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
-      el.className = 'result-msg';
-    }
-    el.style.display = 'block';
-    loadReview();
-  } catch (e) {
-    el.textContent = 'Error: ' + e.message;
-    el.className = 'result-msg error';
-    el.style.display = 'block';
-  }
-});
-
 // --- Sign-in gate ---
 // The API itself enforces the session requirement; this gate is a UX convenience so the
 // app doesn't just sit there showing empty/error states before the user has signed in.
 const signinGate = document.getElementById('signin-gate');
 const signedInAsEl = document.getElementById('signed-in-as');
 const signoutBtn = document.getElementById('btn-signout');
+const settingsBtn = document.getElementById('btn-settings');
 
 function showSigninGate() {
   signinGate.style.display = 'flex';
   signedInAsEl.style.display = 'none';
-  signoutBtn.style.display = 'none';
+  settingsBtn.style.display = 'none';
 }
 
 function hideSigninGate(login) {
   signinGate.style.display = 'none';
   signedInAsEl.textContent = `Signed in as ${login}`;
   signedInAsEl.style.display = 'inline';
-  signoutBtn.style.display = 'inline-block';
+  settingsBtn.style.display = 'inline-block';
 }
 
 document.getElementById('btn-signin').addEventListener('click', async () => {
@@ -858,7 +854,7 @@ installBtn.addEventListener('click', async () => {
   history.replaceState(null, '', location.pathname);
   const signedIn = await checkSignedIn();
   if (!signedIn) return;
-  document.querySelector('.tab[data-tab="account"]').click();
+  openSettingsModal();
   await loadAccount();
   if (result === 'error') {
     const resultEl = document.getElementById('account-result');
@@ -983,7 +979,17 @@ async function selectRepo(owner, name) {
 
 // Theme: "paper" (light, default) and "ink" (dark) — kept in sync with the desktop view.
 const THEME_KEY = 'quire-theme';
-document.documentElement.setAttribute('data-theme', localStorage.getItem(THEME_KEY) === 'ink' ? 'ink' : 'paper');
+const themeBtn = document.getElementById('btn-theme');
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  themeBtn.textContent = theme === 'ink' ? 'Light' : 'Dark';
+}
+applyTheme(localStorage.getItem(THEME_KEY) === 'ink' ? 'ink' : 'paper');
+themeBtn.addEventListener('click', () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+});
 
 checkSignedIn().then((signedIn) => {
   if (signedIn) refreshAndLoadReview();
