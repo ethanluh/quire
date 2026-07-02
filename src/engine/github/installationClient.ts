@@ -26,6 +26,13 @@ export function buildInstallationOctokit(config: GitHubAppConfig, installationId
 	});
 }
 
+// A plain user-authenticated client (the sign-in OAuth token, cached in-memory — see
+// userTokenCache.ts), used only for the handful of user-scoped calls an installation
+// client can't make (starred/pinned repos). Never used for anything ingestion-related.
+export function buildUserOctokit(accessToken: string): Octokit {
+	return new Octokit({ auth: accessToken });
+}
+
 // OctokitGitHubClient itself needs no changes to support this — it only ever calls
 // this.octokit.rest.*/graphql/paginate, agnostic to how the instance authenticates.
 export function buildInstallationClient(config: GitHubAppConfig, installationId: number): OctokitGitHubClient {

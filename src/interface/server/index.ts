@@ -10,11 +10,12 @@ import type { GitHubClient } from "../../engine/github/client.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { loadInstallation } from "../../engine/github/installation.js";
-import { buildInstallationClient, buildInstallationOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
+import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
+import { buildInstallationClient, buildInstallationOctokit, buildUserOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
 import { InstallationRevokedError } from "../../engine/github/installationClient.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
-import { listInstallationRepositories } from "../../engine/github/repos.js";
+import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../engine/github/repos.js";
 import { resolveLlmProvider, buildLlmProviderFromAccount } from "./resolveLlmProvider.js";
 import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.js";
 import { loadAccount as loadLlmAccount } from "../../engine/llm/account.js";
@@ -136,6 +137,7 @@ async function main(): Promise<void> {
 	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
 	const installationBinding = await loadInstallation(INSTALLATION_PATH);
 	const accountState = createAccountState(installationBinding);
+	const userTokenCache = createUserTokenCache();
 
 	const decidedStore = new DecidedPrStore(DECIDED_PRS_PATH);
 	await decidedStore.load();
@@ -216,7 +218,10 @@ async function main(): Promise<void> {
 
 	// Login-establishing routes: reachable without a session (that's the point). Mounted
 	// before the global `session` middleware below applies to everything else.
-	app.use("/account/github", accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session));
+	app.use(
+		"/account/github",
+		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache),
+	);
 
 	app.use(session);
 
@@ -229,6 +234,8 @@ async function main(): Promise<void> {
 			(installationId) => listInstallationRepositories(buildInstallationOctokit(appConfig, installationId)),
 			(installationId) => getInstallationAccount(appConfig, installationId),
 			isProduction,
+			userTokenCache,
+			(repos, accessToken) => enrichWithStarredAndPinned(repos, buildUserOctokit(accessToken)),
 		),
 	);
 	app.use("/prs", prsRouter(state, pipelineDeps, queue));

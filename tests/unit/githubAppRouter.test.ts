@@ -25,6 +25,8 @@ import type { PipelineDeps } from "../../src/interface/server/ingestIntoQueue.js
 import type { RawPRPayload } from "../../src/engine/github/client.js";
 import type { InstallationAccount } from "../../src/engine/github/installationClient.js";
 import { RequestError } from "@octokit/request-error";
+import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
+import type { UserTokenCache } from "../../src/engine/github/userTokenCache.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -115,12 +117,21 @@ describe("githubAppRouter", () => {
 			accountLogin: "acme-corp",
 			accountType: "Organization",
 		}),
-	): { accountPath: string; state: ServerState; refreshDeps: RefreshDeps } {
+		// Simulates requireSession having already run and populated res.locals.login — this
+		// router is mounted after that middleware in production (see index.ts), so tests that
+		// care about the starred/pinned enrichment path (which reads res.locals.login) opt in
+		// by passing a login here rather than standing up the whole session stack.
+		loginForRequests: string | undefined = undefined,
+		enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>> = async (
+			repos,
+		) => repos,
+	): { accountPath: string; state: ServerState; refreshDeps: RefreshDeps; userTokenCache: UserTokenCache } {
 		const accountPath = join(dir, "installation.json");
 		const holder = new GitHubClientHolder(client);
 		const state = createServerState();
 		const accountState = createAccountState(initialBinding);
 		const decidedStore = new DecidedPrStore(join(dir, "decided-prs.json"));
+		const userTokenCache = createUserTokenCache();
 		const deps: PipelineDeps = {
 			config: PIPELINE_CONFIG,
 			provider,
@@ -139,6 +150,12 @@ describe("githubAppRouter", () => {
 		};
 		const app = express();
 		app.use(express.json());
+		if (loginForRequests !== undefined) {
+			app.use((_req, res, next) => {
+				res.locals.login = loginForRequests;
+				next();
+			});
+		}
 		app.use(
 			"/account/github",
 			githubAppRouter(
@@ -148,11 +165,13 @@ describe("githubAppRouter", () => {
 				listRepos,
 				getInstallationAccount,
 				false,
+				userTokenCache,
+				enrichWithUserToken,
 			),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
-		return { accountPath, state, refreshDeps };
+		return { accountPath, state, refreshDeps, userTokenCache };
 	}
 
 	it("reports not connected when no installation is bound", async () => {
@@ -195,7 +214,7 @@ describe("githubAppRouter", () => {
 	it("reuses the pending state when the same browser calls /install/start twice (double-click / second tab)", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		const repos: ReadonlyArray<RepoSummary> = [
-			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main" },
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main", starred: false, pinned: false },
 		];
 		setup(async () => repos);
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -225,7 +244,7 @@ describe("githubAppRouter", () => {
 	it("does not let one browser's /install/start invalidate another's in-flight install", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		const repos: ReadonlyArray<RepoSummary> = [
-			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main" },
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main", starred: false, pinned: false },
 		];
 		setup(async () => repos);
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -251,7 +270,7 @@ describe("githubAppRouter", () => {
 	it("binds the installation on a valid callback, persisting it and swapping in a real client", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		const repos: ReadonlyArray<RepoSummary> = [
-			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main" },
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main", starred: false, pinned: false },
 		];
 		const { accountPath } = setup(async () => repos);
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -363,7 +382,7 @@ describe("githubAppRouter", () => {
 	it("lists repos for the bound installation", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		const repos: ReadonlyArray<RepoSummary> = [
-			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main" },
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main", starred: false, pinned: false },
 		];
 		const listRepos = jest.fn(async (installationId: number) => {
 			expect(installationId).toBe(555);
@@ -382,6 +401,62 @@ describe("githubAppRouter", () => {
 		expect(status).toBe(200);
 		expect(body["repos"]).toEqual(repos);
 		expect(listRepos).toHaveBeenCalledTimes(1);
+	});
+
+	it("enriches with starred/pinned status when a user token is cached for the requester", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main", starred: false, pinned: false },
+			{ owner: "acme-corp", name: "gadgets", fullName: "acme-corp/gadgets", private: false, defaultBranch: "main", starred: false, pinned: false },
+		];
+		const enrichWithUserToken = jest.fn(async (input: ReadonlyArray<RepoSummary>, accessToken: string) =>
+			input.map((r) => ({ ...r, starred: r.fullName === "acme-corp/gadgets" && accessToken === "user-token" })),
+		);
+		const { userTokenCache } = setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"octocat",
+			enrichWithUserToken,
+		);
+		userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(enrichWithUserToken).toHaveBeenCalledTimes(1);
+		expect(body["repos"]).toEqual([
+			{ ...repos[0], starred: false },
+			{ ...repos[1], starred: true },
+		]);
+	});
+
+	it("skips enrichment (and never calls enrichWithUserToken) when no user token is cached for the requester", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main", starred: false, pinned: false },
+		];
+		const enrichWithUserToken = jest.fn(async (input: ReadonlyArray<RepoSummary>) => input);
+		setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"octocat",
+			enrichWithUserToken,
+		);
+		// Deliberately not calling userTokenCache.set — no cached token for "octocat".
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(enrichWithUserToken).not.toHaveBeenCalled();
+		expect(body["repos"]).toEqual(repos);
 	});
 
 	it("returns 400 for /repos when no installation is bound", async () => {
