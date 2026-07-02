@@ -9,6 +9,7 @@ import { createServerState } from "../../src/interface/server/state.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import type { PullRequest, Bundle, ReviewCard } from "../../src/engine/types/core.js";
 
@@ -79,7 +80,7 @@ describe("adminRouter POST /reset", () => {
 		const auditStore = new AuditStore();
 		await auditStore.add(makePR(), "duplicate", "looks like a dup");
 
-		const queue = new MergeQueue(queuePath, new StubGitHubClient());
+		const queue = new MergeQueue(queuePath, new StubGitHubClient(), new StubLlmProvider(), join(dir, "conflict.ndjson"));
 		await queue.load();
 		await queue.enqueue(makeBundle("b-3"));
 

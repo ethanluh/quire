@@ -1,5 +1,6 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
+import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 
 // MergeQueue is constructed once at startup holding a reference to a GitHubClient.
 // Connecting/disconnecting an account needs to change which client that reference
@@ -72,5 +73,31 @@ export class GitHubClientHolder implements GitHubClient {
 		params: { head: string; base: string; title: string; body: string },
 	): Promise<FoundOrCreatedPullRequest> {
 		return this.current.findOrCreatePullRequest(owner, repo, params);
+	}
+
+	getMergeability(owner: string, repo: string, prNumber: number): Promise<MergeabilityResult> {
+		return this.current.getMergeability(owner, repo, prNumber);
+	}
+
+	updateBranch(owner: string, repo: string, prNumber: number): Promise<void> {
+		return this.current.updateBranch(owner, repo, prNumber);
+	}
+
+	getConflictTrees(owner: string, repo: string, prNumber: number): Promise<ConflictTrees> {
+		return this.current.getConflictTrees(owner, repo, prNumber);
+	}
+
+	getBlobContent(owner: string, repo: string, sha: string): Promise<string> {
+		return this.current.getBlobContent(owner, repo, sha);
+	}
+
+	commitResolvedFiles(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		baseTipSha: string,
+		files: ReadonlyArray<ResolvedFile>,
+	): Promise<void> {
+		return this.current.commitResolvedFiles(owner, repo, prNumber, baseTipSha, files);
 	}
 }

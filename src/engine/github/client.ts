@@ -1,4 +1,5 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
+import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 
 export interface RawPRPayload {
 	id: string;
@@ -70,4 +71,30 @@ export interface GitHubClient {
 		repo: string,
 		params: { head: string; base: string; title: string; body: string },
 	): Promise<FoundOrCreatedPullRequest>;
+	// GitHub's own "not mergeable" reason, normalized — see types/mergeability.ts. Also
+	// carries head/base repo+branch+sha so callers can detect a fork (can't write to it)
+	// without a second API call.
+	getMergeability(owner: string, repo: string, prNumber: number): Promise<MergeabilityResult>;
+	// GitHub's native "Update branch" — merges the base branch into the PR's head branch
+	// server-side. No-op if already up to date. Throws if this itself hits a real conflict.
+	updateBranch(owner: string, repo: string, prNumber: number): Promise<void>;
+	// The three trees (merge-base, base-tip, head-tip) needed for a three-way merge, fetched
+	// once each rather than per-file — see types/mergeability.ts's ConflictTrees.
+	getConflictTrees(owner: string, repo: string, prNumber: number): Promise<ConflictTrees>;
+	// Decoded text content of a blob. Throws BinaryFileError if the blob isn't valid UTF-8.
+	getBlobContent(owner: string, repo: string, sha: string): Promise<string>;
+	// Commits already-resolved file contents to the PR's head branch as a two-parent merge
+	// commit (current head + current base tip), making the PR mergeable again. Throws
+	// NotFastForwardError if the head branch moved since getConflictTrees was called.
+	commitResolvedFiles(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		baseTipSha: string,
+		files: ReadonlyArray<ResolvedFile>,
+	): Promise<void>;
 }
+
+// Content that couldn't be decoded as UTF-8 text — a binary file. Conflict resolution
+// bails immediately on these rather than running diff3/an LLM over mangled bytes.
+export class BinaryFileError extends Error {}
