@@ -15,8 +15,9 @@ export interface HumanFinding {
 }
 
 // One row per (PR, criterion) evaluated by the gate — not just the criterion that
-// ultimately decided the outcome — so Phase 0's keep-rate and per-criterion
-// false-positive calculations can be computed directly from the log.
+// ultimately decided the outcome — so Phase 0's keep rate can be computed directly
+// from the log. The per-criterion false-positive rate additionally draws on
+// audit.ndjson's overturnedAt field (see docs/instrumentation.md, "Gate decisions").
 export interface GateDecisionLog {
 	prId: string;
 	criterionName: string;

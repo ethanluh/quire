@@ -134,6 +134,11 @@
 
   .empty { color: var(--color-text-faint); font-size: var(--text-base); padding: var(--space-10) 0; text-align: center; }
 
+  .audit-list { display: flex; flex-direction: column; gap: var(--space-3); overflow-y: auto; }
+  .audit-entry { font-size: var(--text-sm); display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
+  .audit-entry .audit-meta { display: flex; flex-direction: column; gap: var(--space-1); }
+  .audit-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
+
   /* --- Bottom tab bar --- */
   nav.tabbar {
     flex: 0 0 auto; display: flex; border-top: 1px solid var(--color-border); background: var(--color-surface-card);
@@ -196,6 +201,10 @@
     </div>
   </div>
 
+  <div id="pane-audit" class="pane">
+    <div class="audit-list" id="audit-list"><div class="empty">No shadow-mode audit entries.</div></div>
+  </div>
+
   <div id="pane-account" class="pane">
     <div class="account-panel">
       <div class="account-status" id="account-status">Checking connection&hellip;</div>
@@ -221,6 +230,7 @@
   <div class="tab" data-tab="shelf"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg></span>Shelf</div>
   <div class="tab" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Queue</div>
   <div class="tab" data-tab="ingest"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span>Ingest</div>
+  <div class="tab" data-tab="audit"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Audit</div>
   <div class="tab" data-tab="account"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/></svg></span>Account</div>
 </nav>
 
@@ -237,6 +247,7 @@ tabs.forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
+    if (tab.dataset.tab === 'audit') loadAudit();
     if (tab.dataset.tab === 'account') loadAccount();
   });
 });
@@ -518,6 +529,32 @@ document.getElementById('btn-process').addEventListener('click', async () => {
   await api('POST', '/queue/process');
   loadQueue();
 });
+
+// --- Audit ---
+function auditEntryHtml(entry) {
+  const prLabel = `${escapeHtml(entry.pr.repoOwner)}/${escapeHtml(entry.pr.repoName)}#${entry.pr.number}`;
+  const action = entry.overturnedAt !== null
+    ? '<span class="badge badge-flagged">Overturned</span>'
+    : `<button class="btn btn-reject" onclick="overturnAudit('${escapeHtml(entry.id)}')">Not a real flag</button>`;
+  return `<div class="audit-entry card">
+    <div class="audit-meta">
+      <div>${escapeHtml(entry.criterionName)} &mdash; ${escapeHtml(entry.reason)}</div>
+      <div class="entry-id">${prLabel}</div>
+    </div>
+    ${action}
+  </div>`;
+}
+
+async function loadAudit() {
+  const entries = await api('GET', '/audit');
+  const el = document.getElementById('audit-list');
+  el.innerHTML = entries.length ? entries.map(auditEntryHtml).join('') : '<div class="empty">No shadow-mode audit entries.</div>';
+}
+
+async function overturnAudit(entryId) {
+  await api('POST', `/audit/${entryId}/overturn`);
+  loadAudit();
+}
 
 // --- Ingest ---
 document.getElementById('btn-ingest').addEventListener('click', async () => {

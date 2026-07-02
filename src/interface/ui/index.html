@@ -160,6 +160,21 @@
   .status-queued  { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
   .status-landed  { background: var(--color-accept-wash); color: var(--color-accept); }
+
+  .audit-list { display: flex; flex-direction: column; gap: var(--space-2); }
+  .audit-entry {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .audit-entry .audit-meta { display: flex; flex-direction: column; gap: var(--space-1); }
+  .audit-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
 </style>
 </head>
 <body>
@@ -176,6 +191,7 @@
   <div class="tab" data-tab="shelf">Shelf</div>
   <div class="tab" data-tab="queue">Merge queue</div>
   <div class="tab" data-tab="ingest">Ingest</div>
+  <div class="tab" data-tab="audit">Audit</div>
   <div class="tab" data-tab="account">Account</div>
 </div>
 
@@ -207,6 +223,12 @@
     <textarea id="ingest-payload" placeholder='{"id":"pr-1","repoOwner":"org","repoName":"repo","number":1,"declaredDirection":"add passwordless auth","diff":{"raw":"...","hunks":[]},"ciStatus":"success"}'></textarea>
     <button class="btn btn-defer btn-ingest" id="btn-ingest">Ingest</button>
     <div id="ingest-result" class="result-msg" style="display:none"></div>
+  </div>
+</div>
+
+<div id="pane-audit" class="pane">
+  <div class="audit-list" id="audit-list">
+    <div class="empty">No shadow-mode audit entries.</div>
   </div>
 </div>
 
@@ -259,6 +281,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
+    if (tab.dataset.tab === 'audit') loadAudit();
     if (tab.dataset.tab === 'account') loadAccount();
   });
 });
@@ -336,6 +359,31 @@ async function loadQueue() {
   </div>`).join('');
 }
 
+function auditEntryHtml(entry) {
+  const prLabel = `${escapeHtml(entry.pr.repoOwner)}/${escapeHtml(entry.pr.repoName)}#${entry.pr.number}`;
+  const action = entry.overturnedAt !== null
+    ? '<span class="badge badge-flagged">Overturned</span>'
+    : `<button class="btn btn-reject" onclick="overturnAudit('${escapeHtml(entry.id)}')">Mark as false positive</button>`;
+  return `<div class="audit-entry">
+    <div class="audit-meta">
+      <div>${escapeHtml(entry.criterionName)} &mdash; ${escapeHtml(entry.reason)}</div>
+      <div class="entry-id">${prLabel} &middot; ${escapeHtml(entry.addedAt)}</div>
+    </div>
+    ${action}
+  </div>`;
+}
+
+async function loadAudit() {
+  const entries = await api('GET', '/audit');
+  const el = document.getElementById('audit-list');
+  el.innerHTML = entries.length ? entries.map(auditEntryHtml).join('') : '<div class="empty">No shadow-mode audit entries.</div>';
+}
+
+async function overturnAudit(entryId) {
+  await api('POST', `/audit/${entryId}/overturn`);
+  loadAudit();
+}
+
 async function gesture(bundleId, action) {
   await api('POST', `/bundles/${bundleId}/gesture`, { action });
   loadReview();
@@ -387,6 +435,7 @@ clearAllBtn.addEventListener('click', async () => {
   loadReview();
   loadShelf();
   loadQueue();
+  loadAudit();
 });
 
 // Connecting/disconnecting hits localhost-only, admin-header-gated endpoints, so the

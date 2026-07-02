@@ -110,4 +110,56 @@ describe("AuditStore persistence", () => {
 		await expect(store.clear()).rejects.toThrow();
 		expect(store.list()).toHaveLength(1);
 	});
+
+	it("assigns each entry a unique id", async () => {
+		const store = await loadAuditStore();
+		await store.add(makePR({ id: "pr-1" }), "duplicate", "looks like a dup");
+		await store.add(makePR({ id: "pr-2" }), "duplicate", "looks like a dup");
+
+		const [first, second] = store.list();
+		expect(first?.id).toBeTruthy();
+		expect(second?.id).toBeTruthy();
+		expect(first?.id).not.toBe(second?.id);
+		expect(first?.overturnedAt).toBeNull();
+	});
+
+	it("overturn() marks the matching entry and persists the rewrite", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-audit-"));
+		const logPath = join(dir, "audit.ndjson");
+		const store = new AuditStore(logPath);
+		await store.add(makePR({ id: "pr-1" }), "duplicate", "looks like a dup");
+		const [entry] = store.list();
+
+		const found = await store.overturn(entry?.id ?? "");
+
+		expect(found).toBe(true);
+		expect(store.list()[0]?.overturnedAt).not.toBeNull();
+
+		const reloaded = await loadAuditStore(logPath);
+		expect(reloaded.list()[0]?.overturnedAt).not.toBeNull();
+		expect(reloaded.list()[0]?.id).toBe(entry?.id);
+	});
+
+	it("overturn() returns false for an unknown id and leaves entries untouched", async () => {
+		const store = await loadAuditStore();
+		await store.add(makePR(), "duplicate", "looks like a dup");
+
+		const found = await store.overturn("does-not-exist");
+
+		expect(found).toBe(false);
+		expect(store.list()[0]?.overturnedAt).toBeNull();
+	});
+
+	it("overturn() is idempotent on an already-overturned entry", async () => {
+		const store = await loadAuditStore();
+		await store.add(makePR(), "duplicate", "looks like a dup");
+		const [entry] = store.list();
+
+		await store.overturn(entry?.id ?? "");
+		const firstOverturnedAt = store.list()[0]?.overturnedAt;
+		const secondCall = await store.overturn(entry?.id ?? "");
+
+		expect(secondCall).toBe(true);
+		expect(store.list()[0]?.overturnedAt).toBe(firstOverturnedAt);
+	});
 });
