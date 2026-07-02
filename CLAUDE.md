@@ -109,3 +109,20 @@ Phase order is load-bearing — do not reorder.
 - **Phase 2** — behavioral confirm on flagged tail (gated on Phase 0 showing material drift).
 - **Phase 2.5** — measure the silent-rider hole on passed members. Forks: negligible → ship; material → Phase 3.
 - **Phase 3** — directed/search-based test generation (conditional on Phase 2.5).
+
+## Quire conflict-resolution guidance
+
+When resolving a merge conflict in this repository (via Quire's conflict-resolution Action):
+
+- Prefer the more recently-authored intent when two changes are genuinely incompatible —
+  favor the incoming PR's change over stale `main` content, unless main's change is clearly a
+  bugfix the PR predates.
+- When both sides changed non-overlapping regions of the same file, preserve both changes —
+  never silently drop either side's edit.
+- Never leave `<<<<<<<`, `=======`, or `>>>>>>>` conflict markers in the final file content.
+- Use the PR's declared direction (given as context) as the tiebreaker when intent is
+  ambiguous — resolve in whichever way keeps that direction intact.
+- If you cannot confidently resolve a conflict without risking incorrect behavior, say so
+  explicitly rather than committing a plausible-looking but wrong resolution.
+- Run any available build/lint/test step after resolving, if the repo has one, before
+  finishing.
