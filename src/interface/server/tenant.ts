@@ -140,6 +140,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<T
 	}
 	const clientHolder = new GitHubClientHolder(initialClient);
 
+	// Resolved before MergeQueue below, which needs a provider for conflict resolution.
 	const connectedLlmAccount = await loadLlmAccount(llmAccountPath);
 	const llmAccountState = createLlmAccountState(connectedLlmAccount);
 	const { provider: initialLlmProvider } =
