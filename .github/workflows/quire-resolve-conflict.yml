@@ -1,0 +1,93 @@
+name: Quire conflict resolution
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      head_branch:
+        required: true
+        type: string
+      base_branch:
+        required: true
+        type: string
+      declared_direction:
+        required: true
+        type: string
+      callback_url:
+        required: true
+        type: string
+      callback_token:
+        required: true
+        type: string
+
+jobs:
+  resolve-conflict:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.head_branch }}
+          fetch-depth: 0
+
+      - name: Reproduce the conflict
+        run: |
+          git config user.name "quire-bot"
+          git config user.email "quire-bot@users.noreply.github.com"
+          git fetch origin "${{ github.event.inputs.base_branch }}"
+          git merge "origin/${{ github.event.inputs.base_branch }}" --no-edit || true
+
+      # Verify claude-code-action's exact input names against its own README before relying on
+      # this in production — written against the documented anthropics/claude-code-action
+      # interface at plan time, not confirmed against a live run.
+      - name: Resolve remaining conflicts with Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Resolve every remaining git merge conflict in this working tree (files still
+            containing <<<<<<<, =======, >>>>>>> markers). This PR's declared direction is:
+            "${{ github.event.inputs.declared_direction }}" — use it as the tiebreaker when
+            intent is ambiguous. Follow this repository's CLAUDE.md conflict-resolution
+            guidance. Edit the conflicted files in place, removing all markers. If you cannot
+            confidently resolve a conflict, write the reason to a file named
+            .quire-unresolved at the repo root instead of guessing.
+
+      - name: Verify no conflict markers remain
+        id: verify
+        run: |
+          if [ -f .quire-unresolved ]; then
+            echo "resolved=false" >> "$GITHUB_OUTPUT"
+            echo "reason=$(cat .quire-unresolved)" >> "$GITHUB_OUTPUT"
+          elif git grep -lE '^(<{7}( .*)?|={7}|>{7}( .*)?)$' -- . > /dev/null 2>&1; then
+            echo "resolved=false" >> "$GITHUB_OUTPUT"
+            echo "reason=resolved content still contained conflict markers" >> "$GITHUB_OUTPUT"
+          else
+            echo "resolved=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push
+        if: steps.verify.outputs.resolved == 'true'
+        run: |
+          git add -A
+          git commit -m "Resolve merge conflict via Quire conflict-resolution Action"
+          git push origin "HEAD:${{ github.event.inputs.head_branch }}"
+
+      - name: Report outcome back to Quire
+        if: always()
+        run: |
+          if [ "${{ steps.verify.outputs.resolved }}" = "true" ]; then
+            body='{"outcome":"resolved"}'
+          else
+            reason=${REASON:-"conflict-resolution workflow failed before verification completed"}
+            body=$(printf '{"outcome":"unresolved","reason":%s}' "$(printf '%s' "$reason" | jq -Rs .)")
+          fi
+          curl -sf -X POST "${{ github.event.inputs.callback_url }}" \
+            -H "content-type: application/json" \
+            -H "x-quire-callback-token: ${{ github.event.inputs.callback_token }}" \
+            -d "$body"
+        env:
+          REASON: ${{ steps.verify.outputs.reason }}
