@@ -120,10 +120,17 @@ body {
 	border-radius: var(--radius-md);
 	border: 1px solid currentColor;
 	background: transparent;
+	color: var(--btn-color);
 	cursor: pointer;
 	--btn-color: var(--color-text-muted);
 	transition: background var(--duration-fast) var(--ease-standard),
 		transform var(--duration-fast) var(--ease-standard);
+}
+
+.btn-settings {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
 }
 
 /* Hover fills the button with its own color. Note: this can't be written as
@@ -190,13 +197,13 @@ body {
 
 .modal-backdrop .detail-modal {
 	max-width: 640px;
+	max-height: 85vh;
+	overflow-y: auto;
 }
 
 @media (min-width: 700px) {
 	.modal-backdrop .detail-modal {
 		max-width: 900px;
-		max-height: 85vh;
-		overflow-y: auto;
 	}
 }
 
@@ -221,8 +228,14 @@ body {
 	margin: 0 0 var(--space-3);
 }
 
-.settings-section .btn + .btn {
-	margin-left: var(--space-2);
+.settings-btn-row {
+	display: flex;
+	gap: var(--space-2);
+}
+
+.settings-btn-row .btn {
+	flex: 1;
+	text-align: center;
 }
 
 .settings-section a.btn {
