@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { ServerState } from "../state.js";
+import { requireRole } from "../middleware/requireRole.js";
 
 export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore: DecidedPrStore): Router {
 	const router = Router();
@@ -14,7 +15,11 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 		}
 	});
 
-	router.post("/process", async (_req, res, next) => {
+	// Everything below actually mutates the shared merge queue (merges, reverts, requeues,
+	// pulls a bundle back to review) — restricted to the team's owner. Everyday triage
+	// (the accept/defer/reject gestures, which only enqueue) stays open to every member;
+	// see gestures.ts.
+	router.post("/process", requireRole("owner"), async (_req, res, next) => {
 		try {
 			const entry = await queue.dequeueNext();
 			if (entry === undefined) {
@@ -32,7 +37,7 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 	// A bundle stuck in "conflict" (automated resolution didn't apply or couldn't confidently
 	// resolve it — see INV-6) goes back to "queued" so the next /process pass tries again,
 	// whether the human fixed it manually on GitHub or just wants another attempt.
-	router.post("/:bundleId/retry", async (req, res, next) => {
+	router.post("/:bundleId/retry", requireRole("owner"), async (req, res, next) => {
 		try {
 			const bundleId = req.params["bundleId"] ?? "";
 			const retried = await queue.retryConflict(bundleId);
@@ -46,7 +51,7 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 		}
 	});
 
-	router.delete("/:bundleId/prs/:prId", async (req, res, next) => {
+	router.delete("/:bundleId/prs/:prId", requireRole("owner"), async (req, res, next) => {
 		try {
 			const bundleId = req.params["bundleId"] ?? "";
 			const prId = req.params["prId"] ?? "";
@@ -57,7 +62,7 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 		}
 	});
 
-	router.delete("/:bundleId", async (req, res, next) => {
+	router.delete("/:bundleId", requireRole("owner"), async (req, res, next) => {
 		try {
 			const bundleId = req.params["bundleId"] ?? "";
 			const removed = await queue.removeQueued(bundleId);

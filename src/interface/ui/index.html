@@ -548,7 +548,7 @@ async function loadQueue() {
     <div class="queue-entry-actions">
       <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
       <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
-      ${e.status === 'queued' ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
+      ${e.status === 'queued' && isOwner() ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
     </div>
   </div>`).join('');
 }
@@ -820,6 +820,51 @@ llmDisconnectBtn.addEventListener('click', async () => {
 });
 
 let loadedTeamId = null;
+let myRole = null;
+
+// Client-side hiding is UX only — requireRole on the server is the real enforcement, so
+// getting this wrong just means a disabled-looking button, not a security hole.
+function canManageMembers() { return myRole === 'owner' || myRole === 'admin'; }
+function isOwner() { return myRole === 'owner'; }
+
+function memberRowHtml(m) {
+  const badge = `<span class="badge badge-neutral">${escapeHtml(m.role)}</span>`;
+  if (!canManageMembers() || (m.role === 'owner' && !isOwner())) {
+    return `<div>${escapeHtml(m.login)} — ${badge}</div>`;
+  }
+  const roleOptions = ['owner', 'admin', 'member']
+    .filter((r) => r !== 'owner' || isOwner())
+    .map((r) => `<option value="${r}" ${r === m.role ? 'selected' : ''}>${r}</option>`)
+    .join('');
+  return `<div>${escapeHtml(m.login)} — ${badge}
+    <select onchange="setMemberRole('${escapeHtml(m.login)}', this.value)">${roleOptions}</select>
+    <button class="btn btn-reject" onclick="removeMember('${escapeHtml(m.login)}')">Remove</button>
+  </div>`;
+}
+
+async function setMemberRole(login, role) {
+  const result = await api('POST', `/account/team/members/${login}/role`, { role });
+  if (result.error) {
+    showTeamResult('Error: ' + result.error, true);
+  }
+  loadTeam();
+}
+
+async function removeMember(login) {
+  if (!confirm(`Remove ${login} from this team?`)) return;
+  const result = await api('POST', `/account/team/members/${login}/remove`, undefined);
+  if (result.error) {
+    showTeamResult('Error: ' + result.error, true);
+  }
+  loadTeam();
+}
+
+// Owner-only controls live outside the Team panel too (queue processing, auto-merge) —
+// applied here so every loadTeam() call keeps them in sync with the caller's current role.
+function applyRoleVisibility() {
+  document.getElementById('btn-process').style.display = isOwner() ? 'inline-block' : 'none';
+  document.getElementById('chk-auto-merge').disabled = !isOwner();
+}
 
 async function loadTeam() {
   const statusEl = document.getElementById('team-status');
@@ -832,11 +877,11 @@ async function loadTeam() {
     return;
   }
   loadedTeamId = status.teamId;
+  myRole = status.role;
   statusEl.innerHTML = `On <span class="login">${escapeHtml(status.name)}</span> as ${escapeHtml(status.role)}`;
   document.getElementById('team-name-input').value = status.name;
-  document.getElementById('team-members-list').innerHTML = status.members
-    .map((m) => `<div>${escapeHtml(m.login)} — <span class="badge badge-neutral">${escapeHtml(m.role)}</span></div>`)
-    .join('');
+  document.getElementById('team-members-list').innerHTML = status.members.map(memberRowHtml).join('');
+  applyRoleVisibility();
 
   const { teams } = await api('GET', '/account/team/list');
   document.getElementById('team-switcher').innerHTML = (teams || [])
@@ -1047,7 +1092,10 @@ if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop
   location.replace('mobile.html');
 } else {
   checkSignedIn().then((signedIn) => {
-    if (signedIn) refreshAndLoadReview();
+    if (signedIn) {
+      refreshAndLoadReview();
+      loadTeam(); // populates myRole before the Queue tab needs it for the Process/Remove buttons
+    }
   });
 }
 document.getElementById('link-mobile').addEventListener('click', () => {

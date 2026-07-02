@@ -9,6 +9,7 @@ import { setUpDeclaredDirectionConvention } from "../../../engine/github/repoSet
 import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { validateBody } from "../middleware/validation.js";
+import { requireRole } from "../middleware/requireRole.js";
 import { mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
 
 const SelectRepoSchema = z.object({
@@ -64,7 +65,9 @@ export function githubAppRouter(
 		});
 	});
 
-	router.post("/settings", validateBody(SettingsSchema), async (req, res, next) => {
+	// Owner-only: this changes team-wide automated-merge policy for every future accept by
+	// any member, so it needs at least as much protection as manually processing the queue.
+	router.post("/settings", requireRole("owner"), validateBody(SettingsSchema), async (req, res, next) => {
 		try {
 			const current = accountState.current;
 			if (current === undefined) {

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import express from "express";
+import type { Request, Response, NextFunction } from "express";
 import type { Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +12,17 @@ import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { createServerState } from "../../src/interface/server/state.js";
 import type { Bundle, ReviewCard } from "../../src/engine/types/core.js";
+import type { TeamRole } from "../../src/engine/types/team.js";
+
+// Real requests run behind resolveMembership, which always sets res.locals.membership
+// before reaching this router — this stands in for that, so isolated router tests keep
+// exercising the router's own logic instead of 401ing on a precondition it doesn't own.
+function stubMembership(role: TeamRole) {
+	return (_req: Request, res: Response, next: NextFunction) => {
+		res.locals.membership = { teamId: "test-team", role };
+		next();
+	};
+}
 
 function makeBundle(id: string): Bundle {
 	return {
@@ -65,6 +77,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 
 		const app = express();
 		app.use(express.json());
+		app.use(stubMembership("owner"));
 		app.use("/queue", queueRouter(queue, state, decidedStore));
 
 		await new Promise<void>((resolve) => {
@@ -141,6 +154,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 
 			const localApp = express();
 			localApp.use(express.json());
+			localApp.use(stubMembership("owner"));
 			localApp.use("/queue", queueRouter(localQueue, state, decidedStore));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
@@ -183,6 +197,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 
 			const localApp = express();
 			localApp.use(express.json());
+			localApp.use(stubMembership("owner"));
 			localApp.use("/queue", queueRouter(localQueue, state, decidedStore));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
@@ -199,6 +214,47 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			expect(entry?.conflict).toBeUndefined();
 
 			await new Promise<void>((resolve) => localServer.close(() => resolve()));
+		});
+	});
+
+	describe("role gating", () => {
+		async function makeAppAs(role: TeamRole): Promise<{ baseUrl: string; server: Server }> {
+			const app = express();
+			app.use(express.json());
+			app.use(stubMembership(role));
+			app.use("/queue", queueRouter(queue, state, decidedStore));
+			const localServer = await new Promise<Server>((resolve) => {
+				const s = app.listen(0, () => resolve(s));
+			});
+			const address = localServer.address();
+			if (address === null || typeof address === "string") throw new Error("expected AddressInfo");
+			return { baseUrl: `http://127.0.0.1:${address.port}`, server: localServer };
+		}
+
+		it.each<TeamRole>(["admin", "member"])("rejects %s from POST /process, retry, revert, and remove", async (role) => {
+			await queue.enqueue(makeBundle("bundle-1"));
+			const { baseUrl: roleBaseUrl, server: roleServer } = await makeAppAs(role);
+
+			const process = await fetch(`${roleBaseUrl}/queue/process`, { method: "POST" });
+			const retry = await fetch(`${roleBaseUrl}/queue/bundle-1/retry`, { method: "POST" });
+			const revert = await fetch(`${roleBaseUrl}/queue/bundle-1/prs/bundle-1-pr-1`, { method: "DELETE" });
+			const remove = await fetch(`${roleBaseUrl}/queue/bundle-1`, { method: "DELETE" });
+
+			expect(process.status).toBe(403);
+			expect(retry.status).toBe(403);
+			expect(revert.status).toBe(403);
+			expect(remove.status).toBe(403);
+
+			await new Promise<void>((resolve) => roleServer.close(() => resolve()));
+		});
+
+		it("still allows GET / (read-only) for a member", async () => {
+			const { baseUrl: roleBaseUrl, server: roleServer } = await makeAppAs("member");
+
+			const res = await fetch(`${roleBaseUrl}/queue`);
+			expect(res.status).toBe(200);
+
+			await new Promise<void>((resolve) => roleServer.close(() => resolve()));
 		});
 	});
 });
