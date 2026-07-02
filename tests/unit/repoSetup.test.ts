@@ -1,9 +1,17 @@
 import { describe, it, expect } from "@jest/globals";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
-import { setUpDeclaredDirectionConvention } from "../../src/engine/github/repoSetup.js";
+import { CONFLICT_RESOLUTION_WORKFLOW_PATH, setUpDeclaredDirectionConvention } from "../../src/engine/github/repoSetup.js";
 
 const TEMPLATE_PATH = ".github/pull_request_template.md";
 const WORKFLOW_PATH = ".github/workflows/quire-declared-direction.yml";
+const CLAUDE_MD_PATH = "CLAUDE.md";
+
+function seedFullyConformingRepo(client: StubGitHubClient): void {
+	client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+	client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, "name: existing workflow\n");
+	client.seedFile("acme-corp", "widgets", CONFLICT_RESOLUTION_WORKFLOW_PATH, "name: existing conflict-resolution workflow\n");
+	client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, "# CLAUDE.md\n\n## Quire conflict-resolution guidance\n\n...\n");
+}
 
 describe("setUpDeclaredDirectionConvention", () => {
 	it("opens a setup PR adding both the template section and the CI workflow when neither exists", async () => {
@@ -28,19 +36,54 @@ describe("setUpDeclaredDirectionConvention", () => {
 		expect(result.status).toBe("created");
 	});
 
-	it("reports already-set-up when the template already documents the marker and the workflow already exists", async () => {
+	it("reports already-set-up only once all four files conform", async () => {
 		const client = new StubGitHubClient();
-		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
-		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, "name: existing workflow\n");
+		seedFullyConformingRepo(client);
 
 		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
 
 		expect(result).toEqual({ status: "already-set-up" });
 	});
 
-	it("still creates a PR when only the workflow is missing", async () => {
+	it("still creates a PR when only the declared-direction workflow is missing", async () => {
 		const client = new StubGitHubClient();
 		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", CONFLICT_RESOLUTION_WORKFLOW_PATH, "name: existing conflict-resolution workflow\n");
+		client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, "# CLAUDE.md\n\n## Quire conflict-resolution guidance\n\n...\n");
+
+		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
+
+		expect(result.status).toBe("created");
+	});
+
+	it("still creates a PR when only the conflict-resolution workflow is missing", async () => {
+		const client = new StubGitHubClient();
+		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, "name: existing workflow\n");
+		client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, "# CLAUDE.md\n\n## Quire conflict-resolution guidance\n\n...\n");
+
+		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
+
+		expect(result.status).toBe("created");
+	});
+
+	it("still creates a PR when only CLAUDE.md is missing", async () => {
+		const client = new StubGitHubClient();
+		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, "name: existing workflow\n");
+		client.seedFile("acme-corp", "widgets", CONFLICT_RESOLUTION_WORKFLOW_PATH, "name: existing conflict-resolution workflow\n");
+
+		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
+
+		expect(result.status).toBe("created");
+	});
+
+	it("still creates a PR (rather than clobbering) when an unrelated CLAUDE.md already exists", async () => {
+		const client = new StubGitHubClient();
+		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, "name: existing workflow\n");
+		client.seedFile("acme-corp", "widgets", CONFLICT_RESOLUTION_WORKFLOW_PATH, "name: existing conflict-resolution workflow\n");
+		client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, "# Existing project guidance\n\nDo not touch the flux capacitor.\n");
 
 		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
 

@@ -41,6 +41,8 @@ import { accountRouter } from "./routes/account.js";
 import { githubAppRouter } from "./routes/githubApp.js";
 import type { WebhookConfig } from "./routes/webhook.js";
 import { webhookRouter } from "./routes/webhook.js";
+import { actionCallbackRouter } from "./routes/actionCallback.js";
+import { pollPendingResolutions } from "./resolutionPoll.js";
 import { verifyGithubSignature } from "./middleware/webhookSignature.js";
 import { errorHandler } from "./middleware/errors.js";
 import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
@@ -68,6 +70,10 @@ const LLM_ACCOUNT_PATH = join(DATA_DIR, "llm-account.json");
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const RECONCILE_INTERVAL_MS =
 	parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "20", 10) * 60 * 1000;
+const RESOLUTION_POLL_INTERVAL_MS =
+	parseInt(process.env["QUIRE_RESOLUTION_POLL_INTERVAL_MINUTES"] ?? "2", 10) * 60 * 1000;
+const RESOLUTION_TIMEOUT_MS =
+	parseInt(process.env["QUIRE_RESOLUTION_TIMEOUT_MINUTES"] ?? "20", 10) * 60 * 1000;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -134,6 +140,11 @@ async function main(): Promise<void> {
 			? { publicUrl, secret: webhookSecret }
 			: undefined;
 
+	// The conflict-resolution Action's callback needs a real reachable URL — same constraint
+	// as the GitHub webhook above. Without QUIRE_PUBLIC_URL, dispatching a conflict fails fast
+	// (see conflictResolution.ts) instead of waiting on a callback that could never arrive.
+	const actionCallbackBaseUrl = publicUrl !== undefined ? `${publicUrl}/callbacks/action-resolution` : undefined;
+
 	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
 	const installationBinding = await loadInstallation(INSTALLATION_PATH);
 	const accountState = createAccountState(installationBinding);
@@ -164,7 +175,7 @@ async function main(): Promise<void> {
 	console.log(`LLM provider: ${description}`);
 	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
 
-	const queue = new MergeQueue(QUEUE_PATH, github, llmProviderHolder, CONFLICT_LOG_PATH);
+	const queue = new MergeQueue(QUEUE_PATH, github, actionCallbackBaseUrl, CONFLICT_LOG_PATH);
 	await queue.load();
 
 	const analyzer = new TypeScriptAnalyzer();
@@ -222,6 +233,11 @@ async function main(): Promise<void> {
 		"/account/github",
 		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache),
 	);
+
+	// A third carve-out alongside the two OAuth routes above and the HMAC-verified GitHub
+	// webhook: called by a GitHub Actions runner, not a logged-in user, so it authenticates
+	// via a per-dispatch capability token instead of a session cookie (see routes/actionCallback.ts).
+	app.use("/callbacks/action-resolution", actionCallbackRouter(queue, CONFLICT_LOG_PATH));
 
 	app.use(session);
 
@@ -286,6 +302,17 @@ async function main(): Promise<void> {
 		});
 	}, RECONCILE_INTERVAL_MS);
 	reconcileTimer.unref();
+
+	// Fallback for the conflict-resolution callback (see routes/actionCallback.ts): if the
+	// Action's callback never arrives (network blip, the workflow's final step itself
+	// failing), a "resolving" entry would otherwise wait forever. This only checks elapsed
+	// time, not the Action run's actual status — the callback remains the primary signal.
+	const resolutionPollTimer = setInterval(() => {
+		pollPendingResolutions(queue, RESOLUTION_TIMEOUT_MS, CONFLICT_LOG_PATH).catch((err: unknown) => {
+			console.error("Resolution poll failed:", err);
+		});
+	}, RESOLUTION_POLL_INTERVAL_MS);
+	resolutionPollTimer.unref();
 
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);

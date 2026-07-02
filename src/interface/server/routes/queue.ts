@@ -1,14 +1,27 @@
 import { Router } from "express";
 import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
+import type { MergeQueueEntry } from "../../../engine/types/queue.js";
 import type { ServerState } from "../state.js";
+
+type RedactedMergeQueueEntry = Omit<MergeQueueEntry, "resolution"> & {
+	resolution?: Omit<NonNullable<MergeQueueEntry["resolution"]>, "callbackToken">;
+};
+
+// callbackToken is a bearer capability for the Action's callback — it must never reach a
+// client, so every entry serialized to a response goes through this first.
+function redactEntry(entry: MergeQueueEntry): RedactedMergeQueueEntry {
+	if (entry.resolution === undefined) return entry;
+	const { callbackToken: _callbackToken, ...rest } = entry.resolution;
+	return { ...entry, resolution: rest };
+}
 
 export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore: DecidedPrStore): Router {
 	const router = Router();
 
 	router.get("/", async (_req, res, next) => {
 		try {
-			res.json(await queue.listEntries());
+			res.json((await queue.listEntries()).map(redactEntry));
 		} catch (err) {
 			next(err);
 		}

@@ -536,6 +536,8 @@ describe("githubAppRouter", () => {
 				"## Declared direction\n\n<!-- declared-direction: ... -->\n",
 			);
 			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-declared-direction.yml", "name: existing\n");
+			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-resolve-conflict.yml", "name: existing conflict-resolution workflow\n");
+			client.seedFile("acme-corp", "widgets", "CLAUDE.md", "# CLAUDE.md\n\n## Quire conflict-resolution guidance\n\n...\n");
 			setup(async () => [], client, new StubLlmProvider(), {
 				installationId: 555,
 				accountLogin: "acme-corp",

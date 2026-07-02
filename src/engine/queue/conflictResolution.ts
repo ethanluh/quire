@@ -1,6 +1,5 @@
+import { randomBytes } from "node:crypto";
 import { merge as diff3Merge } from "node-diff3";
-import type { LlmProvider } from "../drift/effectList/provider.js";
-import { stripCodeFence } from "../drift/effectList/stripCodeFence.js";
 import type { PullRequest } from "../types/core.js";
 import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 import { NotFastForwardError } from "../types/mergeability.js";
@@ -74,81 +73,26 @@ export function planFileResolutions(trees: ConflictTrees): ReadonlyArray<FileRes
 	return plans;
 }
 
-export type FileConflictResolution = { status: "resolved"; content: string } | { status: "unresolved"; reason: string };
-
-// Line-anchored, not a substring match — a legitimate source file can contain `=======` as
-// a comment divider; only a full conflict-marker line counts.
-const CONFLICT_MARKER_LINE = /^<{7}(?: .*)?$|^={7}$|^>{7}(?: .*)?$/m;
-
-const SYSTEM_PROMPT = `You are resolving a git merge conflict in a single file. You will be given the file's
-content with git conflict markers (<<<<<<<, =======, >>>>>>>) showing two divergent
-versions, and the product direction the changed-side pull request is pursuing.
-Produce the fully resolved file content — the whole file, not just the conflicted
-region — that reasonably combines both sides' intent. Preserve everything outside the
-conflicted regions exactly as given.
-Output ONLY the resolved file in a single fenced code block, with no explanation.
-If you cannot confidently resolve this conflict without risking incorrect behavior, output
-exactly the single word UNRESOLVED and nothing else.`;
-
-// Runs the pure three-way merge first (node-diff3); only conflicted files reach the LLM.
-// Fail-closed throughout, mirroring drift/effectList/matcher.ts's convention: a failed LLM
-// call, an explicit "can't resolve," or leftover conflict-marker lines in the model's own
-// output are all treated as unresolved — never guessed at or partially applied.
-export async function resolveConflictedFile(
-	path: string,
-	mergeBaseContent: string,
-	oursContent: string,
-	theirsContent: string,
-	prDirection: string,
-	provider: LlmProvider,
-): Promise<FileConflictResolution> {
-	const merged = diff3Merge(oursContent, mergeBaseContent, theirsContent, {
-		stringSeparator: "\n",
-		label: { a: "PR (ours)", b: "main (theirs)" },
-	});
-	const mergedContent = merged.result.join("\n");
-	if (!merged.conflict) {
-		return { status: "resolved", content: mergedContent };
-	}
-
-	const userContent = `File: ${path}\nPR direction: "${prDirection}"\n\nConflicted file content:\n\`\`\`\n${mergedContent}\n\`\`\``;
-
-	let response: string;
-	try {
-		response = await provider.complete([
-			{ role: "system", content: SYSTEM_PROMPT },
-			{ role: "user", content: userContent },
-		]);
-	} catch (err) {
-		return { status: "unresolved", reason: `LLM call failed: ${err instanceof Error ? err.message : String(err)}` };
-	}
-
-	const stripped = stripCodeFence(response).trim();
-	if (stripped === "UNRESOLVED") {
-		return { status: "unresolved", reason: "model declined to resolve confidently" };
-	}
-	if (CONFLICT_MARKER_LINE.test(stripped)) {
-		return { status: "unresolved", reason: "resolved content still contained conflict markers" };
-	}
-	return { status: "resolved", content: stripped };
-}
-
-export interface ConflictResolutionOutcome {
-	resolved: boolean;
-	reason?: string;
-}
+export type ConflictResolutionOutcome =
+	| { status: "resolved" }
+	| { status: "failed"; reason: string }
+	| { status: "dispatched"; prId: string; workflowRunId?: number; callbackToken: string };
 
 // One full attempt: fetch the three trees, triage every touched path, resolve whatever
-// needs it, commit if everything resolved. Never loops or retries internally — the caller
-// (mergeQueue.ts) decides whether a failed attempt is worth trying again.
+// diff3 can on its own, commit if everything resolved that way. The moment a file survives
+// diff3 with real conflict markers, stop and dispatch the whole PR to the target repo's
+// conflict-resolution Action instead — that Action re-merges the branch itself in its own
+// checkout, so a partial Quire-side commit of the cheaply-resolved files would just be redone.
+// Never loops or retries internally — the caller (mergeQueue.ts) decides what happens next.
 export async function resolveMergeConflict(
+	bundleId: string,
 	pr: PullRequest,
 	mergeability: MergeabilityResult,
 	github: GitHubClient,
-	provider: LlmProvider,
+	callbackBaseUrl: string | undefined,
 ): Promise<ConflictResolutionOutcome> {
 	if (mergeability.isFork) {
-		return { resolved: false, reason: "head branch lives in a fork this installation can't push to" };
+		return { status: "failed", reason: "head branch lives in a fork this installation can't push to" };
 	}
 
 	const trees = await github.getConflictTrees(pr.repoOwner, pr.repoName, pr.number);
@@ -159,7 +103,7 @@ export async function resolveMergeConflict(
 		if (plan.kind === "takeOurs") continue; // head already has the right content
 
 		if (plan.kind === "structuralConflict") {
-			return { resolved: false, reason: `${plan.path}: ${plan.reason}` };
+			return { status: "failed", reason: `${plan.path}: ${plan.reason}` };
 		}
 
 		try {
@@ -180,21 +124,55 @@ export async function resolveMergeConflict(
 				github.getBlobContent(pr.repoOwner, pr.repoName, plan.oursSha),
 				github.getBlobContent(pr.repoOwner, pr.repoName, plan.theirsSha),
 			]);
-			const resolution = await resolveConflictedFile(
-				plan.path,
-				mergeBaseContent,
-				oursContent,
-				theirsContent,
-				pr.declaredDirection,
-				provider,
-			);
-			if (resolution.status === "unresolved") {
-				return { resolved: false, reason: `${plan.path}: ${resolution.reason}` };
+			const merged = diff3Merge(oursContent, mergeBaseContent, theirsContent, {
+				stringSeparator: "\n",
+				label: { a: "PR (ours)", b: "main (theirs)" },
+			});
+			const mergedContent = merged.result.join("\n");
+			if (!merged.conflict) {
+				resolvedFiles.push({ path: plan.path, content: mergedContent, mode: plan.mode });
+				continue;
 			}
-			resolvedFiles.push({ path: plan.path, content: resolution.content, mode: plan.mode });
+
+			// diff3 itself couldn't resolve this file — hand the whole PR off to the target
+			// repo's Action rather than resolving file-by-file (see function comment).
+			if (callbackBaseUrl === undefined) {
+				return {
+					status: "failed",
+					reason: "QUIRE_PUBLIC_URL is not configured — the conflict-resolution Action has no way to call back to this instance",
+				};
+			}
+			const callbackToken = randomBytes(32).toString("hex");
+			let dispatch;
+			try {
+				dispatch = await github.dispatchConflictResolution(pr.repoOwner, pr.repoName, {
+					prNumber: pr.number,
+					headBranch: mergeability.headBranch,
+					baseBranch: mergeability.baseBranch,
+					declaredDirection: pr.declaredDirection,
+					callbackUrl: `${callbackBaseUrl}/${bundleId}/resolution`,
+					callbackToken,
+				});
+			} catch (dispatchErr) {
+				// Most commonly: the target repo hasn't merged Quire's setup PR yet, so
+				// workflow_dispatch has no workflow file on the default branch to target.
+				// Surface it as a plain resolution failure rather than an uncaught exception
+				// that would crash dequeueNext() for every other queued bundle too.
+				const message = dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr);
+				return {
+					status: "failed",
+					reason: `could not dispatch the conflict-resolution workflow (merge Quire's setup PR first if you haven't): ${message}`,
+				};
+			}
+			return {
+				status: "dispatched",
+				prId: pr.id,
+				callbackToken,
+				...(dispatch.workflowRunId !== undefined ? { workflowRunId: dispatch.workflowRunId } : {}),
+			};
 		} catch (err) {
 			if (err instanceof BinaryFileError) {
-				return { resolved: false, reason: `${plan.path}: binary file conflict, cannot auto-resolve` };
+				return { status: "failed", reason: `${plan.path}: binary file conflict, cannot auto-resolve` };
 			}
 			throw err;
 		}
@@ -203,17 +181,17 @@ export async function resolveMergeConflict(
 	if (resolvedFiles.length === 0) {
 		// Nothing actually needed a content change — GitHub's "dirty" read was likely
 		// already stale. Let the caller re-poll mergeability and retry the merge itself.
-		return { resolved: true };
+		return { status: "resolved" };
 	}
 
 	try {
 		await github.commitResolvedFiles(pr.repoOwner, pr.repoName, pr.number, mergeability.baseSha, resolvedFiles);
 	} catch (err) {
 		if (err instanceof NotFastForwardError) {
-			return { resolved: false, reason: "head branch moved during conflict resolution" };
+			return { status: "failed", reason: "head branch moved during conflict resolution" };
 		}
 		throw err;
 	}
 
-	return { resolved: true };
+	return { status: "resolved" };
 }
