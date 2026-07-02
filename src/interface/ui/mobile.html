@@ -85,6 +85,7 @@
 
   .queue-entry { font-size: var(--text-sm); display: flex; justify-content: space-between; align-items: center; }
   .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
+  .queue-entry-actions { display: flex; align-items: center; gap: var(--space-3); }
   .status-badge { font-size: var(--text-xs); padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); }
   .status-queued  { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
@@ -334,6 +335,12 @@ const SWIPE_Y = 100;
 const STAMP_DEADZONE = 24;
 
 async function loadReview() {
+  const status = await api('GET', '/account/github/status');
+  if (!status.connected) {
+    reviewCards = [];
+    stackEl.innerHTML = '<div class="stack-empty">Connect a GitHub account to see the review queue.</div>';
+    return;
+  }
   reviewCards = await api('GET', '/bundles');
   renderStack();
 }
@@ -563,8 +570,17 @@ async function loadQueue() {
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry card">
     <div><div>${escapeHtml(e.bundle.direction)}</div><div class="entry-id">${escapeHtml(e.bundleId)}</div></div>
-    <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+    <div class="queue-entry-actions">
+      <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+      ${e.status === 'queued' ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
+    </div>
   </div>`).join('');
+}
+
+async function removeFromQueue(bundleId) {
+  if (!confirm('Remove this bundle from the merge queue?')) return;
+  await api('DELETE', `/queue/${bundleId}`);
+  loadQueue();
 }
 
 document.getElementById('btn-process').addEventListener('click', async () => {

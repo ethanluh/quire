@@ -175,6 +175,7 @@
     align-items: center;
   }
   .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
+  .queue-entry-actions { display: flex; align-items: center; gap: var(--space-3); }
 
   .status-badge {
     font-size: var(--text-xs);
@@ -371,8 +372,13 @@ function cardHtml(card, shelfMode) {
 }
 
 async function loadReview() {
-  const cards = await api('GET', '/bundles');
+  const status = await api('GET', '/account/github/status');
   const el = document.getElementById('card-list');
+  if (!status.connected) {
+    el.innerHTML = '<div class="empty">Connect a GitHub account to see the review queue.</div>';
+    return;
+  }
+  const cards = await api('GET', '/bundles');
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, false)).join('') : '<div class="empty">No bundles in review queue.</div>';
 }
 
@@ -404,8 +410,17 @@ async function loadQueue() {
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry">
     <div><div>${escapeHtml(e.bundle.direction)}</div><div class="entry-id">${escapeHtml(e.bundleId)}</div></div>
-    <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+    <div class="queue-entry-actions">
+      <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+      ${e.status === 'queued' ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
+    </div>
   </div>`).join('');
+}
+
+async function removeFromQueue(bundleId) {
+  if (!confirm('Remove this bundle from the merge queue?')) return;
+  await api('DELETE', `/queue/${bundleId}`);
+  loadQueue();
 }
 
 async function gesture(bundleId, action) {
