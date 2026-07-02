@@ -334,6 +334,12 @@ const SWIPE_Y = 100;
 const STAMP_DEADZONE = 24;
 
 async function loadReview() {
+  const status = await api('GET', '/account/github/status');
+  if (!status.connected) {
+    reviewCards = [];
+    stackEl.innerHTML = '<div class="stack-empty">Connect a GitHub account to see the review queue.</div>';
+    return;
+  }
   reviewCards = await api('GET', '/bundles');
   renderStack();
 }

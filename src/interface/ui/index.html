@@ -371,8 +371,13 @@ function cardHtml(card, shelfMode) {
 }
 
 async function loadReview() {
-  const cards = await api('GET', '/bundles');
+  const status = await api('GET', '/account/github/status');
   const el = document.getElementById('card-list');
+  if (!status.connected) {
+    el.innerHTML = '<div class="empty">Connect a GitHub account to see the review queue.</div>';
+    return;
+  }
+  const cards = await api('GET', '/bundles');
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, false)).join('') : '<div class="empty">No bundles in review queue.</div>';
 }
 
