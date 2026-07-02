@@ -216,6 +216,23 @@ describe("OctokitGitHubClient", () => {
 			await client.mergePullRequest("org", "repo", 7);
 			expect(merge).toHaveBeenCalledWith({ owner: "org", repo: "repo", pull_number: 7 });
 		});
+
+		it("does not mark the PR ready for review when it isn't a draft", async () => {
+			const { octokit, graphql } = makeFakeOctokit({});
+			const client = new OctokitGitHubClient(octokit);
+			await client.mergePullRequest("org", "repo", 7);
+			expect(graphql).not.toHaveBeenCalled();
+		});
+
+		it("marks a draft PR ready for review before merging", async () => {
+			const { octokit, graphql, merge } = makeFakeOctokit({ pr: makePrResponse(null, { draft: true }) });
+			const client = new OctokitGitHubClient(octokit);
+			await client.mergePullRequest("org", "repo", 7);
+			expect(graphql).toHaveBeenCalledWith(expect.stringContaining("markPullRequestReadyForReview"), {
+				pullRequestId: "PR_node123",
+			});
+			expect(merge).toHaveBeenCalledWith({ owner: "org", repo: "repo", pull_number: 7 });
+		});
 	});
 
 	describe("revertPullRequest", () => {
