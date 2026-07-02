@@ -4,7 +4,9 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc && npm run build:copy-ui",
+		"build:copy-ui": "rm -rf dist/src/interface/ui && mkdir -p dist/src/interface/ui && cp -r src/interface/ui/. dist/src/interface/ui/",
+		"start": "node dist/src/interface/server/index.js",
 		"dev": "tsx --env-file-if-exists=.env src/interface/server/index.ts",
 		"test": "node --experimental-vm-modules node_modules/.bin/jest --forceExit",
 		"lint": "tsc --noEmit"

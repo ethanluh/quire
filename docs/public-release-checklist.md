@@ -15,10 +15,9 @@ etc.) that has a stable domain:
 - Update the GitHub OAuth App's "Authorization callback URL" from
   `http://localhost:3000/account/github/oauth/callback` to the production
   domain's equivalent.
-- Add a production entrypoint. `package.json` currently only has `build`
-  (`tsc`) and `dev` (`tsx ... src/interface/server/index.ts`) — there's no
-  `start` script that runs the compiled `dist/` output under a process
-  manager. Needs one, plus TLS termination and restart-on-crash.
+- `package.json` now has a `start` script (`node dist/src/interface/server/index.js`)
+  and a `Dockerfile`/`fly.toml` that run it under a process manager with TLS
+  termination and restart-on-crash handled by the host.
 - `GITHUB_WEBHOOK_SECRET` becomes a fixed, permanent secret instead of one
   regenerated per local session.
 
