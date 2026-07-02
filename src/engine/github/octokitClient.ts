@@ -2,10 +2,23 @@ import type { Octokit } from "@octokit/rest";
 import { RequestError } from "@octokit/request-error";
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import { formatReviewCardComment } from "../review/comment.js";
-import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
+import type {
+	ConflictResolutionDispatchParams,
+	ConflictResolutionDispatchResult,
+	FoundOrCreatedPullRequest,
+	GitHubClient,
+	ListOpenPullRequestsResult,
+	RawPRPayload,
+	RepoFile,
+} from "./client.js";
 import { BinaryFileError } from "./client.js";
+import { CONFLICT_RESOLUTION_WORKFLOW_PATH } from "./repoSetup.js";
 import type { ConflictTrees, MergeabilityResult, MergeabilityState, ResolvedFile, TreeEntry } from "../types/mergeability.js";
 import { NotFastForwardError } from "../types/mergeability.js";
+
+// How recent a workflow run must be to count as "the one we just dispatched" when recovering
+// its id after workflow_dispatch's response body (which carries no run id at all).
+const RECENT_DISPATCH_WINDOW_MS = 30_000;
 
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
 // declares direction in an HTML comment so it renders invisibly in the PR body.
@@ -426,6 +439,49 @@ export class OctokitGitHubClient implements GitHubClient {
 			}
 			throw err;
 		}
+	}
+
+	async dispatchConflictResolution(
+		owner: string,
+		repo: string,
+		params: ConflictResolutionDispatchParams,
+	): Promise<ConflictResolutionDispatchResult> {
+		return withPermissionHint("dispatch the conflict-resolution workflow", async () => {
+			await this.octokit.rest.actions.createWorkflowDispatch({
+				owner,
+				repo,
+				workflow_id: CONFLICT_RESOLUTION_WORKFLOW_PATH,
+				ref: params.headBranch,
+				inputs: {
+					pr_number: String(params.prNumber),
+					head_branch: params.headBranch,
+					base_branch: params.baseBranch,
+					declared_direction: params.declaredDirection,
+					callback_url: params.callbackUrl,
+					callback_token: params.callbackToken,
+				},
+			});
+			const workflowRunId = await this.findRecentWorkflowRunId(owner, repo, params.headBranch);
+			return workflowRunId !== undefined ? { workflowRunId } : {};
+		});
+	}
+
+	// Best-effort recovery of the run workflow_dispatch just created — its own response has
+	// no body. Racy by nature (another dispatch on the same branch could land first); a miss
+	// just leaves workflowRunId unset, which the callback path doesn't need anyway.
+	private async findRecentWorkflowRunId(owner: string, repo: string, headBranch: string): Promise<number | undefined> {
+		const { data } = await this.octokit.rest.actions.listWorkflowRuns({
+			owner,
+			repo,
+			workflow_id: CONFLICT_RESOLUTION_WORKFLOW_PATH,
+			branch: headBranch,
+			event: "workflow_dispatch",
+			per_page: 1,
+		});
+		const run = data.workflow_runs[0];
+		if (run === undefined) return undefined;
+		const ageMs = Date.now() - new Date(run.created_at).getTime();
+		return ageMs <= RECENT_DISPATCH_WINDOW_MS ? run.id : undefined;
 	}
 
 	private async getFlatTree(owner: string, repo: string, treeSha: string): Promise<ReadonlyMap<string, TreeEntry>> {

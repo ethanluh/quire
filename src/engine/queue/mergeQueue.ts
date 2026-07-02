@@ -1,6 +1,5 @@
 import type { Bundle, PullRequest, ReviewCard } from "../types/core.js";
 import type { GitHubClient } from "../github/client.js";
-import type { LlmProvider } from "../drift/effectList/provider.js";
 import type { MergeabilityResult, MergeabilityState } from "../types/mergeability.js";
 import type { MergeQueueEntry, QueueState } from "../types/queue.js";
 import { loadState, saveState } from "./persistence.js";
@@ -13,7 +12,10 @@ const MERGEABLE_STATES: ReadonlyArray<MergeabilityState> = ["clean", "hasHooks",
 // and the re-check after updateBranch()/commitResolvedFiles() poll on this same schedule.
 const DEFAULT_MERGEABILITY_POLL_DELAYS_MS: ReadonlyArray<number> = [1000, 2000, 4000, 4000, 4000];
 
-type MergeableCheck = { ok: true; alreadyMerged?: boolean } | { ok: false; reason: string };
+type MergeableCheck =
+	| { ok: true; alreadyMerged?: boolean }
+	| { ok: false; reason: string }
+	| { ok: "pending"; prId: string; workflowRunId?: number; callbackToken: string };
 
 export class MergeQueue {
 	private state: QueueState = { entries: [] };
@@ -21,7 +23,10 @@ export class MergeQueue {
 	constructor(
 		private readonly statePath: string,
 		private readonly github: GitHubClient,
-		private readonly llmProvider: LlmProvider,
+		// Base URL the conflict-resolution Action calls back to (e.g. "https://host/callbacks/
+		// action-resolution") — undefined when QUIRE_PUBLIC_URL isn't configured, in which case
+		// dispatching a conflict fails fast rather than waiting on a callback that can't arrive.
+		private readonly callbackBaseUrl: string | undefined,
 		private readonly conflictLogPath: string,
 		private readonly mergeabilityPollDelaysMs: ReadonlyArray<number> = DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
 	) {}
@@ -58,6 +63,9 @@ export class MergeQueue {
 	async dequeueNext(): Promise<MergeQueueEntry | undefined> {
 		// Resume a bundle stuck in "landing" (e.g. the process crashed mid-merge) before
 		// picking up a fresh "queued" one, so a partial merge is never silently abandoned.
+		// "resolving" entries are deliberately excluded from both scans — they're not stuck,
+		// they're waiting on the target repo's Action, and only leave "resolving" via the
+		// callback route or the poll-timeout fallback (see resolutionPoll.ts).
 		let entry = this.state.entries.find((e) => e.status === "landing");
 		if (entry === undefined) {
 			entry = this.state.entries.find((e) => e.status === "queued");
@@ -75,6 +83,22 @@ export class MergeQueue {
 			if (entry.mergedPrIds.includes(pr.id)) continue;
 
 			const check = await this.ensureMergeable(entry.bundleId, pr);
+			if (check.ok === "pending") {
+				const resolving: MergeQueueEntry = {
+					...entry,
+					status: "resolving",
+					resolution: {
+						prId: check.prId,
+						repoOwner: pr.repoOwner,
+						repoName: pr.repoName,
+						...(check.workflowRunId !== undefined ? { workflowRunId: check.workflowRunId } : {}),
+						callbackToken: check.callbackToken,
+						dispatchedAt: new Date().toISOString(),
+					},
+				};
+				await this.setEntry(resolving.bundleId, resolving);
+				return resolving;
+			}
 			if (!check.ok) {
 				const blocked: MergeQueueEntry = {
 					...entry,
@@ -151,15 +175,26 @@ export class MergeQueue {
 		pr: PullRequest,
 		mergeability: MergeabilityResult,
 	): Promise<MergeableCheck> {
-		const result = await resolveMergeConflict(pr, mergeability, this.github, this.llmProvider);
+		const result = await resolveMergeConflict(bundleId, pr, mergeability, this.github, this.callbackBaseUrl);
+
+		if (result.status === "dispatched") {
+			await logConflictResolution(this.conflictLogPath, bundleId, pr.id, "unresolved", "dispatched to conflict-resolution Action");
+			return {
+				ok: "pending",
+				prId: result.prId,
+				callbackToken: result.callbackToken,
+				...(result.workflowRunId !== undefined ? { workflowRunId: result.workflowRunId } : {}),
+			};
+		}
+
 		await logConflictResolution(
 			this.conflictLogPath,
 			bundleId,
 			pr.id,
-			result.resolved ? "resolved" : "unresolved",
-			result.reason,
+			result.status === "resolved" ? "resolved" : "unresolved",
+			result.status === "failed" ? result.reason : undefined,
 		);
-		if (!result.resolved) return { ok: false, reason: result.reason ?? "conflict resolution failed" };
+		if (result.status === "failed") return { ok: false, reason: result.reason };
 
 		// Give GitHub a moment to recompute mergeable_state after the new commit rather
 		// than immediately racing its own async recomputation with a merge attempt.
@@ -226,6 +261,33 @@ export class MergeQueue {
 		const retried: MergeQueueEntry = { ...rest, status: "queued" };
 		await this.setEntry(bundleId, retried);
 		return retried;
+	}
+
+	// The conflict-resolution Action pushed a resolving commit and reported success (via
+	// callback, or the poll fallback finding the run completed) — the PR's branch should now
+	// be mergeable, so go back to "queued" and let the next dequeueNext() re-attempt the merge.
+	async markResolutionSucceeded(bundleId: string): Promise<MergeQueueEntry | undefined> {
+		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "resolving");
+		if (entry === undefined) return undefined;
+		const { resolution: _resolution, ...rest } = entry;
+		const requeued: MergeQueueEntry = { ...rest, status: "queued" };
+		await this.setEntry(bundleId, requeued);
+		return requeued;
+	}
+
+	// The Action reported it couldn't resolve the conflict (or the poll fallback timed out
+	// waiting for it) — surface the reason per INV-6, retryable via the normal conflict flow.
+	async markResolutionFailed(bundleId: string, prId: string, reason: string): Promise<MergeQueueEntry | undefined> {
+		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "resolving");
+		if (entry === undefined) return undefined;
+		const { resolution: _resolution, ...rest } = entry;
+		const failed: MergeQueueEntry = {
+			...rest,
+			status: "conflict",
+			conflict: { prId, reason, detectedAt: new Date().toISOString() },
+		};
+		await this.setEntry(bundleId, failed);
+		return failed;
 	}
 
 	async clear(): Promise<void> {

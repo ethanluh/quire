@@ -1,7 +1,40 @@
-import { describe, it, expect, jest } from "@jest/globals";
-import { planFileResolutions, resolveConflictedFile } from "../../src/engine/queue/conflictResolution.js";
-import { StubLlmProvider } from "../mocks/llmProvider.js";
-import type { ConflictTrees, TreeEntry } from "../../src/engine/types/mergeability.js";
+import { describe, it, expect } from "@jest/globals";
+import { planFileResolutions, resolveMergeConflict } from "../../src/engine/queue/conflictResolution.js";
+import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import type { PullRequest } from "../../src/engine/types/core.js";
+import type { ConflictTrees, MergeabilityResult, TreeEntry } from "../../src/engine/types/mergeability.js";
+
+const CALLBACK_BASE_URL = "https://quire.example.com/callbacks/action-resolution";
+
+function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
+	return {
+		id: "pr-1",
+		repoOwner: "org",
+		repoName: "repo",
+		number: 1,
+		headSha: "head-sha",
+		declaredDirection: "add passwordless auth",
+		diff: { raw: "", hunks: [] },
+		filesTouched: ["src/auth.ts"],
+		symbolsTouched: [],
+		testNamesChanged: [],
+		ciStatus: "success",
+		...overrides,
+	};
+}
+
+function makeMergeability(overrides: Partial<MergeabilityResult> = {}): MergeabilityResult {
+	return {
+		state: "dirty",
+		isFork: false,
+		merged: false,
+		headBranch: "feature",
+		headSha: "head-sha",
+		baseBranch: "main",
+		baseSha: "base-tip-sha",
+		...overrides,
+	};
+}
 
 function blob(sha: string, mode = "100644"): TreeEntry {
 	return { type: "blob", mode, sha };
@@ -105,82 +138,97 @@ describe("planFileResolutions", () => {
 	});
 });
 
-describe("resolveConflictedFile", () => {
-	it("resolves non-overlapping changes via diff3 alone, without calling the LLM", async () => {
-		const provider = new StubLlmProvider();
-		const base = "line1\nline2\nline3";
-		const ours = "line1-ours\nline2\nline3";
-		const theirs = "line1\nline2\nline3-theirs";
+describe("resolveMergeConflict", () => {
+	function setUpConflict(github: StubGitHubClient, base: string, ours: string, theirs: string): void {
+		github.setBlobContent("base-sha", base);
+		github.setBlobContent("ours-sha", ours);
+		github.setBlobContent("theirs-sha", theirs);
+		github.setConflictTrees(
+			"org",
+			"repo",
+			1,
+			trees({
+				mergeBaseTree: new Map([["src/auth.ts", blob("base-sha")]]),
+				baseTree: new Map([["src/auth.ts", blob("theirs-sha")]]),
+				headTree: new Map([["src/auth.ts", blob("ours-sha")]]),
+			}),
+		);
+	}
 
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
+	it("resolves non-overlapping changes via diff3 alone, without dispatching", async () => {
+		const github = new StubGitHubClient();
+		setUpConflict(github, "line1\nline2\nline3", "line1-ours\nline2\nline3", "line1\nline2\nline3-theirs");
 
-		expect(result).toEqual({ status: "resolved", content: "line1-ours\nline2\nline3-theirs" });
-		expect(provider.calls).toHaveLength(0);
+		const result = await resolveMergeConflict("bundle-1", makePr(), makeMergeability(), github, CALLBACK_BASE_URL);
+
+		expect(result).toEqual({ status: "resolved" });
+		expect(github.dispatchConflictResolutionCalls).toHaveLength(0);
+		expect(github.commitResolvedFilesCalls[0]?.files).toEqual([
+			{ path: "src/auth.ts", content: "line1-ours\nline2\nline3-theirs", mode: "100644" },
+		]);
 	});
 
-	it("calls the LLM when diff3 can't auto-merge, and applies its fenced response", async () => {
-		const provider = new StubLlmProvider();
-		provider.queueCompletion("Here you go:\n```\nline1-merged\nline2\n```");
-		const base = "line1\nline2";
-		const ours = "line1-ours\nline2";
-		const theirs = "line1-theirs\nline2";
+	it("dispatches to the target repo's conflict-resolution Action when diff3 can't auto-merge", async () => {
+		const github = new StubGitHubClient();
+		setUpConflict(github, "line1\nline2", "line1-ours\nline2", "line1-theirs\nline2");
+		const pr = makePr();
+		const mergeability = makeMergeability({ headBranch: "feature", baseBranch: "main" });
 
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
+		const result = await resolveMergeConflict("bundle-1", pr, mergeability, github, CALLBACK_BASE_URL);
 
-		expect(result).toEqual({ status: "resolved", content: "line1-merged\nline2" });
-		expect(provider.calls).toHaveLength(1);
+		expect(result.status).toBe("dispatched");
+		if (result.status !== "dispatched") return;
+		expect(result.prId).toBe(pr.id);
+		expect(result.callbackToken).toMatch(/^[0-9a-f]{64}$/);
+		expect(github.commitResolvedFilesCalls).toHaveLength(0);
+		expect(github.dispatchConflictResolutionCalls).toEqual([
+			{
+				owner: "org",
+				repo: "repo",
+				params: {
+					prNumber: 1,
+					headBranch: "feature",
+					baseBranch: "main",
+					declaredDirection: "add passwordless auth",
+					callbackUrl: `${CALLBACK_BASE_URL}/bundle-1/resolution`,
+					callbackToken: result.callbackToken,
+				},
+			},
+		]);
 	});
 
-	it("fails closed when the model declines with UNRESOLVED", async () => {
-		const provider = new StubLlmProvider();
-		provider.queueCompletion("UNRESOLVED");
-		const base = "line1\nline2";
-		const ours = "line1-ours\nline2";
-		const theirs = "line1-theirs\nline2";
+	it("fails closed without dispatching when no callback URL is configured", async () => {
+		const github = new StubGitHubClient();
+		setUpConflict(github, "line1\nline2", "line1-ours\nline2", "line1-theirs\nline2");
 
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
+		const result = await resolveMergeConflict("bundle-1", makePr(), makeMergeability(), github, undefined);
 
-		expect(result.status).toBe("unresolved");
-		if (result.status === "unresolved") expect(result.reason).toContain("declined");
+		expect(result).toEqual({
+			status: "failed",
+			reason: "QUIRE_PUBLIC_URL is not configured — the conflict-resolution Action has no way to call back to this instance",
+		});
+		expect(github.dispatchConflictResolutionCalls).toHaveLength(0);
 	});
 
-	it("fails closed when the model's own output still contains conflict-marker lines", async () => {
-		const provider = new StubLlmProvider();
-		provider.queueCompletion("```\n<<<<<<< PR (ours)\nline1-ours\n=======\nline1-theirs\n>>>>>>> main (theirs)\nline2\n```");
-		const base = "line1\nline2";
-		const ours = "line1-ours\nline2";
-		const theirs = "line1-theirs\nline2";
+	it("fails closed when the dispatch call itself throws", async () => {
+		const github = new StubGitHubClient();
+		setUpConflict(github, "line1\nline2", "line1-ours\nline2", "line1-theirs\nline2");
+		github.dispatchConflictResolutionError = new Error("workflow not found on default branch");
 
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
+		const result = await resolveMergeConflict("bundle-1", makePr(), makeMergeability(), github, CALLBACK_BASE_URL);
 
-		expect(result.status).toBe("unresolved");
-		if (result.status === "unresolved") expect(result.reason).toContain("conflict markers");
+		expect(result.status).toBe("failed");
+		if (result.status === "failed") {
+			expect(result.reason).toContain("could not dispatch the conflict-resolution workflow");
+			expect(result.reason).toContain("workflow not found on default branch");
+		}
 	});
 
-	it("does not false-positive on a legitimate `=======` divider line when diff3 already resolved cleanly", async () => {
-		const provider = new StubLlmProvider();
-		const base = "a\nb";
-		const ours = "a\n=======\nb"; // ours added a literal 7-equals divider line, no overlap with theirs
-		const theirs = "a\nb-theirs";
+	it("bails without dispatching when the head branch lives in a fork", async () => {
+		const github = new StubGitHubClient();
+		const result = await resolveMergeConflict("bundle-1", makePr(), makeMergeability({ isFork: true }), github, CALLBACK_BASE_URL);
 
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
-
-		// diff3 merges cleanly (no LLM involved) — the marker-line check only ever runs on
-		// content diff3 itself flagged as conflicted, so a clean merge is unaffected by it.
-		expect(result.status).toBe("resolved");
-		expect(provider.calls).toHaveLength(0);
-	});
-
-	it("fails closed when the LLM call itself throws", async () => {
-		const provider = new StubLlmProvider();
-		jest.spyOn(provider, "complete").mockRejectedValueOnce(new Error("rate limited"));
-		const base = "line1\nline2";
-		const ours = "line1-ours\nline2";
-		const theirs = "line1-theirs\nline2";
-
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
-
-		expect(result.status).toBe("unresolved");
-		if (result.status === "unresolved") expect(result.reason).toContain("LLM call failed");
+		expect(result).toEqual({ status: "failed", reason: "head branch lives in a fork this installation can't push to" });
+		expect(github.dispatchConflictResolutionCalls).toHaveLength(0);
 	});
 });

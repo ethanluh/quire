@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { queueRouter } from "../../src/interface/server/routes/queue.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
-import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { createServerState } from "../../src/interface/server/state.js";
 import type { Bundle, ReviewCard } from "../../src/engine/types/core.js";
@@ -58,7 +57,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 
 	beforeEach(async () => {
 		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
-		queue = new MergeQueue(join(dataDir, "queue.json"), new StubGitHubClient(), new StubLlmProvider(), join(dataDir, "conflict.ndjson"));
+		queue = new MergeQueue(join(dataDir, "queue.json"), new StubGitHubClient(), "https://quire.example.com/callbacks/action-resolution", join(dataDir, "conflict.ndjson"));
 		await queue.load();
 		state = createServerState();
 		decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
@@ -136,7 +135,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 				bundle.members[0]!.number,
 				{ state: "blocked", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
 			);
-			const localQueue = new MergeQueue(join(dataDir, "queue2.json"), github, new StubLlmProvider(), join(dataDir, "conflict.ndjson"));
+			const localQueue = new MergeQueue(join(dataDir, "queue2.json"), github, "https://quire.example.com/callbacks/action-resolution", join(dataDir, "conflict.ndjson"));
 			await localQueue.load();
 			await localQueue.enqueue(bundle);
 
@@ -177,7 +176,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 				bundle.members[0]!.number,
 				{ state: "blocked", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
 			);
-			const localQueue = new MergeQueue(join(dataDir, "queue3.json"), github, new StubLlmProvider(), join(dataDir, "conflict.ndjson"));
+			const localQueue = new MergeQueue(join(dataDir, "queue3.json"), github, "https://quire.example.com/callbacks/action-resolution", join(dataDir, "conflict.ndjson"));
 			await localQueue.load();
 			await localQueue.enqueue(bundle);
 			await localQueue.dequeueNext();
