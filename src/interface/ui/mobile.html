@@ -127,6 +127,11 @@
     font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--color-text-muted);
     text-transform: uppercase; letter-spacing: var(--tracking-wider); margin: 0 0 var(--space-3);
   }
+  .auto-merge-toggle {
+    display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm);
+    color: var(--color-text-muted); margin-bottom: var(--space-3); cursor: pointer;
+  }
+  .auto-merge-toggle input { width: auto; max-width: none; margin: 0; }
   .repo-search { margin-bottom: var(--space-3); }
   .repo-list { display: flex; flex-direction: column; gap: var(--space-2); }
   .repo-entry {
@@ -221,6 +226,10 @@
 
       <div class="repo-panel" id="repo-panel" style="display:none">
         <h3>Repository to work on</h3>
+        <label class="auto-merge-toggle">
+          <input type="checkbox" id="chk-auto-merge">
+          Automatically merge accepted bundles (skips the manual "Process next" step)
+        </label>
         <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
         <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
       </div>
@@ -570,8 +579,13 @@ document.getElementById('btn-ingest').addEventListener('click', async () => {
   try {
     const body = JSON.parse(raw);
     const result = await api('POST', '/prs/ingest', body);
-    el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
-    el.className = 'result-msg';
+    if (result.error) {
+      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created. ${result.error}`;
+      el.className = 'result-msg error';
+    } else {
+      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
+      el.className = 'result-msg';
+    }
     el.style.display = 'block';
     loadReview();
   } catch (e) {
@@ -601,6 +615,7 @@ async function loadAccount() {
     accountDisconnectBtn.style.display = isLocalUi ? 'block' : 'none';
     if (isLocalUi) {
       repoPanel.style.display = 'block';
+      document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
       loadRepos(status.selectedRepo);
     } else {
       repoPanel.style.display = 'none';
@@ -614,6 +629,10 @@ async function loadAccount() {
     repoPanel.style.display = 'none';
   }
 }
+
+document.getElementById('chk-auto-merge').addEventListener('change', async (e) => {
+  await api('POST', '/account/github/settings', { autoMergeOnAccept: e.target.checked }, { 'X-Quire-Admin': '1' });
+});
 
 document.getElementById('btn-account-connect').addEventListener('click', async () => {
   const tokenInput = document.getElementById('account-token');

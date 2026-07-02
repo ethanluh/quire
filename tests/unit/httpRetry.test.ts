@@ -10,6 +10,19 @@ function jsonResponse(status: number, body: unknown) {
 	};
 }
 
+// Mirrors Gemini's real RESOURCE_EXHAUSTED body shape (the incident this covers):
+// a `status` field plus a google.rpc.RetryInfo detail carrying the suggested wait.
+function geminiQuotaExceededBody(retryDelay: string) {
+	return {
+		error: {
+			code: 429,
+			message: `Quota exceeded for metric: generate_content_free_tier_requests. Please retry in ${retryDelay}.`,
+			status: "RESOURCE_EXHAUSTED",
+			details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay }],
+		},
+	};
+}
+
 describe("fetchWithRetry", () => {
 	afterEach(() => {
 		jest.restoreAllMocks();
@@ -77,6 +90,54 @@ describe("fetchWithRetry", () => {
 		global.fetch = fetchMock as unknown as typeof fetch;
 
 		await expect(fetchWithRetry("Test", "https://example.com", {})).rejects.toBe(networkError);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("retries a 429 using a short server-suggested retryDelay, and can still succeed", async () => {
+		const fetchMock = jest.fn<() => Promise<unknown>>();
+		fetchMock
+			.mockResolvedValueOnce(jsonResponse(429, geminiQuotaExceededBody("0.05s")))
+			.mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		const res = await fetchWithRetry("Gemini", "https://example.com", {});
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(res.status).toBe(200);
+	});
+
+	it("fails fast on a 429 with a long server-suggested retryDelay instead of burning all attempts", async () => {
+		const fetchMock = jest.fn(async () => jsonResponse(429, geminiQuotaExceededBody("23s")));
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		let caught: unknown;
+		try {
+			await fetchWithRetry("Gemini", "https://example.com", {});
+		} catch (err) {
+			caught = err;
+		}
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(caught).toBeInstanceOf(LlmApiError);
+		expect((caught as LlmApiError).retryAfterMs).toBe(23_000);
+		expect((caught as LlmApiError).message).toMatch(/quota exceeded/i);
+	});
+
+	it("falls back to linear backoff when the error body isn't parseable JSON", async () => {
+		const fetchMock = jest.fn(async () => ({
+			ok: false,
+			status: 429,
+			json: async () => {
+				throw new Error("not json");
+			},
+			text: async () => "Service Unavailable",
+		}));
+		global.fetch = fetchMock as unknown as typeof fetch;
+
+		await expect(fetchWithRetry("Test", "https://example.com", {})).rejects.toMatchObject({
+			status: 429,
+			retryAfterMs: undefined,
+		});
 		expect(fetchMock).toHaveBeenCalledTimes(3);
 	});
 
