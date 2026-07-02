@@ -1,7 +1,7 @@
 import type { Octokit } from "@octokit/rest";
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import { formatReviewCardComment } from "../review/comment.js";
-import type { CreatedWebhook, GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
+import type { GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
 
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
 // declares direction in an HTML comment so it renders invisibly in the PR body.
@@ -149,20 +149,6 @@ export class OctokitGitHubClient implements GitHubClient {
 			issue_number: prNumber,
 			body: formatReviewCardComment(action, card),
 		});
-	}
-
-	async createWebhook(owner: string, repo: string, config: { url: string; secret: string }): Promise<CreatedWebhook> {
-		const { data } = await this.octokit.rest.repos.createWebhook({
-			owner,
-			repo,
-			config: { url: config.url, content_type: "json", secret: config.secret },
-			events: ["pull_request"],
-		});
-		return { id: data.id };
-	}
-
-	async deleteWebhook(owner: string, repo: string, hookId: number): Promise<void> {
-		await this.octokit.rest.repos.deleteWebhook({ owner, repo, hook_id: hookId });
 	}
 
 	private async toRawPRPayload(owner: string, repo: string, pr: PullRequestRef): Promise<RawPRPayload> {

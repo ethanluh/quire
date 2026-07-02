@@ -19,21 +19,23 @@ export class OAuthExchangeError extends Error {}
 // — tests supply fakes here instead of mocking global.fetch.
 export interface OAuthDeps {
 	config: OAuthConfig;
-	buildAuthorizeUrl: (config: OAuthConfig, redirectUri: string, state: string) => string;
+	buildAuthorizeUrl: (config: OAuthConfig, redirectUri: string, state: string, scope?: string) => string;
 	exchangeCodeForToken: (config: OAuthConfig, code: string, redirectUri: string) => Promise<OAuthTokenResult>;
 	refreshAccessToken: (config: OAuthConfig, refreshToken: string) => Promise<OAuthTokenResult>;
 	redirectUri: string;
 }
 
-export function buildAuthorizeUrl(config: OAuthConfig, redirectUri: string, state: string): string {
+// `scope` defaults to omitted: this flow now exists purely to establish who is signing
+// in (see routes/account.ts) — actual GitHub API access comes from a GitHub App
+// installation (a separate, later flow), never from this login token, so requesting
+// any OAuth scope here would be over-privileging a credential Quire never uses for API
+// calls. A caller with a genuine reason to request scopes may still pass one.
+export function buildAuthorizeUrl(config: OAuthConfig, redirectUri: string, state: string, scope?: string): string {
 	const params = new URLSearchParams({
 		client_id: config.clientId,
 		redirect_uri: redirectUri,
-		// admin:repo_hook lets Quire register/remove the webhook it uses for near-real-time
-		// PR ingestion. A token missing this scope still works everywhere else — webhook
-		// auto-registration just reports failure and Quire falls back to periodic polling.
-		scope: "repo admin:repo_hook",
 		state,
+		...(scope !== undefined ? { scope } : {}),
 	});
 	return `https://github.com/login/oauth/authorize?${params.toString()}`;
 }

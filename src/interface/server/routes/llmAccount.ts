@@ -5,8 +5,6 @@ import { saveAccount, clearAccount } from "../../../engine/llm/account.js";
 import type { LlmProviderHolder } from "../../../engine/drift/effectList/providerHolder.js";
 import type { ResolvedLlmProvider } from "../resolveLlmProvider.js";
 import type { LlmAccountState } from "../llmAccountState.js";
-import { localOnly } from "../middleware/localOnly.js";
-import { requireAdminHeader } from "../middleware/requireAdminHeader.js";
 import { validateBody } from "../middleware/validation.js";
 
 const ConnectSchema = z.object({
@@ -55,7 +53,7 @@ export function llmAccountRouter(
 		res.json({ connected: true, provider: account.provider, connectedAt: account.connectedAt });
 	});
 
-	router.post("/connect", localOnly, requireAdminHeader, validateBody(ConnectSchema), async (req, res, next) => {
+	router.post("/connect", validateBody(ConnectSchema), async (req, res, next) => {
 		const previous = connectInFlight;
 		let release!: () => void;
 		connectInFlight = new Promise((resolve) => {
@@ -90,7 +88,7 @@ export function llmAccountRouter(
 		}
 	});
 
-	router.post("/disconnect", localOnly, requireAdminHeader, async (_req, res, next) => {
+	router.post("/disconnect", async (_req, res, next) => {
 		try {
 			// Resolve the fallback before mutating any state: if it throws (e.g. a stale
 			// LLM_PROVIDER env var with no matching key set), nothing has changed yet, so

@@ -1,8 +1,8 @@
 import type { Bundle, ReviewCard } from "../../engine/types/core.js";
 import type { SkippedPullRequest } from "../../engine/github/client.js";
 import type { GitHubClientHolder } from "../../engine/github/clientHolder.js";
-import type { OAuthDeps } from "../../engine/github/oauth.js";
-import { ensureValidAccessToken } from "../../engine/github/tokenRefresh.js";
+import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
+import { InstallationRevokedError, isInstallationRevoked } from "../../engine/github/installationClient.js";
 import { rawPRPayloadToIncomingPR } from "../../engine/github/toIncomingPR.js";
 import { normalizePR } from "../../engine/ingest/ingest.js";
 import type { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
@@ -11,18 +11,18 @@ import { ingestIntoQueue } from "./ingestIntoQueue.js";
 import type { IngestSummary, PipelineDeps } from "./ingestIntoQueue.js";
 import type { ServerState } from "./state.js";
 
-export { NeedsReconnectError } from "../../engine/github/tokenRefresh.js";
+export { InstallationRevokedError } from "../../engine/github/installationClient.js";
 
-// Thrown when the connected account changed (disconnected, reconnected, or reselected)
+// Thrown when the bound installation changed (disconnected, rebound, or reselected)
 // while a refresh was mid-flight — see the compare-and-swap in refreshRepoQueue below.
-// Not a real failure: the account itself is fine, this refresh cycle is just stale.
+// Not a real failure: the binding itself is fine, this refresh cycle is just stale.
 export class AccountChangedError extends Error {}
 
 export interface RefreshDeps {
 	accountState: AccountState;
 	accountPath: string;
 	clientHolder: GitHubClientHolder;
-	oauth: OAuthDeps | undefined;
+	appConfig: GitHubAppConfig | undefined;
 	decidedStore: DecidedPrStore;
 	state: ServerState;
 	pipelineDeps: PipelineDeps;
@@ -61,22 +61,25 @@ export async function refreshRepoQueue(
 	deps: RefreshDeps,
 ): Promise<RefreshRepoQueueResult> {
 	const account = deps.accountState.current;
-	if (account === undefined) throw new Error("No connected account");
+	if (account === undefined) throw new Error("No connected installation");
 
-	const refreshed = await ensureValidAccessToken(account, {
-		accountPath: deps.accountPath,
-		clientHolder: deps.clientHolder,
-		oauth: deps.oauth,
-	});
-	// A disconnect (or reconnect/reselect) racing this refresh's network round-trip would
-	// otherwise get silently overwritten here — bail instead of resurrecting a cleared
-	// account or clobbering a newer one.
-	if (deps.accountState.current !== account) {
-		throw new AccountChangedError("Account changed while refreshing its token; aborting this refresh");
+	let rawPRs, skipped;
+	try {
+		({ payloads: rawPRs, skipped } = await deps.clientHolder.listOpenPullRequests(owner, name));
+	} catch (err) {
+		if (isInstallationRevoked(err)) {
+			throw new InstallationRevokedError(
+				`Installation lost access to ${owner}/${name}: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+		throw err;
 	}
-	deps.accountState.current = refreshed;
+	// A disconnect (or rebind/reselect) racing this refresh's network round-trip would
+	// otherwise silently proceed against a now-stale binding — bail instead.
+	if (deps.accountState.current !== account) {
+		throw new AccountChangedError("Installation binding changed mid-refresh; aborting this refresh");
+	}
 
-	const { payloads: rawPRs, skipped } = await deps.clientHolder.listOpenPullRequests(owner, name);
 	const prs = rawPRs.map((raw) => normalizePR(rawPRPayloadToIncomingPR(raw)));
 	const undecided = prs.filter((pr) => !deps.decidedStore.isDecided(pr.id));
 

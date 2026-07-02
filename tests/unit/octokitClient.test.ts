@@ -179,36 +179,6 @@ describe("OctokitGitHubClient", () => {
 		});
 	});
 
-	describe("createWebhook", () => {
-		it("creates a pull_request webhook with the given url and secret", async () => {
-			const createWebhook = jest.fn(async () => ({ data: { id: 99 } }));
-			const octokit = { rest: { repos: { createWebhook } } } as unknown as Octokit;
-			const client = new OctokitGitHubClient(octokit);
-
-			const result = await client.createWebhook("org", "repo", { url: "https://example.com/hook", secret: "s3cr3t" });
-
-			expect(result).toEqual({ id: 99 });
-			expect(createWebhook).toHaveBeenCalledWith({
-				owner: "org",
-				repo: "repo",
-				config: { url: "https://example.com/hook", content_type: "json", secret: "s3cr3t" },
-				events: ["pull_request"],
-			});
-		});
-	});
-
-	describe("deleteWebhook", () => {
-		it("deletes the webhook by id", async () => {
-			const deleteWebhook = jest.fn(async () => ({}));
-			const octokit = { rest: { repos: { deleteWebhook } } } as unknown as Octokit;
-			const client = new OctokitGitHubClient(octokit);
-
-			await client.deleteWebhook("org", "repo", 99);
-
-			expect(deleteWebhook).toHaveBeenCalledWith({ owner: "org", repo: "repo", hook_id: 99 });
-		});
-	});
-
 	describe("mergePullRequest", () => {
 		it("calls pulls.merge with the right pull number", async () => {
 			const { octokit, merge } = makeFakeOctokit({});

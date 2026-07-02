@@ -15,7 +15,7 @@ import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
-import type { ConnectedAccount } from "../../src/engine/github/account.js";
+import type { InstallationBinding } from "../../src/engine/github/installation.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 
@@ -24,11 +24,11 @@ const PIPELINE_CONFIG: PipelineConfig = {
 	bundle: { similarityThreshold: 0.75 },
 };
 
-const ACCOUNT: ConnectedAccount = {
-	login: "octocat",
-	token: "ghp_abc",
-	scopes: [],
-	connectedAt: "2026-06-30T00:00:00.000Z",
+const ACCOUNT: InstallationBinding = {
+	installationId: 1,
+	accountLogin: "octocat",
+	accountType: "User",
+	boundAt: "2026-06-30T00:00:00.000Z",
 	selectedRepo: { owner: "octocat", name: "hello-world" },
 };
 
@@ -69,9 +69,9 @@ describe("webhookRouter", () => {
 	function setup(client: StubGitHubClient = new StubGitHubClient(), provider = new StubLlmProvider()): RefreshDeps {
 		const refreshDeps: RefreshDeps = {
 			accountState: createAccountState(ACCOUNT),
-			accountPath: join(dir, "github-account.json"),
+			accountPath: join(dir, "installation.json"),
 			clientHolder: new GitHubClientHolder(client),
-			oauth: undefined,
+			appConfig: { appId: "1", privateKey: "unused" },
 			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),
 			state: createServerState(),
 			pipelineDeps: {

@@ -2,6 +2,11 @@ import { Router } from "express";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 
+export interface WebhookConfig {
+	publicUrl: string;
+	secret: string;
+}
+
 const TRIGGER_ACTIONS = new Set(["opened", "reopened", "synchronize", "ready_for_review", "closed"]);
 
 interface PullRequestEvent {

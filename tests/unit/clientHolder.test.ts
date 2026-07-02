@@ -42,23 +42,4 @@ describe("GitHubClientHolder", () => {
 		expect(second.mergedPrs).toEqual(["org/repo/2"]);
 		expect(first.mergedPrs).toEqual([]);
 	});
-
-	it("delegates createWebhook to the current client", async () => {
-		const client = new StubGitHubClient();
-		const holder = new GitHubClientHolder(client);
-
-		const result = await holder.createWebhook("org", "repo", { url: "https://example.com/hook", secret: "s3cr3t" });
-
-		expect(result).toEqual({ id: expect.any(Number) });
-		expect(client.createdWebhooks).toEqual([{ owner: "org", repo: "repo", url: "https://example.com/hook", id: result.id }]);
-	});
-
-	it("delegates deleteWebhook to the current client", async () => {
-		const client = new StubGitHubClient();
-		const holder = new GitHubClientHolder(client);
-
-		await holder.deleteWebhook("org", "repo", 42);
-
-		expect(client.deletedWebhooks).toEqual([{ owner: "org", repo: "repo", hookId: 42 }]);
-	});
 });
