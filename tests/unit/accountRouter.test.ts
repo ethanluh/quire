@@ -115,7 +115,7 @@ describe("accountRouter (login-only)", () => {
 		return { state, cookie: setCookie.split(";")[0] ?? "" };
 	}
 
-	it("mints a fresh, independent state on every /oauth/start call", async () => {
+	it("mints a fresh state when no pending-state cookie is presented", async () => {
 		setup(async () => ({ login: "octocat", scopes: [] }), undefined);
 		await new Promise((resolve) => server.once("listening", resolve));
 
@@ -123,6 +123,30 @@ describe("accountRouter (login-only)", () => {
 		const second = await startOAuth();
 
 		expect(first.state).not.toBe(second.state);
+	});
+
+	it("reuses the pending state when the same browser calls /oauth/start twice (double-click / second tab)", async () => {
+		setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const first = await startOAuth();
+		// A second tab, or a double-click, from the SAME browser — its cookie jar already
+		// holds the first call's state cookie.
+		const { body: secondBody } = await call(server, "GET", "/account/github/oauth/start", first.cookie);
+		const secondState = new URL(secondBody["authorizeUrl"] as string).searchParams.get("state");
+
+		expect(secondState).toBe(first.state);
+
+		// The first tab's already-rendered authorize URL (embedding `first.state`) still
+		// completes successfully — the old singleton design's double-click tolerance,
+		// restored without reintroducing cross-browser clobbering.
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/oauth/callback?code=good-code&state=${first.state}`,
+			first.cookie,
+		);
+		expect(status).toBe(302);
+		expect(location).toBe("/?account=connected");
 	});
 
 	it("does not let one browser's /oauth/start invalidate another's in-flight login", async () => {

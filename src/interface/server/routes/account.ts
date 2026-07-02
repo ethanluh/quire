@@ -1,5 +1,3 @@
-import { randomBytes } from "node:crypto";
-import { parse } from "cookie";
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import type { Allowlist } from "../allowlist.js";
@@ -8,6 +6,7 @@ import { OAuthExchangeError } from "../../../engine/github/oauth.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import { SESSION_COOKIE_NAME, SESSION_TTL_MS, createSession } from "../session.js";
+import { cookieOptions, mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
 
 const OAUTH_STATE_COOKIE_NAME = "quire_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -48,22 +47,16 @@ export function accountRouter(
 	// not a server-wide variable — this endpoint is reachable by anyone (that's the point,
 	// it's how you log in), so a shared singleton here would let any visitor silently
 	// invalidate every other in-flight login on the server just by hitting this route.
-	router.get("/oauth/start", (_req, res) => {
-		const state = randomBytes(32).toString("hex");
-		res.cookie(OAUTH_STATE_COOKIE_NAME, state, {
-			httpOnly: true,
-			sameSite: "lax",
-			secure: secureCookies,
-			path: "/",
-			maxAge: OAUTH_STATE_TTL_MS,
-		});
+	// mintOrReuseStateCookie reuses an already-pending nonce from this same browser instead
+	// of always minting fresh, so a double-click or a second tab doesn't orphan the first.
+	router.get("/oauth/start", (req, res) => {
+		const state = mintOrReuseStateCookie(req, res, OAUTH_STATE_COOKIE_NAME, OAUTH_STATE_TTL_MS, secureCookies);
 		res.json({ authorizeUrl: oauth.buildAuthorizeUrl(oauth.config, oauth.redirectUri, state) });
 	});
 
 	router.get("/oauth/callback", async (req, res) => {
 		const { code, state: returnedState } = req.query;
-		const pendingState = parse(req.headers.cookie ?? "")[OAUTH_STATE_COOKIE_NAME];
-		res.clearCookie(OAUTH_STATE_COOKIE_NAME, { path: "/" });
+		const pendingState = consumeStateCookie(req, res, OAUTH_STATE_COOKIE_NAME);
 
 		if (
 			pendingState === undefined ||
@@ -86,13 +79,7 @@ export function accountRouter(
 				return;
 			}
 
-			res.cookie(SESSION_COOKIE_NAME, createSession(identity.login, sessionSecret), {
-				httpOnly: true,
-				sameSite: "lax",
-				secure: secureCookies,
-				path: "/",
-				maxAge: SESSION_TTL_MS,
-			});
+			res.cookie(SESSION_COOKIE_NAME, createSession(identity.login, sessionSecret), cookieOptions(secureCookies, SESSION_TTL_MS));
 			res.redirect(oauthResultRedirectUrl("connected", undefined));
 		} catch (err) {
 			const reason =

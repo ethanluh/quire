@@ -1,15 +1,14 @@
-import { randomBytes } from "node:crypto";
-import { parse } from "cookie";
 import { Router } from "express";
 import { z } from "zod";
 import type { InstallationBinding } from "../../../engine/github/installation.js";
 import { saveInstallation, clearInstallation } from "../../../engine/github/installation.js";
 import type { GitHubAppConfig, InstallationAccount } from "../../../engine/github/installationClient.js";
-import { buildInstallationClient } from "../../../engine/github/installationClient.js";
+import { buildInstallationClient, isInstallationRevoked } from "../../../engine/github/installationClient.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
 import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { validateBody } from "../middleware/validation.js";
+import { mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
 
 const SelectRepoSchema = z.object({
 	owner: z.string().min(1),
@@ -84,26 +83,27 @@ export function githubAppRouter(
 	// The nonce lives in a short-lived cookie scoped to the browser doing the install,
 	// not a server-wide variable — a second, unrelated install flow (a different admin,
 	// a retry) can't clobber this one's pending state the way a shared singleton would.
-	router.post("/install/start", (_req, res) => {
-		const state = randomBytes(32).toString("hex");
-		res.cookie(INSTALL_STATE_COOKIE_NAME, state, {
-			httpOnly: true,
-			sameSite: "lax",
-			secure: secureCookies,
-			path: "/",
-			maxAge: INSTALL_STATE_TTL_MS,
-		});
+	// mintOrReuseStateCookie reuses an already-pending nonce from this same browser instead
+	// of always minting fresh, so a double-click or a second tab doesn't orphan the first.
+	router.post("/install/start", (req, res) => {
+		const state = mintOrReuseStateCookie(req, res, INSTALL_STATE_COOKIE_NAME, INSTALL_STATE_TTL_MS, secureCookies);
 		const params = new URLSearchParams({ state });
 		res.json({ installUrl: `https://github.com/apps/${appSlug}/installations/new?${params.toString()}` });
 	});
 
 	// The App's Setup URL — GitHub redirects here after the user installs (or updates)
-	// the App, carrying installation_id, setup_action, and Quire's own state.
+	// the App, carrying installation_id, setup_action, and Quire's own state. This router is
+	// mounted after the global session middleware (see index.ts), so — despite this being a
+	// GitHub-initiated redirect, not a user-initiated one — it DOES require a currently valid
+	// session cookie to reach this handler at all. If that cookie expires or is cleared while
+	// the GitHub App-installation UI is open, the callback 401s before this code runs and the
+	// installation (already completed on GitHub's side) never gets bound here. Known gap, not
+	// addressed by this change; fixing it means deciding how an install-callback route can be
+	// authenticated without a fresh session in a still-single-tenant, pre-multi-user Quire.
 	router.get("/install/callback", async (req, res, next) => {
 		try {
 			const { installation_id: installationIdRaw, state: returnedState } = req.query;
-			const pendingState = parse(req.headers.cookie ?? "")[INSTALL_STATE_COOKIE_NAME];
-			res.clearCookie(INSTALL_STATE_COOKIE_NAME, { path: "/" });
+			const pendingState = consumeStateCookie(req, res, INSTALL_STATE_COOKIE_NAME);
 
 			if (
 				pendingState === undefined ||
@@ -116,12 +116,21 @@ export function githubAppRouter(
 			}
 
 			const installationId = Number(installationIdRaw);
-			const { accountLogin, accountType } = await getInstallationAccount(installationId);
+			let account: InstallationAccount;
+			try {
+				account = await getInstallationAccount(installationId);
+			} catch (err) {
+				if (isInstallationRevoked(err)) {
+					res.redirect("/?account=error&reason=the+installation+was+removed+or+is+no+longer+accessible");
+					return;
+				}
+				throw err;
+			}
 
 			const binding: InstallationBinding = {
 				installationId,
-				accountLogin,
-				accountType,
+				accountLogin: account.accountLogin,
+				accountType: account.accountType,
 				boundAt: new Date().toISOString(),
 			};
 			accountState.current = binding;
