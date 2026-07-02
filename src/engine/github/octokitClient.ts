@@ -110,6 +110,10 @@ export class OctokitGitHubClient implements GitHubClient {
 		await this.octokit.rest.pulls.merge({ owner, repo, pull_number: prNumber });
 	}
 
+	async closePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+		await this.octokit.rest.pulls.update({ owner, repo, pull_number: prNumber, state: "closed" });
+	}
+
 	async revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string> {
 		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
 		const result = await this.octokit.graphql<RevertPullRequestResponse>(REVERT_PULL_REQUEST_MUTATION, {
