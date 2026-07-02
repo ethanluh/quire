@@ -31,6 +31,10 @@ function makePrResponse(body: string | null, overrides: Record<string, unknown> 
 	};
 }
 
+function notFoundError(): RequestError {
+	return new RequestError("Not Found", 404, { request: { method: "GET", url: "", headers: {} } });
+}
+
 function makeFakeOctokit(opts: {
 	pr?: ReturnType<typeof makePrResponse>;
 	listPrs?: ReadonlyArray<ReturnType<typeof makePrResponse>>;
@@ -43,7 +47,27 @@ function makeFakeOctokit(opts: {
 	updateRejects?: Error;
 	graphqlRejects?: Error;
 	createCommentRejects?: Error;
-}): { octokit: Octokit; merge: jest.Mock; update: jest.Mock; graphql: jest.Mock; createComment: jest.Mock } {
+	defaultBranch?: string;
+	branchExists?: boolean;
+	getRefRejects?: Error;
+	createRefRejects?: Error;
+	getContentRejects?: Error;
+	createOrUpdateFileContentsRejects?: Error;
+	openPrs?: ReadonlyArray<{ number: number; html_url: string }>;
+	pullsCreateRejects?: Error;
+}): {
+	octokit: Octokit;
+	merge: jest.Mock;
+	update: jest.Mock;
+	graphql: jest.Mock;
+	createComment: jest.Mock;
+	getRef: jest.Mock;
+	createRef: jest.Mock;
+	getContent: jest.Mock;
+	createOrUpdateFileContents: jest.Mock;
+	pullsList: jest.Mock;
+	pullsCreate: jest.Mock;
+} {
 	const pr = opts.pr ?? makePrResponse("<!-- declared-direction: add passwordless auth -->");
 	const get = jest.fn(async (params: { mediaType?: { format: string } }) => {
 		if (params.mediaType?.format === "diff") return { data: opts.diff ?? "diff --git a/x b/x" };
@@ -56,7 +80,7 @@ function makeFakeOctokit(opts: {
 		? jest.fn(async () => { throw opts.updateRejects; })
 		: jest.fn(async () => ({ data: {} }));
 	const listFiles = jest.fn(async () => ({ data: opts.files ?? [{ filename: "src/auth.ts" }] }));
-	const list = jest.fn(async () => ({ data: opts.listPrs ?? [pr] }));
+	const pullsList = jest.fn(async () => ({ data: opts.openPrs ?? opts.listPrs ?? [] }));
 	const listForRef = jest.fn(async () => ({ data: opts.checkRuns ?? [{ status: "completed", conclusion: "success" }] }));
 	const getCombinedStatusForRef = jest.fn(async () => ({
 		data: opts.combinedStatus ?? { state: "success", statuses: [] },
@@ -68,6 +92,31 @@ function makeFakeOctokit(opts: {
 		? jest.fn(async () => { throw opts.createCommentRejects; })
 		: jest.fn(async () => ({ data: {} }));
 
+	const reposGet = jest.fn(async () => ({ data: { default_branch: opts.defaultBranch ?? "main" } }));
+	let getRefCalls = 0;
+	const getRef = opts.getRefRejects
+		? jest.fn(async () => { throw opts.getRefRejects; })
+		: jest.fn(async () => {
+			// First call checks whether the setup branch exists; only that one should
+			// miss when simulating a fresh branch — the fallback call for the default
+			// branch's tip (to create the setup branch from) must still resolve.
+			getRefCalls += 1;
+			if (opts.branchExists === false && getRefCalls === 1) throw notFoundError();
+			return { data: { object: { sha: "default-sha" } } };
+		});
+	const createRef = opts.createRefRejects
+		? jest.fn(async () => { throw opts.createRefRejects; })
+		: jest.fn(async () => ({ data: {} }));
+	const getContent = opts.getContentRejects
+		? jest.fn(async () => { throw opts.getContentRejects; })
+		: jest.fn(async () => { throw notFoundError(); });
+	const createOrUpdateFileContents = opts.createOrUpdateFileContentsRejects
+		? jest.fn(async () => { throw opts.createOrUpdateFileContentsRejects; })
+		: jest.fn(async () => ({ data: {} }));
+	const pullsCreate = opts.pullsCreateRejects
+		? jest.fn(async () => { throw opts.pullsCreateRejects; })
+		: jest.fn(async () => ({ data: { number: 9, html_url: "https://github.com/org/repo/pull/9" } }));
+
 	const paginate = jest.fn(async (method: (p: unknown) => Promise<{ data: unknown }>, params: unknown) => {
 		const res = await method(params);
 		return res.data;
@@ -75,16 +124,17 @@ function makeFakeOctokit(opts: {
 
 	const octokit = {
 		rest: {
-			pulls: { get, merge, update, listFiles, list },
+			pulls: { get, merge, update, listFiles, list: pullsList, create: pullsCreate },
 			checks: { listForRef },
-			repos: { getCombinedStatusForRef },
+			repos: { getCombinedStatusForRef, get: reposGet, getContent, createOrUpdateFileContents },
+			git: { getRef, createRef },
 			issues: { createComment },
 		},
 		paginate,
 		graphql,
 	} as unknown as Octokit;
 
-	return { octokit, merge, update, graphql, createComment };
+	return { octokit, merge, update, graphql, createComment, getRef, createRef, getContent, createOrUpdateFileContents, pullsList, pullsCreate };
 }
 
 describe("OctokitGitHubClient", () => {
@@ -309,6 +359,91 @@ describe("OctokitGitHubClient", () => {
 					drift: { status: "clean" },
 					residualDisclosure: "behavioral confirm not run",
 					inputsHash: "hash-1",
+				}),
+			).rejects.toThrow(InsufficientGitHubPermissionError);
+		});
+	});
+
+	describe("commitFileToBranch", () => {
+		it("creates the branch from the default branch's tip when it doesn't exist yet", async () => {
+			const { octokit, getRef, createRef, createOrUpdateFileContents } = makeFakeOctokit({ branchExists: false });
+			const client = new OctokitGitHubClient(octokit);
+			await client.commitFileToBranch("org", "repo", "quire/setup", "README.md", "hello", "add readme");
+
+			expect(getRef).toHaveBeenCalledWith({ owner: "org", repo: "repo", ref: "heads/quire/setup" });
+			expect(getRef).toHaveBeenCalledWith({ owner: "org", repo: "repo", ref: "heads/main" });
+			expect(createRef).toHaveBeenCalledWith({ owner: "org", repo: "repo", ref: "refs/heads/quire/setup", sha: "default-sha" });
+			expect(createOrUpdateFileContents).toHaveBeenCalledWith(
+				expect.objectContaining({
+					owner: "org",
+					repo: "repo",
+					path: "README.md",
+					content: Buffer.from("hello", "utf8").toString("base64"),
+					branch: "quire/setup",
+				}),
+			);
+		});
+
+		it("reuses an existing branch without creating a new one", async () => {
+			const { octokit, createRef, createOrUpdateFileContents } = makeFakeOctokit({ branchExists: true });
+			const client = new OctokitGitHubClient(octokit);
+			await client.commitFileToBranch("org", "repo", "quire/setup", "README.md", "hello", "add readme");
+
+			expect(createRef).not.toHaveBeenCalled();
+			expect(createOrUpdateFileContents).toHaveBeenCalled();
+		});
+
+		it("raises an actionable error when the App lacks write permission to commit a file", async () => {
+			const { octokit } = makeFakeOctokit({
+				branchExists: true,
+				createOrUpdateFileContentsRejects: insufficientPermissionError(),
+			});
+			const client = new OctokitGitHubClient(octokit);
+			await expect(
+				client.commitFileToBranch("org", "repo", "quire/setup", "README.md", "hello", "add readme"),
+			).rejects.toThrow(InsufficientGitHubPermissionError);
+		});
+	});
+
+	describe("findOrCreatePullRequest", () => {
+		it("returns the existing open PR without creating a new one", async () => {
+			const { octokit, pullsCreate } = makeFakeOctokit({
+				openPrs: [{ number: 4, html_url: "https://github.com/org/repo/pull/4" }],
+			});
+			const client = new OctokitGitHubClient(octokit);
+			const result = await client.findOrCreatePullRequest("org", "repo", {
+				head: "quire/setup",
+				base: "main",
+				title: "Set up Quire",
+				body: "body",
+			});
+
+			expect(result).toEqual({ number: 4, url: "https://github.com/org/repo/pull/4", created: false });
+			expect(pullsCreate).not.toHaveBeenCalled();
+		});
+
+		it("creates a new PR when none is open", async () => {
+			const { octokit } = makeFakeOctokit({ openPrs: [] });
+			const client = new OctokitGitHubClient(octokit);
+			const result = await client.findOrCreatePullRequest("org", "repo", {
+				head: "quire/setup",
+				base: "main",
+				title: "Set up Quire",
+				body: "body",
+			});
+
+			expect(result).toEqual({ number: 9, url: "https://github.com/org/repo/pull/9", created: true });
+		});
+
+		it("raises an actionable error when the App lacks write permission to open a pull request", async () => {
+			const { octokit } = makeFakeOctokit({ openPrs: [], pullsCreateRejects: insufficientPermissionError() });
+			const client = new OctokitGitHubClient(octokit);
+			await expect(
+				client.findOrCreatePullRequest("org", "repo", {
+					head: "quire/setup",
+					base: "main",
+					title: "Set up Quire",
+					body: "body",
 				}),
 			).rejects.toThrow(InsufficientGitHubPermissionError);
 		});
