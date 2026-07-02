@@ -5,6 +5,7 @@ import { saveInstallation, clearInstallation } from "../../../engine/github/inst
 import type { GitHubAppConfig, InstallationAccount } from "../../../engine/github/installationClient.js";
 import { buildInstallationClient, isInstallationRevoked } from "../../../engine/github/installationClient.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
+import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
 import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { validateBody } from "../middleware/validation.js";
@@ -36,6 +37,8 @@ export function githubAppRouter(
 	listInstallationRepos: (installationId: number) => Promise<ReadonlyArray<RepoSummary>>,
 	getInstallationAccount: (installationId: number) => Promise<InstallationAccount>,
 	secureCookies: boolean,
+	userTokenCache: UserTokenCache,
+	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>,
 ): Router {
 	const router = Router();
 	const { accountState, accountPath, clientHolder } = refreshDeps;
@@ -158,7 +161,16 @@ export function githubAppRouter(
 			if (cached === undefined || repos !== cached.repos) {
 				repoListCache = { installationId: binding.installationId, expiresAt: Date.now() + REPO_LIST_CACHE_TTL_MS, repos };
 			}
-			res.json({ repos, selected: binding.selectedRepo });
+
+			// Starred/pinned status is a per-request enrichment, not part of the cached
+			// installation-repos payload — it needs the signed-in user's own token (an
+			// installation client has no "viewer"), and degrades to the plain list, unsorted,
+			// when there's no cached token (never signed in this process, or it expired).
+			const login = res.locals.login;
+			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
+			const responseRepos = userToken !== undefined ? await enrichWithUserToken(repos, userToken) : repos;
+
+			res.json({ repos: responseRepos, selected: binding.selectedRepo });
 		} catch (err) {
 			next(err);
 		}
