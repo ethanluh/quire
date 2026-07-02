@@ -34,6 +34,26 @@ The value proposition rests on a single bargain: the human stops checking correc
 
 ---
 
+## GitHub App setup
+
+Quire authenticates against GitHub as a GitHub App, not a personal access token. You need one registered before `npm run dev` will start — it refuses to boot without the env vars below (see `.env.example` for the full, authoritative list of vars and inline notes on which ones are dev-only vs. required for a public deployment).
+
+1. **Create the App** at [github.com/settings/apps/new](https://github.com/settings/apps/new) (use an org's settings page instead of your personal one if you want the App owned by an org).
+2. **Permissions** — under "Repository permissions", grant:
+   - **Pull requests**: Read-only (Quire only reads PRs; it never comments or pushes commit statuses itself)
+   - **Contents**: Read-only (needed to read diffs)
+   - **Metadata**: Read-only (mandatory default, selected automatically)
+3. **Webhook** — check "Active" and subscribe to the **Pull request** event (covers opened/synchronize/closed, which drive Quire's queue updates between reconcile polls). The Webhook URL must be a real address GitHub's servers can reach — for local dev, leave this blank or point it at a tunnel (e.g. `ngrok http 3000` → `https://<subdomain>.ngrok.io/webhooks/github`); without it Quire falls back to polling only (`QUIRE_RECONCILE_INTERVAL_MINUTES`).
+4. **URLs**:
+   - **Callback URL** (OAuth, used for sign-in): `http://localhost:<PORT>/account/github/oauth/callback` in dev, or `https://<your-domain>/account/github/oauth/callback` in production.
+   - **Setup URL** (App install flow): same domain, needs to be reachable by GitHub — only works once you're tunneling or deployed, same constraint as the webhook.
+5. **Where to find each credential** after creating the App, all on the App's own settings page (`github.com/settings/apps/<your-app-slug>`):
+   - **App ID** and **App slug** — top of the page → `GITHUB_APP_ID`, `GITHUB_APP_SLUG`.
+   - **Client ID** and **Client secret** (generate one) — under "OAuth credentials on this GitHub App" → `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`. These authenticate *sign-in* only ("Sign in with GitHub") — they're never used to call the GitHub API.
+   - **Private key** — generate and download the `.pem` under "Private keys", then base64-encode it into a single line: `base64 -i your-app.private-key.pem | tr -d '\n'` (macOS/BSD), or `base64 -w0 your-app.private-key.pem` (Linux) → `GITHUB_APP_PRIVATE_KEY_BASE64`. This key, together with the App ID, is the *installation* credential Quire uses for actual GitHub API calls (reading PRs, diffs) — a separate concern from the OAuth client id/secret above.
+   - **Webhook secret** — set your own value under "Webhook" → `GITHUB_APP_WEBHOOK_SECRET`.
+6. Fill in the resulting values in your `.env` (copied from `.env.example`), then from the running app's Account tab click "Install GitHub App" to bind an installation — this is what's persisted to `data/installation.json` and used for API access, distinct from signing in.
+
 ## Docs
 
 - [`docs/engineering-handoff.md`](docs/engineering-handoff.md) — full build spec: architecture, design invariants, drift-detection design, data model, phases, prior art, and success metrics.
