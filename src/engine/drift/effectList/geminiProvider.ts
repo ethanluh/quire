@@ -1,7 +1,7 @@
 import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "./provider.js";
 import { fetchWithRetry } from "./httpRetry.js";
 
-export const DEFAULT_MODEL = "gemini-2.0-flash";
+export const DEFAULT_MODEL = "gemma-4-31b-it";
 const DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001";
 const DEFAULT_MAX_TOKENS = 1024;
 
@@ -13,7 +13,11 @@ export interface GeminiProviderConfig {
 }
 
 interface GeminiGenerateContentResponse {
-	candidates?: ReadonlyArray<{ content?: { parts?: ReadonlyArray<{ text?: string }> } }>;
+	// Thinking-capable models (e.g. gemma-4-*) prepend a reasoning-trace part with
+	// `thought: true` ahead of the actual answer part. It must be excluded when
+	// building the returned text — callers (extractor.ts, matcher.ts) parse that
+	// text as JSON, and the reasoning trace isn't JSON.
+	candidates?: ReadonlyArray<{ content?: { parts?: ReadonlyArray<{ text?: string; thought?: boolean }> } }>;
 }
 
 interface GeminiEmbedContentResponse {
@@ -61,7 +65,11 @@ export class GeminiLlmProvider implements LlmProvider {
 		);
 
 		const data = (await res.json()) as GeminiGenerateContentResponse;
-		const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+		const text =
+			data.candidates?.[0]?.content?.parts
+				?.filter((p) => !p.thought)
+				.map((p) => p.text ?? "")
+				.join("") ?? "";
 		this._calls.push({ messages, response: text });
 		return text;
 	}
