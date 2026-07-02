@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import express from "express";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +8,7 @@ import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
 import { enrichWithStarredAndPinned } from "../../engine/github/repos.js";
 import type { RepoSummary } from "../../engine/github/repos.js";
 import { resolveLlmProvider } from "./resolveLlmProvider.js";
+import { resolveSessionSecret } from "./sessionSecret.js";
 import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken } from "../../engine/github/oauth.js";
 import type { OAuthDeps } from "../../engine/github/oauth.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
@@ -75,15 +75,7 @@ async function main(): Promise<void> {
 	const publicUrl = rawPublicUrl !== undefined && rawPublicUrl !== "" ? rawPublicUrl : undefined;
 	const isProduction = publicUrl !== undefined && publicUrl.startsWith("https://");
 
-	let sessionSecret = process.env["QUIRE_SESSION_SECRET"];
-	if (sessionSecret === undefined || sessionSecret === "") {
-		sessionSecret = randomBytes(32).toString("hex");
-		console.warn(
-			"QUIRE_SESSION_SECRET not set — generated a random one for this process. " +
-				"Every existing session will be invalidated on restart. Set it explicitly once hosted " +
-				"(e.g. `openssl rand -hex 32`).",
-		);
-	}
+	const sessionSecret = await resolveSessionSecret(DATA_DIR);
 	const allowedLogins = process.env["QUIRE_ALLOWED_GITHUB_LOGINS"];
 	const allowlist = createAllowlist(allowedLogins);
 	if (allowedLogins === undefined || allowedLogins === "") {

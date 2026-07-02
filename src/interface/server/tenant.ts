@@ -101,7 +101,7 @@ function sanitizeTeamId(teamId: string): string {
 	return teamId;
 }
 
-async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<TenantContext> {
+async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: TenantRegistry): Promise<TenantContext> {
 	const dir = join(shared.dataDir, "teams", teamId);
 	const installationPath = join(dir, "installation.json");
 	const llmAccountPath = join(dir, "llm-account.json");
@@ -114,22 +114,26 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<T
 	const conflictLogPath = join(dir, "instrumentation/conflict-resolution.ndjson");
 	const auditLogPath = join(dir, "instrumentation/audit.ndjson");
 
+	const decidedStore = new DecidedPrStore(decidedPrsPath);
+	const prCache = new PrEffectCache(prCachePath);
+
 	// One operator (this tenant) can bind several GitHub App installations — their personal
 	// account plus N orgs — and see a merged repo picker across all of them (see
 	// installation.ts's InstallationAccountState). selectedRepo/autoMergeOnAccept/
 	// flagConflictsForFleet live on that always-present account-wide state, not on any one
 	// installation, so they already survive an individual installation's disconnect/
-	// reconnect without a separate preferences store.
-	const installationAccountState = await loadInstallation(installationPath);
-	const accountState = createAccountState(installationAccountState);
-
-	const decidedStore = new DecidedPrStore(decidedPrsPath);
-	await decidedStore.load();
-
-	const prCache = new PrEffectCache(prCachePath);
-	await prCache.load();
-
-	const auditStore = await loadAuditStore(auditLogPath);
+	// reconnect without a separate preferences store. None of these five reads depend on
+	// another's result — run them concurrently instead of one after another on this
+	// tenant's cold-start path (this is on the hot path for resolveTenant's first
+	// getOrCreate call for a team, not just process startup).
+	const [installationBinding, auditStore, connectedLlmAccount] = await Promise.all([
+		loadInstallation(installationPath),
+		loadAuditStore(auditLogPath),
+		loadLlmAccount(llmAccountPath),
+		decidedStore.load(),
+		prCache.load(),
+	]);
+	const accountState = createAccountState(installationBinding);
 
 	let initialClient: GitHubClient;
 	const active = activeInstallation(accountState.current);
@@ -141,7 +145,6 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<T
 	const clientHolder = new GitHubClientHolder(initialClient);
 
 	// Resolved before MergeQueue below, which needs a provider for conflict resolution.
-	const connectedLlmAccount = await loadLlmAccount(llmAccountPath);
 	const llmAccountState = createLlmAccountState(connectedLlmAccount);
 	const { provider: initialLlmProvider } =
 		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : shared.resolveDefaultLlmProvider();
@@ -211,6 +214,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<T
 			shared.isProduction,
 			shared.userTokenCache,
 			shared.enrichWithUserToken,
+			(installationId) => registry.isInstallationBoundToOtherTeam(installationId, teamId),
 		),
 	);
 	router.use(
@@ -251,7 +255,7 @@ export class TenantRegistry {
 		const alreadyLoading = this.loading.get(key);
 		if (alreadyLoading !== undefined) return alreadyLoading;
 
-		const promise = loadTenant(key, this.shared).then((tenant) => {
+		const promise = loadTenant(key, this.shared, this).then((tenant) => {
 			this.tenants.set(key, tenant);
 			this.loading.delete(key);
 			return tenant;
@@ -276,6 +280,16 @@ export class TenantRegistry {
 			if (tenant.accountState.current.installations.some((i) => i.installationId === installationId)) return tenant;
 		}
 		return undefined;
+	}
+
+	// True when some OTHER already-loaded team has this installation bound. Checked by
+	// githubApp.ts's install callback before it binds — without this, two teams could each
+	// bind the same installation and findByInstallationId's scan above would then route
+	// every webhook for it to whichever team happened to load first, silently starving the
+	// other's queue with no error on either side.
+	isInstallationBoundToOtherTeam(installationId: number, exceptTeamId: string): boolean {
+		const owner = this.findByInstallationId(installationId);
+		return owner !== undefined && owner.teamId !== exceptTeamId;
 	}
 
 	// Loads every team that has ever connected anything, so the reconciliation poll and

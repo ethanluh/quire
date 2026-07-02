@@ -162,4 +162,33 @@ describe("TenantRegistry", () => {
 
 		await expect(registry.getOrCreate("../../etc/passwd")).rejects.toThrow();
 	});
+
+	describe("isInstallationBoundToOtherTeam", () => {
+		it("is false when no team has the installation bound", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+			const registry = makeRegistry();
+			await registry.getOrCreate("alpha");
+
+			expect(registry.isInstallationBoundToOtherTeam(555, "alpha")).toBe(false);
+		});
+
+		it("is false when the exempted team itself holds the installation", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+			const registry = makeRegistry();
+			const alpha = await registry.getOrCreate("alpha");
+			alpha.accountState.current = binding({ installationId: 555 });
+
+			expect(registry.isInstallationBoundToOtherTeam(555, "alpha")).toBe(false);
+		});
+
+		it("is true when a different team already holds the installation", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+			const registry = makeRegistry();
+			const alpha = await registry.getOrCreate("alpha");
+			await registry.getOrCreate("bravo");
+			alpha.accountState.current = binding({ installationId: 555 });
+
+			expect(registry.isInstallationBoundToOtherTeam(555, "bravo")).toBe(true);
+		});
+	});
 });

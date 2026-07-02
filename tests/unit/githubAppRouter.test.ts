@@ -148,6 +148,7 @@ describe("githubAppRouter", () => {
 			repos,
 		) => repos,
 		role: TeamRole = "owner",
+		isInstallationBoundToAnotherTeam: ((installationId: number) => boolean) | undefined = undefined,
 	): { accountPath: string; state: ServerState; refreshDeps: RefreshDeps; userTokenCache: UserTokenCache } {
 		const accountPath = join(dir, "installation.json");
 		const holder = new GitHubClientHolder(client);
@@ -185,7 +186,17 @@ describe("githubAppRouter", () => {
 		}
 		app.use(
 			"/account/github",
-			githubAppRouter(refreshDeps, "quire-review", buildClient, listRepos, getInstallationAccount, false, userTokenCache, enrichWithUserToken),
+			githubAppRouter(
+				refreshDeps,
+				"quire-review",
+				buildClient,
+				listRepos,
+				getInstallationAccount,
+				false,
+				userTokenCache,
+				enrichWithUserToken,
+				isInstallationBoundToAnotherTeam,
+			),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
@@ -237,7 +248,7 @@ describe("githubAppRouter", () => {
 
 	it("reuses the pending state when the same browser calls /install/start twice (double-click / second tab)", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-setup(async () => []);
+		setup(async () => []);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const first = await call(server, "POST", "/account/github/install/start");
@@ -264,7 +275,7 @@ setup(async () => []);
 
 	it("does not let one browser's /install/start invalidate another's in-flight install", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-setup(async () => []);
+		setup(async () => []);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		// Two independent browsers (cookie jars) both start an install around the same time.
@@ -287,7 +298,7 @@ setup(async () => []);
 
 	it("binds the installation on a valid callback, persisting it and swapping in a real client", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-const { accountPath } = setup(async () => []);
+		const { accountPath } = setup(async () => []);
 		await new Promise((resolve) => server.once("listening", resolve));
 		const start = await call(server, "POST", "/account/github/install/start");
 		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
@@ -354,6 +365,33 @@ const { accountPath } = setup(async () => []);
 		const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { installations: Record<string, unknown>[] };
 		expect(persisted.installations).toHaveLength(1);
 		expect(persisted.installations[0]?.["accountLogin"]).toBe("acme-corp-renamed");
+	});
+
+	it("refuses to bind an installation another team already has bound", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const { accountPath } = setup(
+			async () => [],
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			undefined,
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			undefined,
+			async (repos) => repos,
+			() => true,
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+		const start = await call(server, "POST", "/account/github/install/start");
+		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
+
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/install/callback?installation_id=555&state=${state}`,
+			cookiePair(start.setCookie),
+		);
+
+		expect(status).toBe(302);
+		expect(location).toBe("/?account=error&reason=this+GitHub+installation+is+already+connected+to+a+different+Quire+team");
+		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
 	});
 
 	it("derives accountType from the real installation instead of hardcoding it", async () => {

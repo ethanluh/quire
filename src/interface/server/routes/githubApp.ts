@@ -54,6 +54,11 @@ export function githubAppRouter(
 	secureCookies: boolean,
 	userTokenCache: UserTokenCache,
 	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>,
+	// Multi-tenant only: lets this team's router refuse to bind an installation another
+	// team already has bound, so findByInstallationId's lookup in tenant.ts never has to
+	// pick a winner between two teams claiming the same installation. Undefined in
+	// single-tenant contexts/tests, where there's only ever one team to begin with.
+	isInstallationBoundToAnotherTeam?: (installationId: number) => boolean,
 ): Router {
 	const router = Router();
 	const { accountState, accountPath, clientHolder } = refreshDeps;
@@ -155,6 +160,12 @@ export function githubAppRouter(
 			}
 
 			const installationId = Number(installationIdRaw);
+
+			if (isInstallationBoundToAnotherTeam?.(installationId) === true) {
+				res.redirect("/?account=error&reason=this+GitHub+installation+is+already+connected+to+a+different+Quire+team");
+				return;
+			}
+
 			let account: InstallationAccount;
 			try {
 				account = await getInstallationAccount(installationId);
