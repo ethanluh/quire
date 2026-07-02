@@ -10,6 +10,7 @@ function makeCard(overrides: Partial<ReviewCard> = {}): ReviewCard {
 		flags: [],
 		drift: { status: "clean" },
 		residualDisclosure: "behavioral confirm not run",
+		inputsHash: "hash-1",
 		...overrides,
 	};
 }
@@ -35,7 +36,7 @@ describe("formatReviewCardComment", () => {
 			makeCard({
 				drift: {
 					status: "flagged",
-					signals: [{ kind: "footprintAnomaly", surprisingSymbols: [] }],
+					signals: [{ kind: "footprintAnomaly", prId: "pr-1", surprisingSymbols: [] }],
 				},
 			}),
 		);

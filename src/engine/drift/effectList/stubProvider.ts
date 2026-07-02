@@ -5,6 +5,10 @@ export class StubLlmProvider implements LlmProvider {
 	private readonly embeddingMap: Map<string, ReadonlyArray<number>> = new Map();
 	private readonly _calls: LlmCall[] = [];
 
+	// Configurable (default "stub") so tests can construct two stubs with distinct
+	// modelKeys to exercise cache-invalidation-on-provider-change behavior.
+	constructor(readonly modelKey: string = "stub") {}
+
 	get calls(): ReadonlyArray<LlmCall> {
 		return this._calls;
 	}

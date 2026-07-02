@@ -1,8 +1,9 @@
 import type { Bundle, PullRequest } from "../types/core.js";
 import type { LlmProvider } from "../drift/effectList/provider.js";
 import { extractEffects } from "../drift/effectList/extractor.js";
-import { clusterPRs, type ClusteringFailure } from "./similarity.js";
+import { clusterPRs, type ClusteringFailure, type ClusterSeed } from "./similarity.js";
 import { settleWithConcurrency } from "../util/concurrency.js";
+import { PrEffectCache } from "../cache/prCache.js";
 
 const EXTRACTION_CONCURRENCY = 4;
 
@@ -40,34 +41,64 @@ export interface BundleResult {
 	// cluster failed. Same partial-failure contract as extractionFailures, one
 	// phase later.
 	clusteringFailures: ReadonlyArray<ClusteringFailure>;
+	// PR ids whose effects were freshly (re-)extracted this run — i.e. a cache miss,
+	// meaning their content changed since the last run (or they're new). Bundles with no
+	// re-extracted member and no membership change can safely skip drift re-screening
+	// (see orchestratePipeline).
+	reextractedPrIds: ReadonlySet<string>;
 }
 
 export async function buildBundles(
 	prs: ReadonlyArray<PullRequest>,
 	provider: LlmProvider,
 	config: BundleConfig,
+	// Ephemeral by default: with no cache passed in, every PR is always a cache miss,
+	// which reproduces today's "always extract, always cluster fresh" behavior exactly.
+	prCache: PrEffectCache = new PrEffectCache(),
+	// Bundles from the previous run, used to seed clustering so unchanged bundles skip
+	// re-comparison entirely (see the seed-validity check below). Empty by default,
+	// which reproduces today's full-batch clustering exactly.
+	priorBundles: ReadonlyArray<Bundle> = [],
 ): Promise<BundleResult> {
 	if (prs.length === 0) {
-		return { bundles: [], effectsByPr: new Map(), extractionFailures: [], clusteringFailures: [] };
+		return { bundles: [], effectsByPr: new Map(), extractionFailures: [], clusteringFailures: [], reextractedPrIds: new Set() };
+	}
+
+	const currentById = new Map(prs.map((pr) => [pr.id, pr]));
+	const modelKey = provider.modelKey;
+
+	const cacheHits = new Map<string, ReadonlyArray<string>>();
+	const toExtract: PullRequest[] = [];
+	for (const pr of prs) {
+		const cached = prCache.getEffects(pr.id, pr.headSha, modelKey);
+		if (cached !== undefined) {
+			cacheHits.set(pr.id, cached);
+		} else {
+			toExtract.push(pr);
+		}
 	}
 
 	// Extraction is independent per PR, so it runs concurrently (capped) rather than
 	// one network round-trip at a time — settleWithConcurrency keeps one PR's failure
 	// from blocking the rest, matching the per-PR partial-failure contract below, and
-	// bounds how many requests fire at once against a rate-limited provider.
-	const results = await settleWithConcurrency(prs, EXTRACTION_CONCURRENCY, (pr) =>
+	// bounds how many requests fire at once against a rate-limited provider. Only PRs
+	// that missed the cache (new, or headSha changed since last run) go through this.
+	const results = await settleWithConcurrency(toExtract, EXTRACTION_CONCURRENCY, (pr) =>
 		extractEffects(pr.diff, pr.testNamesChanged, provider).then((effects) => ({ pr, effects })),
 	);
 
-	const effectsByPr = new Map<string, ReadonlyArray<string>>();
+	const effectsByPr = new Map<string, ReadonlyArray<string>>(cacheHits);
 	const extractionFailures: ExtractionFailure[] = [];
-	const extracted: PullRequest[] = [];
+	const reextractedPrIds = new Set<string>();
+	const extracted: PullRequest[] = prs.filter((pr) => cacheHits.has(pr.id));
 	for (let i = 0; i < results.length; i++) {
 		const result = results[i]!;
-		const pr = prs[i]!;
+		const pr = toExtract[i]!;
 		if (result.status === "fulfilled") {
 			effectsByPr.set(pr.id, result.value.effects);
 			extracted.push(pr);
+			reextractedPrIds.add(pr.id);
+			prCache.putEffects(pr.id, pr.headSha, pr.repoOwner, pr.repoName, result.value.effects, modelKey);
 		} else {
 			extractionFailures.push({
 				pr,
@@ -76,8 +107,37 @@ export async function buildBundles(
 		}
 	}
 
+	// A prior bundle can only be seeded (its members skipped in clustering entirely)
+	// when every one of its members is both still present in this run's PR set and
+	// unchanged (not re-extracted). A single changed or missing (closed/merged) member
+	// invalidates the whole seed — its still-present members fall back to the normal
+	// comparison loop below rather than risk carrying a stale centroid (the anchor may
+	// be the one that changed) or duplicating a member across two clusters.
+	const currentIds = new Set(currentById.keys());
+	const seeds: ClusterSeed[] = [];
+	const seededIds = new Set<string>();
+	for (const bundle of priorBundles) {
+		const allUnchanged = bundle.members.every(
+			(m) => currentIds.has(m.id) && !reextractedPrIds.has(m.id),
+		);
+		if (!allUnchanged) continue;
+		// Refresh every seed member to this run's freshly-fetched PullRequest object
+		// instead of carrying the prior run's object forward — declaredDirection/ciStatus/
+		// title are metadata re-fetched on every refresh independent of headSha, so a
+		// PR body edit or CI status change with no new commit must still surface here even
+		// though the seed itself (its effects/clustering) is otherwise untouched. `?? m`
+		// is unreachable given the `currentIds.has(m.id)` check above, kept only as a
+		// type-safety fallback.
+		seeds.push({
+			centroidText: bundle.effectSummary,
+			members: bundle.members.map((m) => currentById.get(m.id) ?? m),
+		});
+		for (const m of bundle.members) seededIds.add(m.id);
+	}
+	const toCluster = extracted.filter((pr) => !seededIds.has(pr.id));
+
 	const { clusters, failures: clusteringFailures } = await clusterPRs(
-		extracted, effectsByPr, provider, { threshold: config.similarityThreshold },
+		toCluster, effectsByPr, provider, { threshold: config.similarityThreshold }, seeds, prCache, modelKey,
 	);
 
 	const bundles = clusters.map((members): Bundle => {
@@ -91,5 +151,10 @@ export async function buildBundles(
 		};
 	});
 
-	return { bundles, effectsByPr, extractionFailures, clusteringFailures };
+	// One write for the whole batch instead of one per extracted/embedded item — every
+	// mutation above (putEffects, and putEmbedding inside clusterPRs) only touched
+	// in-memory state; this is the single point that actually persists it to disk.
+	await prCache.save();
+
+	return { bundles, effectsByPr, extractionFailures, clusteringFailures, reextractedPrIds };
 }

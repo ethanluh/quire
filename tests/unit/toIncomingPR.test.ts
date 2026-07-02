@@ -14,6 +14,7 @@ function makeRawPR(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 		diff:
 			"diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -1,1 +1,1 @@\n+export function login() {}\n",
 		ciStatus: "success",
+		headSha: "sha-1",
 		declaredDirection: "add passwordless auth",
 		filesTouched: ["src/auth.ts"],
 		...overrides,

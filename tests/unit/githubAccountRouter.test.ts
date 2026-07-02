@@ -24,6 +24,7 @@ import { createAccountState } from "../../src/interface/server/accountState.js";
 import type { RefreshDeps } from "../../src/interface/server/refreshRepoQueue.js";
 import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
+import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
@@ -84,6 +85,7 @@ function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 		repo: "hello-world",
 		title: "Add OTP login",
 		body: "",
+		headSha: "sha-1",
 		diff: "diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -0,0 +1 @@\n+export function login() {}\n",
 		ciStatus: "success",
 		declaredDirection: "add passwordless auth",
@@ -144,6 +146,7 @@ describe("githubAccountRouter", () => {
 			provider,
 			analyzer: new StubStaticAnalyzer(),
 			auditStore: depsOverrides.auditStore ?? new AuditStore(),
+			prCache: new PrEffectCache(),
 		};
 		const refreshDeps: RefreshDeps = {
 			accountState,
@@ -583,6 +586,100 @@ describe("githubAccountRouter", () => {
 		expect(state.bundles.size).toBe(1);
 		const [card] = [...state.cards.values()];
 		expect(card?.directionSummary).toBe("direction two");
+	});
+
+	describe("POST /repos/refresh", () => {
+		it("is a no-op when no account is connected", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const { state } = setup(async () => ({ login: "octocat", scopes: [] }));
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh", undefined, ADMIN_HEADERS);
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(false);
+			expect(state.bundles.size).toBe(0);
+		});
+
+		it("is a no-op when an account is connected but no repo is selected", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const { state } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh", undefined, ADMIN_HEADERS);
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(false);
+			expect(state.bundles.size).toBe(0);
+		});
+
+		it("re-fetches and re-ingests the already-selected repo's open PRs", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const client = new StubGitHubClient();
+			client.addFixture("octocat", "hello-world", makePrFixture());
+			const provider = new StubLlmProvider();
+			provider.queueCompletion('["adds OTP login"]');
+			provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+			const { state } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				client,
+				provider,
+				{
+					login: "octocat",
+					token: "ghp_abc",
+					scopes: [],
+					connectedAt: "2026-06-30T00:00:00.000Z",
+					selectedRepo: { owner: "octocat", name: "hello-world" },
+				},
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh", undefined, ADMIN_HEADERS);
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(true);
+			expect(body["bundlesCreated"]).toBe(1);
+			expect(state.bundles.size).toBe(1);
+			const [card] = [...state.cards.values()];
+			expect(card?.directionSummary).toBe("add passwordless auth");
+		});
+
+		it("reports needsReconnect instead of a 5xx when the token can't be refreshed", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{
+					login: "octocat",
+					token: "ghp_abc",
+					scopes: [],
+					connectedAt: "2026-06-30T00:00:00.000Z",
+					selectedRepo: { owner: "octocat", name: "hello-world" },
+					// Expired with no refresh token and no OAuth configured (setup()'s default) —
+					// ensureValidAccessToken can't recover this and throws NeedsReconnectError.
+					tokenExpiresAt: "2020-01-01T00:00:00.000Z",
+				},
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh", undefined, ADMIN_HEADERS);
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(false);
+			expect(body["needsReconnect"]).toBe(true);
+		});
 	});
 
 	it("surfaces a partial pipeline failure in the response instead of silently succeeding", async () => {
@@ -1154,6 +1251,89 @@ describe("githubAccountRouter", () => {
 			const { body } = await call(server, "GET", "/account/github/status");
 
 			expect(body["needsReconnect"]).toBe(false);
+		});
+	});
+
+	describe("POST /settings", () => {
+		it("persists autoMergeOnAccept and surfaces it on status", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const { accountPath } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(
+				server,
+				"POST",
+				"/account/github/settings",
+				{ autoMergeOnAccept: true },
+				ADMIN_HEADERS,
+			);
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ autoMergeOnAccept: true });
+
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
+			expect(persisted["autoMergeOnAccept"]).toBe(true);
+
+			const statusResult = await call(server, "GET", "/account/github/status");
+			expect(statusResult.body["autoMergeOnAccept"]).toBe(true);
+		});
+
+		it("defaults autoMergeOnAccept to false on status when unset", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { body } = await call(server, "GET", "/account/github/status");
+
+			expect(body["autoMergeOnAccept"]).toBe(false);
+		});
+
+		it("returns 400 when no account is connected", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(async () => ({ login: "octocat", scopes: [] }));
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(
+				server,
+				"POST",
+				"/account/github/settings",
+				{ autoMergeOnAccept: true },
+				ADMIN_HEADERS,
+			);
+
+			expect(status).toBe(400);
+			expect(body["error"]).toBe("Connect a GitHub account first");
+		});
+
+		it("rejects requests missing the admin header", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true }, {});
+
+			expect(status).toBe(403);
 		});
 	});
 });

@@ -25,6 +25,7 @@ export interface DeletedWebhookRecord {
 export class StubGitHubClient implements GitHubClient {
 	private readonly prFixtures: Map<string, RawPRPayload> = new Map();
 	readonly mergedPrs: string[] = [];
+	readonly closedPrs: string[] = [];
 	readonly revertedPrs: string[] = [];
 	readonly postedReviewCardComments: PostedReviewCardComment[] = [];
 	readonly createdWebhooks: CreatedWebhookRecord[] = [];
@@ -52,6 +53,10 @@ export class StubGitHubClient implements GitHubClient {
 
 	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
 		this.mergedPrs.push(`${owner}/${repo}/${prNumber}`);
+	}
+
+	async closePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+		this.closedPrs.push(`${owner}/${repo}/${prNumber}`);
 	}
 
 	async revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string> {

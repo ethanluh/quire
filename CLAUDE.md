@@ -48,7 +48,7 @@ The pipeline runs top to bottom:
 - **INV-2** — effect-list extraction runs without seeing `declaredDirection`. Feed the declaration only as a comparison target *after* extraction.
 - **INV-3** — declaration-level disagreement may flag a member; agreement may never clear one. Clearing requires the independent check.
 - **INV-4** — accept operates on bundles; revert operates on individual PRs.
-- **INV-5** — accept enqueues; it does not merge synchronously. Every accept is reversible until the merge queue lands it.
+- **INV-5** — accept enqueues; it does not merge synchronously. Every accept is reversible until the merge queue lands it. *Exception: an explicit, opt-in `autoMergeOnAccept` account setting drains the queue immediately on accept for users who want that; default is off.*
 - **INV-6** — surface what the system could not clear. Disclose the residual honestly on the card.
 
 ### Module boundaries

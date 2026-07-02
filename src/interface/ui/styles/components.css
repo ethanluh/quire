@@ -92,6 +92,15 @@ body {
 	animation: drift-reveal var(--duration-base) var(--ease-standard);
 }
 
+/* Reuses the reject color rather than inventing a new one — this is the same
+   "most severe" semantic tier as the reject gesture, for signals grounded in
+   static analysis / confirmed behavior rather than an LLM judgment call. */
+.badge-critical {
+	background: var(--color-reject-wash);
+	color: var(--color-reject);
+	animation: drift-reveal var(--duration-base) var(--ease-standard);
+}
+
 /* Residual disclosure — permanent and legible, never fine print. */
 .residual {
 	margin-top: var(--space-3);
@@ -136,6 +145,12 @@ body {
 	box-shadow: var(--focus-ring);
 }
 
+.btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+	pointer-events: none;
+}
+
 .btn-accept { color: var(--color-accept); --btn-color: var(--color-accept); }
 .btn-defer  { color: var(--color-defer); --btn-color: var(--color-defer); }
 .btn-reject { color: var(--color-reject); --btn-color: var(--color-reject); }
@@ -171,6 +186,76 @@ body {
 	display: flex;
 	gap: var(--space-2);
 	margin-top: var(--space-3);
+}
+
+.modal-backdrop .detail-modal {
+	max-width: 640px;
+}
+
+@media (min-width: 700px) {
+	.modal-backdrop .detail-modal {
+		max-width: 900px;
+		max-height: 85vh;
+		overflow-y: auto;
+	}
+}
+
+.pr-member-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+}
+
+.pr-member-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: var(--space-3);
+	font-size: var(--text-sm);
+}
+
+.pr-member-info {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-width: 0;
+}
+
+.pr-member-info a {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.pr-member-direction {
+	color: var(--color-text-muted);
+}
+
+.pr-member-tags {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	flex: 0 0 auto;
+}
+
+/* Below this width the tags cluster is too wide to sit beside the info column
+   without squeezing the repo link into an unreadable ellipsis truncation —
+   stack instead of crowd. */
+@media (max-width: 700px) {
+	.pr-member-row {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.pr-member-info a {
+		overflow: visible;
+		white-space: normal;
+	}
+
+	.pr-member-tags {
+		flex-wrap: wrap;
+	}
 }
 
 /* Tabs */

@@ -7,7 +7,7 @@ import type { Server } from "node:http";
 import { shelfRouter } from "../../src/interface/server/routes/shelf.js";
 import { createServerState } from "../../src/interface/server/state.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
-import type { ReviewCard } from "../../src/engine/types/core.js";
+import type { Bundle, ReviewCard } from "../../src/engine/types/core.js";
 
 function makeCard(bundleId: string): ReviewCard {
 	return {
@@ -17,6 +17,29 @@ function makeCard(bundleId: string): ReviewCard {
 		flags: [],
 		drift: { status: "clean" },
 		residualDisclosure: "behavioral confirm not run",
+		inputsHash: "hash-1",
+	};
+}
+
+function makeBundle(id: string): Bundle {
+	return {
+		id,
+		direction: "add passwordless auth",
+		effectSummary: "adds OTP-based login",
+		members: [
+			{
+				id: `${id}-pr-1`,
+				repoOwner: "org",
+				repoName: "repo",
+				number: 1,
+				declaredDirection: "add passwordless auth",
+				diff: { raw: "", hunks: [] },
+				filesTouched: [],
+				symbolsTouched: [],
+				testNamesChanged: [],
+				ciStatus: "success",
+			},
+		],
 	};
 }
 
@@ -71,6 +94,18 @@ describe("shelfRouter", () => {
 		expect(state.shelf.has("b-1")).toBe(false);
 		expect(decidedStore.isDecided("pr-1")).toBe(false);
 		expect(decidedStore.isDecided("pr-2")).toBe(false);
+	});
+
+	it("promoting a bundle also restores its full Bundle to state.bundles", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-shelf-"));
+		const { state } = setup();
+		await new Promise((resolve) => server.once("listening", resolve));
+		state.shelf.set("b-2", { card: makeCard("b-2"), bundle: makeBundle("b-2"), memberPrIds: ["pr-1"] });
+
+		const { status } = await call("DELETE", "/shelf/b-2");
+
+		expect(status).toBe(200);
+		expect(state.bundles.get("b-2")).toEqual(makeBundle("b-2"));
 	});
 
 	it("returns 404 for promoting a bundle that isn't on the shelf", async () => {

@@ -66,7 +66,8 @@
 
   .account-panel p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
   .account-connect-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-  .account-panel input {
+  .account-panel input, .account-panel select,
+  .modal-backdrop input, .modal-backdrop select {
     width: 100%;
     max-width: 480px;
     background: var(--color-surface-overlay);
@@ -77,7 +78,20 @@
     font-size: var(--text-sm);
     padding: var(--space-2) var(--space-3);
   }
-  .account-panel input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .account-panel input:focus-visible, .account-panel select:focus-visible,
+  .modal-backdrop input:focus-visible, .modal-backdrop select:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .account-panel select, .modal-backdrop select {
+    margin-bottom: var(--space-3);
+    appearance: none;
+    -webkit-appearance: none;
+    font-family: var(--font-body);
+    background-image: var(--select-chevron);
+    background-repeat: no-repeat;
+    background-position: right var(--space-3) center;
+    background-size: 12px;
+    padding-right: var(--space-8);
+  }
+  .account-panel + .account-panel { margin-top: var(--space-6); }
   .account-status {
     display: flex;
     align-items: center;
@@ -97,6 +111,16 @@
     margin: 0 0 var(--space-3);
   }
   .automation-status { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
+  .auto-merge-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-3);
+    cursor: pointer;
+  }
+  .auto-merge-toggle input { width: auto; max-width: none; margin: 0; }
   .repo-search { margin-bottom: var(--space-3); }
   .repo-list { display: flex; flex-direction: column; gap: var(--space-2); max-height: 320px; overflow-y: auto; }
   .repo-entry {
@@ -152,6 +176,8 @@
     align-items: center;
   }
   .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
+  .queue-entry-actions { display: flex; align-items: center; gap: var(--space-2); }
+  .queue-entry-actions .btn { padding: var(--space-1) var(--space-3); }
 
   .status-badge {
     font-size: var(--text-xs);
@@ -230,9 +256,24 @@
     <div class="repo-panel" id="repo-panel" style="display:none">
       <h3>Repository to work on</h3>
       <div class="automation-status" id="automation-status" style="display:none"></div>
+      <label class="auto-merge-toggle">
+        <input type="checkbox" id="chk-auto-merge">
+        Automatically merge accepted bundles (skips the manual "Process next" step)
+      </label>
       <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
       <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
     </div>
+  </div>
+
+  <div class="account-panel">
+    <h3>LLM provider</h3>
+    <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles. Falls back to <code>.env</code> configuration (or a stub with no real extraction) when disconnected.</p>
+    <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
+    <div id="llm-connect-form">
+      <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
+    </div>
+    <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
+    <div id="llm-account-result" class="result-msg" style="display:none"></div>
   </div>
 </div>
 
@@ -249,6 +290,33 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="llm-modal-backdrop" style="display:none">
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="llm-modal-title">
+    <h3 class="modal-title" id="llm-modal-title">Connect an LLM API key</h3>
+    <p>Stored locally in Quire's data directory; used only for calls to the provider you choose.</p>
+    <select id="llm-provider-select">
+      <option value="anthropic">Anthropic</option>
+      <option value="gemini">Gemini</option>
+    </select>
+    <input type="password" id="llm-api-key" placeholder="API key" autocomplete="off">
+    <div id="llm-modal-result" class="result-msg" style="display:none"></div>
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-llm-modal-cancel">Cancel</button>
+      <button class="btn btn-accept" id="btn-llm-modal-connect">Connect</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="detail-modal-backdrop" style="display:none">
+  <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
+    <h3 class="modal-title" id="detail-modal-title">Bundle detail</h3>
+    <div id="detail-modal-body"><div class="empty">Loading&hellip;</div></div>
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-detail-modal-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 function showTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
@@ -260,7 +328,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
-    if (tab.dataset.tab === 'account') loadAccount();
+    if (tab.dataset.tab === 'account') { loadAccount(); loadLlmAccount(); }
   });
 });
 
@@ -285,12 +353,14 @@ function driftBadge(drift) {
   return '<span class="badge badge-flagged">Drift flagged</span>';
 }
 
-function renderSignals(drift) {
+function renderSignals(drift, members) {
   if (drift.status !== 'flagged') return '';
   const items = drift.signals.map(s => {
-    if (s.kind === 'effectList') return `Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
-    if (s.kind === 'footprintAnomaly') return `Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
-    return escapeHtml(s.description);
+    const pr = members && members.find(m => m.id === s.prId);
+    const prefix = pr ? `[${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}] ` : '';
+    if (s.kind === 'effectList') return `${prefix}Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
+    if (s.kind === 'footprintAnomaly') return `${prefix}Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
+    return `${prefix}${escapeHtml(s.description)}`;
   });
   return `<div class="drift-signals"><strong>Drift signals (noted, not an error)</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
 }
@@ -298,9 +368,10 @@ function renderSignals(drift) {
 function cardHtml(card, shelfMode) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
   const bundleId = escapeHtml(card.bundleId);
+  const detailsBtn = `<button class="btn" onclick="showBundleDetail('${bundleId}')">Details</button>`;
   const gestures = shelfMode
-    ? `<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
-    : `<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept</button>
+    ? `${detailsBtn}<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
+    : `${detailsBtn}<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept</button>
        <button class="btn btn-defer"  onclick="gesture('${bundleId}','defer')">Defer</button>
        <button class="btn btn-reject" onclick="gesture('${bundleId}','reject')">Reject</button>`;
   return `<div class="card" id="card-${bundleId}">
@@ -315,10 +386,133 @@ function cardHtml(card, shelfMode) {
   </div>`;
 }
 
+// --- Bundle detail modal ---
+const detailModalBackdrop = document.getElementById('detail-modal-backdrop');
+const detailModalBody = document.getElementById('detail-modal-body');
+let queueEntries = [];
+
+function ciStatusBadge(status) {
+  const cls = status === 'success' ? 'badge-clean' : status === 'failure' ? 'badge-flagged' : 'badge-neutral';
+  return `<span class="badge ${cls}">CI: ${escapeHtml(status)}</span>`;
+}
+
+function prDriftBadges(prId, drift) {
+  if (!drift || drift.status !== 'flagged') return '';
+  const signals = drift.signals.filter(s => s.prId === prId);
+  const footprintCount = signals.filter(s => s.kind === 'footprintAnomaly').length;
+  const behavioralCount = signals.filter(s => s.kind === 'behavioralDelta').length;
+  const effectCount = signals.filter(s => s.kind === 'effectList').length;
+  const badges = [];
+  // footprintAnomaly/behavioralDelta are grounded in static analysis or confirmed
+  // behavior, not an LLM judgment call — treated as the more severe tier (red).
+  // effectList is the matcher's best-effort read on declared vs. actual effects,
+  // more prone to false positives — the existing "flagged" tier (amber).
+  if (footprintCount > 0) badges.push(`<span class="badge badge-critical">Footprint: ${footprintCount}</span>`);
+  if (behavioralCount > 0) badges.push(`<span class="badge badge-critical">Behavioral: ${behavioralCount}</span>`);
+  if (effectCount > 0) badges.push(`<span class="badge badge-flagged">Effects: ${effectCount}</span>`);
+  return badges.join('');
+}
+
+function prMemberListHtml(members, drift) {
+  if (!members.length) return '<div class="empty">No member PRs.</div>';
+  return '<div class="pr-member-list">' + members.map(pr => {
+    const url = `https://github.com/${pr.repoOwner}/${pr.repoName}/pull/${pr.number}`;
+    return `<div class="pr-member-row">
+      <div class="pr-member-info">
+        <a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}</a>
+        <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)}</span>
+      </div>
+      <div class="pr-member-tags">
+        ${prDriftBadges(pr.id, drift)}
+        ${ciStatusBadge(pr.ciStatus)}
+        <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function detailBodyHtml(detail, opts) {
+  opts = opts || {};
+  return `
+    <div class="card-direction">${escapeHtml(detail.directionSummary || detail.direction || '')}</div>
+    ${detail.effectSummary ? `<p class="residual">${escapeHtml(detail.effectSummary)}</p>` : ''}
+    ${detail.blastRadius !== undefined ? `<div class="card-meta">
+      <span class="badge badge-neutral">Blast radius: ${detail.blastRadius} files</span>
+      ${driftBadge(detail.drift)} ${(detail.flags || []).map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('')}
+    </div>` : ''}
+    ${detail.drift ? renderSignals(detail.drift, detail.members) : ''}
+    ${detail.residualDisclosure ? `<div class="residual">${escapeHtml(detail.residualDisclosure)}</div>` : ''}
+    ${opts.queueMeta ? `<div class="card-meta">
+      <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(opts.queueMeta.status)}</span>
+      <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
+    </div>` : ''}
+    <h4>Member PRs</h4>
+    ${prMemberListHtml(detail.members || [], detail.drift)}
+  `;
+}
+
+function openDetailModal(html) {
+  detailModalBody.innerHTML = html;
+  detailModalBackdrop.style.display = 'flex';
+}
+
+function closeDetailModal() {
+  detailModalBackdrop.style.display = 'none';
+}
+
+async function showBundleDetail(bundleId) {
+  openDetailModal('<div class="empty">Loading&hellip;</div>');
+  const res = await fetch(`/bundles/${bundleId}`);
+  if (res.status === 404) {
+    detailModalBody.innerHTML = '<div class="empty">This bundle is no longer available (it may have just been actioned).</div>';
+    return;
+  }
+  const detail = await res.json();
+  detailModalBody.innerHTML = detailBodyHtml(detail);
+}
+
+function showQueueDetail(bundleId) {
+  const entry = queueEntries.find(e => e.bundleId === bundleId);
+  if (!entry) return;
+  openDetailModal(detailBodyHtml(
+    { direction: entry.bundle.direction, effectSummary: entry.bundle.effectSummary, members: entry.bundle.members },
+    { queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt } },
+  ));
+}
+
+document.getElementById('btn-detail-modal-close').addEventListener('click', closeDetailModal);
+detailModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === detailModalBackdrop) closeDetailModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && detailModalBackdrop.style.display !== 'none') closeDetailModal();
+});
+
 async function loadReview() {
-  const cards = await api('GET', '/bundles');
+  const status = await api('GET', '/account/github/status');
   const el = document.getElementById('card-list');
+  if (!status.connected) {
+    el.innerHTML = '<div class="empty">Connect a GitHub account to see the review queue.</div>';
+    return;
+  }
+  const cards = await api('GET', '/bundles');
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, false)).join('') : '<div class="empty">No bundles in review queue.</div>';
+}
+
+// Pulls the selected repo's current PRs from GitHub before rendering, so a fresh page
+// load/reload reflects reality instead of whatever's been cached in server memory since
+// the last webhook or reconcile tick. Best-effort: a failed refresh still falls back to
+// rendering whatever's already there. Skipped on non-local UI since /repos/refresh is
+// localOnly-gated the same way the rest of the repo-management endpoints are.
+async function refreshAndLoadReview() {
+  if (isLocalUi) {
+    try {
+      await api('POST', '/account/github/repos/refresh', undefined, { 'X-Quire-Admin': '1' });
+    } catch (err) {
+      console.error('PR refresh failed', err);
+    }
+  }
+  loadReview();
 }
 
 async function loadShelf() {
@@ -329,12 +523,23 @@ async function loadShelf() {
 
 async function loadQueue() {
   const entries = await api('GET', '/queue');
+  queueEntries = entries;
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry">
     <div><div>${escapeHtml(e.bundle.direction)}</div><div class="entry-id">${escapeHtml(e.bundleId)}</div></div>
-    <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+    <div class="queue-entry-actions">
+      <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+      <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
+      ${e.status === 'queued' ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
+    </div>
   </div>`).join('');
+}
+
+async function removeFromQueue(bundleId) {
+  if (!confirm('Remove this bundle from the merge queue?')) return;
+  await api('DELETE', `/queue/${bundleId}`);
+  loadQueue();
 }
 
 async function gesture(bundleId, action) {
@@ -351,7 +556,11 @@ async function promote(bundleId) {
 }
 
 document.getElementById('btn-process').addEventListener('click', async () => {
-  await api('POST', '/queue/process');
+  const result = await api('POST', '/queue/process');
+  if (result.error) {
+    alert('Could not process queue: ' + result.error);
+    return;
+  }
   loadQueue();
 });
 
@@ -361,8 +570,13 @@ document.getElementById('btn-ingest').addEventListener('click', async () => {
   try {
     const body = JSON.parse(raw);
     const result = await api('POST', '/prs/ingest', body);
-    el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
-    el.className = 'result-msg';
+    if (result.error) {
+      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created. ${result.error}`;
+      el.className = 'result-msg error';
+    } else {
+      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
+      el.className = 'result-msg';
+    }
     el.style.display = 'block';
     loadReview();
   } catch (e) {
@@ -430,6 +644,7 @@ async function loadAccount() {
     if (isLocalUi) {
       repoPanel.style.display = 'block';
       renderAutomationStatus(status.selectedRepo);
+      document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
       loadRepos(status.selectedRepo);
     } else {
       repoPanel.style.display = 'none';
@@ -464,6 +679,10 @@ function openPatModal() {
 function closePatModal() {
   patModalBackdrop.style.display = 'none';
 }
+
+document.getElementById('chk-auto-merge').addEventListener('change', async (e) => {
+  await api('POST', '/account/github/settings', { autoMergeOnAccept: e.target.checked }, { 'X-Quire-Admin': '1' });
+});
 
 patConnectBtn.addEventListener('click', openPatModal);
 patModalCancelBtn.addEventListener('click', closePatModal);
@@ -526,11 +745,79 @@ accountDisconnectBtn.addEventListener('click', async () => {
   loadAccount();
 });
 
+const llmConnectBtn = document.getElementById('btn-llm-connect');
+const llmDisconnectBtn = document.getElementById('btn-llm-disconnect');
+const llmModalBackdrop = document.getElementById('llm-modal-backdrop');
+const llmModalCancelBtn = document.getElementById('btn-llm-modal-cancel');
+
+async function loadLlmAccount() {
+  const statusEl = document.getElementById('llm-account-status');
+  const resultEl = document.getElementById('llm-account-result');
+  resultEl.style.display = 'none';
+  const status = await api('GET', '/account/llm/status');
+  if (status.connected) {
+    statusEl.textContent = `Connected to ${status.provider}`;
+    document.getElementById('llm-connect-form').style.display = 'none';
+    llmDisconnectBtn.style.display = isLocalUi ? 'inline-block' : 'none';
+  } else {
+    statusEl.textContent = isLocalUi
+      ? 'Not connected. Falling back to environment configuration.'
+      : 'Not connected. Connecting is only available from the machine running Quire.';
+    document.getElementById('llm-connect-form').style.display = isLocalUi ? 'block' : 'none';
+    llmDisconnectBtn.style.display = 'none';
+  }
+}
+
+function openLlmModal() {
+  document.getElementById('llm-api-key').value = '';
+  document.getElementById('llm-modal-result').style.display = 'none';
+  llmModalBackdrop.style.display = 'flex';
+  document.getElementById('llm-api-key').focus();
+}
+
+function closeLlmModal() {
+  llmModalBackdrop.style.display = 'none';
+}
+
+llmConnectBtn.addEventListener('click', openLlmModal);
+llmModalCancelBtn.addEventListener('click', closeLlmModal);
+llmModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === llmModalBackdrop) closeLlmModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && llmModalBackdrop.style.display !== 'none') closeLlmModal();
+});
+
+document.getElementById('btn-llm-modal-connect').addEventListener('click', async () => {
+  const provider = document.getElementById('llm-provider-select').value;
+  const apiKeyInput = document.getElementById('llm-api-key');
+  const apiKey = apiKeyInput.value.trim();
+  if (!apiKey) return;
+  const result = await api('POST', '/account/llm/connect', { provider, apiKey }, { 'X-Quire-Admin': '1' });
+  if (result.error) {
+    const resultEl = document.getElementById('llm-modal-result');
+    resultEl.textContent = 'Error: ' + result.error;
+    resultEl.className = 'result-msg error';
+    resultEl.style.display = 'block';
+    return;
+  }
+  apiKeyInput.value = '';
+  closeLlmModal();
+  loadLlmAccount();
+});
+
+llmDisconnectBtn.addEventListener('click', async () => {
+  if (!confirm('Disconnect the connected LLM API key?')) return;
+  await api('POST', '/account/llm/disconnect', undefined, { 'X-Quire-Admin': '1' });
+  loadLlmAccount();
+});
+
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
   const starredBadge = repo.starred ? '<span class="badge badge-clean badge-priority">★ Favorite</span>' : '';
   const pinnedBadge = repo.pinned ? '<span class="badge badge-neutral badge-priority">📌 Pinned</span>' : '';
+  const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
     ${starredBadge}
@@ -538,12 +825,14 @@ function repoHtml(repo, selectedRepo) {
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isSelected
       ? '<span class="badge badge-clean">Selected</span>'
-      : `<button class="btn btn-defer" onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">Select</button>`}
+      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">${isTarget ? 'Selecting…' : 'Select'}</button>`}
   </div>`;
 }
 
 let loadedRepos = [];
 let loadedSelectedRepo = null;
+let repoSelectionInProgress = false;
+let repoSelectionTarget = null;
 
 function renderRepoList() {
   const listEl = document.getElementById('repo-list');
@@ -575,31 +864,41 @@ async function loadRepos(selectedRepo) {
 document.getElementById('repo-search').addEventListener('input', renderRepoList);
 
 async function selectRepo(owner, name) {
-  const result = await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
-  if (result.error) {
-    showAccountResult('Error: ' + result.error, true);
-    return;
+  repoSelectionInProgress = true;
+  repoSelectionTarget = { owner, name };
+  renderRepoList();
+  showAccountResult(`Selecting ${owner}/${name} — fetching and ingesting pull requests…`, false);
+  try {
+    const result = await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
+    if (result.error) {
+      showAccountResult('Error: ' + result.error, true);
+      return;
+    }
+    const skipped = result.skipped || [];
+    const parts = [`Selected ${owner}/${name}.`, `${result.bundlesCreated || 0} bundle(s) created.`];
+    if (skipped.length) {
+      // Most commonly: the PR body has no <!-- declared-direction: ... --> marker
+      // (INV-1's fail-closed case) — surfaced so an empty/short queue isn't a silent mystery.
+      parts.push(`${skipped.length} PR(s) could not be ingested (e.g. missing declared-direction marker) and were skipped.`);
+    }
+    if (result.webhookRegistered) {
+      parts.push('Webhook registered — new PRs will be ingested automatically.');
+    } else if (result.webhookError) {
+      parts.push(`Webhook registration failed (${result.webhookError}) — falling back to periodic polling.`);
+    } else if (result.webhookDisabledReason) {
+      parts.push('Webhooks not configured — falling back to periodic polling.');
+    }
+    // loadAccount() resets account-result's visibility as part of its normal refresh, so the
+    // message has to be shown after it settles, not before (same ordering as the OAuth
+    // redirect handler above).
+    await loadAccount();
+    showAccountResult(parts.join(' '), false);
+    loadReview();
+  } finally {
+    repoSelectionInProgress = false;
+    repoSelectionTarget = null;
+    renderRepoList();
   }
-  const skipped = result.skipped || [];
-  const parts = [`Selected ${owner}/${name}.`, `${result.bundlesCreated || 0} bundle(s) created.`];
-  if (skipped.length) {
-    // Most commonly: the PR body has no <!-- declared-direction: ... --> marker
-    // (INV-1's fail-closed case) — surfaced so an empty/short queue isn't a silent mystery.
-    parts.push(`${skipped.length} PR(s) could not be ingested (e.g. missing declared-direction marker) and were skipped.`);
-  }
-  if (result.webhookRegistered) {
-    parts.push('Webhook registered — new PRs will be ingested automatically.');
-  } else if (result.webhookError) {
-    parts.push(`Webhook registration failed (${result.webhookError}) — falling back to periodic polling.`);
-  } else if (result.webhookDisabledReason) {
-    parts.push('Webhooks not configured — falling back to periodic polling.');
-  }
-  // loadAccount() resets account-result's visibility as part of its normal refresh, so the
-  // message has to be shown after it settles, not before (same ordering as the OAuth
-  // redirect handler above).
-  await loadAccount();
-  showAccountResult(parts.join(' '), false);
-  loadReview();
 }
 
 // Theme: "paper" (light, default) and "ink" (dark) — same tokens, see styles/tokens.css.
@@ -626,7 +925,7 @@ if (location.search.includes('desktop=1')) {
 if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop') {
   location.replace('mobile.html');
 } else {
-  loadReview();
+  refreshAndLoadReview();
 }
 document.getElementById('link-mobile').addEventListener('click', () => {
   localStorage.removeItem(VIEW_PREF_KEY);

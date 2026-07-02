@@ -10,6 +10,9 @@ import { gesturesRouter } from "../../src/interface/server/routes/gestures.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import { createAccountState } from "../../src/interface/server/accountState.js";
+import type { AccountState } from "../../src/interface/server/accountState.js";
+import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import type { Bundle, GestureAction, ReviewCard } from "../../src/engine/types/core.js";
 
 class RejectingGitHubClient extends StubGitHubClient {
@@ -20,6 +23,12 @@ class RejectingGitHubClient extends StubGitHubClient {
 		_action: GestureAction,
 		_card: ReviewCard,
 	): Promise<void> {
+		throw new Error("GitHub API unavailable");
+	}
+}
+
+class CloseFailingGitHubClient extends StubGitHubClient {
+	override async closePullRequest(_owner: string, _repo: string, _prNumber: number): Promise<void> {
 		throw new Error("GitHub API unavailable");
 	}
 }
@@ -35,6 +44,7 @@ function makeBundle(id: string): Bundle {
 				repoOwner: "org",
 				repoName: "repo",
 				number: 1,
+				headSha: "sha-1",
 				declaredDirection: "add passwordless auth",
 				diff: { raw: "", hunks: [] },
 				filesTouched: [],
@@ -46,6 +56,16 @@ function makeBundle(id: string): Bundle {
 	};
 }
 
+function makeAccount(overrides: { autoMergeOnAccept?: boolean } = {}) {
+	return {
+		login: "test-user",
+		token: "ghp_test",
+		scopes: ["repo"],
+		connectedAt: new Date(0).toISOString(),
+		...overrides,
+	};
+}
+
 function makeCard(bundleId: string): ReviewCard {
 	return {
 		bundleId,
@@ -54,6 +74,7 @@ function makeCard(bundleId: string): ReviewCard {
 		flags: [],
 		drift: { status: "clean" },
 		residualDisclosure: "behavioral confirm not run",
+		inputsHash: "hash-1",
 	};
 }
 
@@ -64,6 +85,7 @@ describe("gesturesRouter — review queue removal", () => {
 	let dataDir: string;
 	let github: StubGitHubClient;
 	let decidedStore: DecidedPrStore;
+	let accountState: AccountState;
 
 	beforeEach(async () => {
 		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
@@ -73,11 +95,15 @@ describe("gesturesRouter — review queue removal", () => {
 		await queue.load();
 		decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
 		await decidedStore.load();
+		accountState = createAccountState(undefined);
 
 		const app = express();
 		app.use(express.json());
 		app.use("/bundles", bundlesRouter(state));
-		app.use("/bundles", gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore));
+		app.use(
+			"/bundles",
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState),
+		);
 
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, resolve);
@@ -113,6 +139,29 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(decidedStore.isDecided("b-1-pr-1")).toBe(true);
 	});
 
+	it("merges immediately on accept when autoMergeOnAccept is enabled", async () => {
+		accountState.current = makeAccount({ autoMergeOnAccept: true });
+		state.bundles.set("b-1b", makeBundle("b-1b"));
+		state.cards.set("b-1b", makeCard("b-1b"));
+
+		const res = await gesture("b-1b", "accept");
+
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ status: "landed", bundleId: "b-1b" });
+		expect(github.mergedPrs).toEqual(["org/repo/1"]);
+	});
+
+	it("only enqueues on accept when autoMergeOnAccept is disabled", async () => {
+		accountState.current = makeAccount({ autoMergeOnAccept: false });
+		state.bundles.set("b-1c", makeBundle("b-1c"));
+		state.cards.set("b-1c", makeCard("b-1c"));
+
+		const res = await gesture("b-1c", "accept");
+
+		expect(await res.json()).toEqual({ status: "queued", bundleId: "b-1c" });
+		expect(github.mergedPrs).toEqual([]);
+	});
+
 	it("removes the card from the review queue on reject", async () => {
 		state.bundles.set("b-2", makeBundle("b-2"));
 		state.cards.set("b-2", makeCard("b-2"));
@@ -122,6 +171,15 @@ describe("gesturesRouter — review queue removal", () => {
 		const cards = await (await fetch(`${baseUrl}/bundles`)).json();
 		expect(cards).toEqual([]);
 		expect(decidedStore.isDecided("b-2-pr-1")).toBe(true);
+	});
+
+	it("closes each member PR on GitHub on reject", async () => {
+		state.bundles.set("b-2b", makeBundle("b-2b"));
+		state.cards.set("b-2b", makeCard("b-2b"));
+
+		await gesture("b-2b", "reject");
+
+		expect(github.closedPrs).toEqual(["org/repo/1"]);
 	});
 
 	it("removes the card from the review queue on defer", async () => {
@@ -134,6 +192,15 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(cards).toEqual([]);
 		expect(state.shelf.has("b-3")).toBe(true);
 		expect(decidedStore.isDecided("b-3-pr-1")).toBe(true);
+	});
+
+	it("keeps the full bundle alongside the card on defer, for the detail view", async () => {
+		state.bundles.set("b-3b", makeBundle("b-3b"));
+		state.cards.set("b-3b", makeCard("b-3b"));
+
+		await gesture("b-3b", "defer");
+
+		expect(state.shelf.get("b-3b")?.bundle).toEqual(makeBundle("b-3b"));
 	});
 
 	it("posts a review card comment to each member PR on accept", async () => {
@@ -192,10 +259,14 @@ describe("gesturesRouter — review card comment posting failures", () => {
 		await queue.load();
 		const decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
 		await decidedStore.load();
+		const accountState = createAccountState(undefined);
 
 		const app = express();
 		app.use(express.json());
-		app.use("/bundles", gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore));
+		app.use(
+			"/bundles",
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState),
+		);
 
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, resolve);
@@ -229,6 +300,65 @@ describe("gesturesRouter — review card comment posting failures", () => {
 			expect.stringContaining("Failed to post review card comment to org/repo#1"),
 			expect.any(Error),
 		);
+
+		errorSpy.mockRestore();
+	});
+});
+
+describe("gesturesRouter — reject GitHub close failures", () => {
+	let server: Server;
+	let baseUrl: string;
+	let dataDir: string;
+	let state: ReturnType<typeof createServerState>;
+
+	beforeEach(async () => {
+		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
+		state = createServerState();
+		state.bundles.set("b-1", makeBundle("b-1"));
+		state.cards.set("b-1", makeCard("b-1"));
+
+		const github = new CloseFailingGitHubClient();
+		const queue = new MergeQueue(join(dataDir, "queue.json"), github);
+		await queue.load();
+		const decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
+		await decidedStore.load();
+		const accountState = createAccountState(undefined);
+
+		const app = express();
+		app.use(express.json());
+		app.use("/bundles", bundlesRouter(state));
+		app.use(
+			"/bundles",
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState),
+		);
+		app.use(errorHandler);
+
+		await new Promise<void>((resolve) => {
+			server = app.listen(0, resolve);
+		});
+		const address = server.address();
+		const port = typeof address === "object" && address !== null ? address.port : 0;
+		baseUrl = `http://127.0.0.1:${port}`;
+	});
+
+	afterEach(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(dataDir, { recursive: true, force: true });
+	});
+
+	it("leaves the bundle in the review queue when closing the PR on GitHub fails", async () => {
+		const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+		const res = await fetch(`${baseUrl}/bundles/b-1/gesture`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ action: "reject" }),
+		});
+
+		expect(res.status).toBeGreaterThanOrEqual(500);
+
+		const cards = await (await fetch(`${baseUrl}/bundles`)).json();
+		expect(cards).toEqual([expect.objectContaining({ bundleId: "b-1" })]);
 
 		errorSpy.mockRestore();
 	});

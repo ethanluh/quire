@@ -16,6 +16,7 @@ export const IncomingPRSchema = z.object({
 	repoOwner: z.string(),
 	repoName: z.string(),
 	number: z.number().int().positive(),
+	headSha: z.string(),
 	declaredDirection: z.string().min(1),
 	diff: DiffSchema,
 	filesTouched: z.array(z.string()).optional(),
