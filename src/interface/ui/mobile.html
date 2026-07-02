@@ -82,9 +82,13 @@
   .list { display: flex; flex-direction: column; gap: var(--space-3); overflow-y: auto; }
   .list-card .card-direction { font-size: var(--text-base); margin-bottom: var(--space-3); }
   .list-card .btn { width: 100%; padding: var(--space-3) 0; margin-top: var(--space-3); text-align: center; }
+  .list-card .gestures { display: flex; gap: var(--space-2); }
+  .list-card .gestures .btn { flex: 1; }
 
   .queue-entry { font-size: var(--text-sm); display: flex; justify-content: space-between; align-items: center; }
   .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
+  .queue-entry-actions { display: flex; align-items: center; gap: var(--space-2); }
+  .queue-entry-actions .btn { width: auto; margin-top: 0; padding: var(--space-1) var(--space-3); }
   .status-badge { font-size: var(--text-xs); padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); }
   .status-queued  { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
@@ -192,6 +196,7 @@
       <button class="btn btn-reject" id="btn-tap-reject">Reject</button>
       <button class="btn btn-defer" id="btn-tap-defer">Defer</button>
       <button class="btn btn-accept" id="btn-tap-accept">Accept</button>
+      <button class="btn" id="btn-tap-details">Details</button>
     </div>
   </div>
 
@@ -263,6 +268,16 @@
 
 <div id="toast"></div>
 
+<div class="modal-backdrop" id="detail-modal-backdrop" style="display:none">
+  <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
+    <h3 class="modal-title" id="detail-modal-title">Bundle detail</h3>
+    <div id="detail-modal-body"><div class="empty">Loading&hellip;</div></div>
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-detail-modal-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const tabs = document.querySelectorAll('.tab');
 tabs.forEach(tab => {
@@ -299,12 +314,14 @@ function driftBadge(drift) {
   return '<span class="badge badge-flagged">Drift flagged</span>';
 }
 
-function renderSignals(drift) {
+function renderSignals(drift, members) {
   if (drift.status !== 'flagged') return '';
   const items = drift.signals.map(s => {
-    if (s.kind === 'effectList') return `Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
-    if (s.kind === 'footprintAnomaly') return `Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
-    return escapeHtml(s.description);
+    const pr = members && members.find(m => m.id === s.prId);
+    const prefix = pr ? `[${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}] ` : '';
+    if (s.kind === 'effectList') return `${prefix}Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
+    if (s.kind === 'footprintAnomaly') return `${prefix}Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
+    return `${prefix}${escapeHtml(s.description)}`;
   });
   return `<div class="drift-signals"><strong>Drift signals (noted, not an error)</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
 }
@@ -319,6 +336,98 @@ function cardBodyHtml(card) {
     ${renderSignals(card.drift)}
     <div class="residual">${escapeHtml(card.residualDisclosure)}</div>`;
 }
+
+// --- Bundle detail modal ---
+const detailModalBackdrop = document.getElementById('detail-modal-backdrop');
+const detailModalBody = document.getElementById('detail-modal-body');
+let queueEntries = [];
+
+function ciStatusBadge(status) {
+  const cls = status === 'success' ? 'badge-clean' : status === 'failure' ? 'badge-flagged' : 'badge-neutral';
+  return `<span class="badge ${cls}">CI: ${escapeHtml(status)}</span>`;
+}
+
+function prDriftBadge(prId, drift) {
+  if (!drift || drift.status !== 'flagged') return '';
+  const count = drift.signals.filter(s => s.prId === prId).length;
+  if (count === 0) return '';
+  return `<span class="badge badge-flagged">Drift: ${count}</span>`;
+}
+
+function prMemberListHtml(members, drift) {
+  if (!members.length) return '<div class="empty">No member PRs.</div>';
+  return '<div class="pr-member-list">' + members.map(pr => {
+    const url = `https://github.com/${pr.repoOwner}/${pr.repoName}/pull/${pr.number}`;
+    return `<div class="pr-member-row">
+      <div class="pr-member-info">
+        <a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}</a>
+        <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)}</span>
+      </div>
+      <div class="pr-member-tags">
+        ${prDriftBadge(pr.id, drift)}
+        ${ciStatusBadge(pr.ciStatus)}
+        <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function detailBodyHtml(detail, opts) {
+  opts = opts || {};
+  return `
+    <div class="card-direction">${escapeHtml(detail.directionSummary || detail.direction || '')}</div>
+    ${detail.effectSummary ? `<p class="residual">${escapeHtml(detail.effectSummary)}</p>` : ''}
+    ${detail.blastRadius !== undefined ? `<div class="card-meta">
+      <span class="badge badge-neutral">Blast radius: ${detail.blastRadius} files</span>
+      ${driftBadge(detail.drift)} ${(detail.flags || []).map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('')}
+    </div>` : ''}
+    ${detail.drift ? renderSignals(detail.drift, detail.members) : ''}
+    ${detail.residualDisclosure ? `<div class="residual">${escapeHtml(detail.residualDisclosure)}</div>` : ''}
+    ${opts.queueMeta ? `<div class="card-meta">
+      <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(opts.queueMeta.status)}</span>
+      <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
+    </div>` : ''}
+    <h4>Member PRs</h4>
+    ${prMemberListHtml(detail.members || [], detail.drift)}
+  `;
+}
+
+function openDetailModal(html) {
+  detailModalBody.innerHTML = html;
+  detailModalBackdrop.style.display = 'flex';
+}
+
+function closeDetailModal() {
+  detailModalBackdrop.style.display = 'none';
+}
+
+async function showBundleDetail(bundleId) {
+  openDetailModal('<div class="empty">Loading&hellip;</div>');
+  const res = await fetch(`/bundles/${bundleId}`);
+  if (res.status === 404) {
+    detailModalBody.innerHTML = '<div class="empty">This bundle is no longer available (it may have just been actioned).</div>';
+    return;
+  }
+  const detail = await res.json();
+  detailModalBody.innerHTML = detailBodyHtml(detail);
+}
+
+function showQueueDetail(bundleId) {
+  const entry = queueEntries.find(e => e.bundleId === bundleId);
+  if (!entry) return;
+  openDetailModal(detailBodyHtml(
+    { direction: entry.bundle.direction, effectSummary: entry.bundle.effectSummary, members: entry.bundle.members },
+    { queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt } },
+  ));
+}
+
+document.getElementById('btn-detail-modal-close').addEventListener('click', closeDetailModal);
+detailModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === detailModalBackdrop) closeDetailModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && detailModalBackdrop.style.display !== 'none') closeDetailModal();
+});
 
 // --- Review: swipeable stack ---
 const stackEl = document.getElementById('stack');
@@ -539,6 +648,9 @@ function tapGesture(action) {
 document.getElementById('btn-tap-accept').addEventListener('click', () => tapGesture('accept'));
 document.getElementById('btn-tap-defer').addEventListener('click', () => tapGesture('defer'));
 document.getElementById('btn-tap-reject').addEventListener('click', () => tapGesture('reject'));
+document.getElementById('btn-tap-details').addEventListener('click', () => {
+  if (reviewCards.length) showBundleDetail(reviewCards[0].bundleId);
+});
 
 // --- Shelf ---
 async function loadShelf() {
@@ -546,7 +658,10 @@ async function loadShelf() {
   const el = document.getElementById('shelf-list');
   el.innerHTML = cards.length ? cards.map(c => `<div class="list-card card">
     ${cardBodyHtml(c)}
-    <button class="btn btn-accept" onclick="promote('${escapeHtml(c.bundleId)}')">Unshelf</button>
+    <div class="gestures">
+      <button class="btn" onclick="showBundleDetail('${escapeHtml(c.bundleId)}')">Details</button>
+      <button class="btn btn-accept" onclick="promote('${escapeHtml(c.bundleId)}')">Unshelf</button>
+    </div>
   </div>`).join('') : '<div class="empty">Shelf is empty.</div>';
 }
 
@@ -559,16 +674,24 @@ async function promote(bundleId) {
 // --- Queue ---
 async function loadQueue() {
   const entries = await api('GET', '/queue');
+  queueEntries = entries;
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry card">
     <div><div>${escapeHtml(e.bundle.direction)}</div><div class="entry-id">${escapeHtml(e.bundleId)}</div></div>
-    <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+    <div class="queue-entry-actions">
+      <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+      <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
+    </div>
   </div>`).join('');
 }
 
 document.getElementById('btn-process').addEventListener('click', async () => {
-  await api('POST', '/queue/process');
+  const result = await api('POST', '/queue/process');
+  if (result.error) {
+    alert('Could not process queue: ' + result.error);
+    return;
+  }
   loadQueue();
 });
 
@@ -698,17 +821,20 @@ llmDisconnectBtn.addEventListener('click', async () => {
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
+  const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isSelected
       ? '<span class="badge badge-clean">Selected</span>'
-      : `<button class="btn btn-defer" onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">Select</button>`}
+      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">${isTarget ? 'Selecting…' : 'Select'}</button>`}
   </div>`;
 }
 
 let loadedRepos = [];
 let loadedSelectedRepo = null;
+let repoSelectionInProgress = false;
+let repoSelectionTarget = null;
 
 function renderRepoList() {
   const listEl = document.getElementById('repo-list');
@@ -740,8 +866,21 @@ async function loadRepos(selectedRepo) {
 document.getElementById('repo-search').addEventListener('input', renderRepoList);
 
 async function selectRepo(owner, name) {
-  await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
-  loadAccount();
+  repoSelectionInProgress = true;
+  repoSelectionTarget = { owner, name };
+  renderRepoList();
+  const resultEl = document.getElementById('account-result');
+  resultEl.textContent = `Selecting ${owner}/${name} — fetching and ingesting pull requests…`;
+  resultEl.className = 'result-msg';
+  resultEl.style.display = 'block';
+  try {
+    await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
+    await loadAccount();
+  } finally {
+    repoSelectionInProgress = false;
+    repoSelectionTarget = null;
+    renderRepoList();
+  }
 }
 
 // Theme: "paper" (light, default) and "ink" (dark) — kept in sync with the desktop view.

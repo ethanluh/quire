@@ -83,7 +83,7 @@ export function gesturesRouter(
 					res.json({ status: "rejected", bundleId });
 				} else {
 					// defer
-					state.shelf.set(bundleId, { card, memberPrIds });
+					state.shelf.set(bundleId, { card, bundle, memberPrIds });
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action);
 					await logDefer(deferLogPath, bundleId, card);

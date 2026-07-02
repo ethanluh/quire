@@ -44,9 +44,9 @@ export interface Effect {
 }
 
 export type DriftSignal =
-	| { kind: "effectList"; orphanClauses: ReadonlyArray<string> }
-	| { kind: "footprintAnomaly"; surprisingSymbols: ReadonlyArray<SymbolRef> }
-	| { kind: "behavioralDelta"; description: string; classified: "intended" | "unintended" };
+	| { kind: "effectList"; prId: string; orphanClauses: ReadonlyArray<string> }
+	| { kind: "footprintAnomaly"; prId: string; surprisingSymbols: ReadonlyArray<SymbolRef> }
+	| { kind: "behavioralDelta"; prId: string; description: string; classified: "intended" | "unintended" };
 
 export type DriftVerdict =
 	| { status: "clean" }

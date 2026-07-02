@@ -10,12 +10,15 @@ export function bundlesRouter(state: ServerState): Router {
 	});
 
 	router.get("/:id", (req, res) => {
-		const card = state.cards.get(req.params["id"] ?? "");
+		const id = req.params["id"] ?? "";
+		const shelved = state.shelf.get(id);
+		const card = state.cards.get(id) ?? shelved?.card;
 		if (card === undefined) {
 			res.status(404).json({ error: "Bundle not found" });
 			return;
 		}
-		res.json(card);
+		const bundle = state.bundles.get(id) ?? shelved?.bundle;
+		res.json({ ...card, effectSummary: bundle?.effectSummary ?? "", members: bundle?.members ?? [] });
 	});
 
 	return router;

@@ -35,7 +35,7 @@ describe("formatReviewCardComment", () => {
 			makeCard({
 				drift: {
 					status: "flagged",
-					signals: [{ kind: "footprintAnomaly", surprisingSymbols: [] }],
+					signals: [{ kind: "footprintAnomaly", prId: "pr-1", surprisingSymbols: [] }],
 				},
 			}),
 		);

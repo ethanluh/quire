@@ -22,7 +22,7 @@ export async function runCheapScreen(
 		.map((e) => e.clause);
 
 	if (orphanClauses.length > 0) {
-		signals.push({ kind: "effectList", orphanClauses });
+		signals.push({ kind: "effectList", prId: pr.id, orphanClauses });
 	}
 
 	// Footprint signal
@@ -35,7 +35,7 @@ export async function runCheapScreen(
 	const surprisingSymbols = touchedSymbols.filter((s) => !expectedSet.has(s.filePath));
 
 	if (surprisingSymbols.length > 0) {
-		signals.push({ kind: "footprintAnomaly", surprisingSymbols });
+		signals.push({ kind: "footprintAnomaly", prId: pr.id, surprisingSymbols });
 	}
 
 	// INV-3: "clean" only when zero signals — never because all effects matched
