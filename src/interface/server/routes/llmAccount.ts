@@ -14,13 +14,21 @@ const ConnectSchema = z.object({
 	apiKey: z.string().min(1),
 });
 
-// One minimal, cheap call used to confirm a submitted key actually works before it's
+// Minimal, cheap calls used to confirm a submitted key actually works before it's
 // persisted or swapped in. Without this, a bad key would fail silently later — per-PR
 // effect-extraction failures are swallowed and the pipeline continues (see
 // buildBundles()'s extractionFailures), so a typo'd key would look like "nothing happens"
-// instead of a clear error on the connect screen.
+// instead of a clear error on the connect screen. Both complete() and embed() are checked
+// since a key can be scoped/restricted to allow one but not the other (e.g. a Gemini key
+// permitted to call generateContent but not embedContent) — checking only complete()
+// would let such a key pass here and only fail later, deep inside real bundle clustering.
+// Anthropic's embed() is a hardcoded no-op returning [] (see anthropicProvider.ts), so
+// this costs nothing extra for that provider.
 async function verifyProviderWorks(resolved: ResolvedLlmProvider): Promise<void> {
-	await resolved.provider.complete([{ role: "user", content: "ping" }], { maxTokens: 1 });
+	await Promise.all([
+		resolved.provider.complete([{ role: "user", content: "ping" }], { maxTokens: 1 }),
+		resolved.provider.embed("ping"),
+	]);
 }
 
 export function llmAccountRouter(
@@ -32,6 +40,12 @@ export function llmAccountRouter(
 ): Router {
 	const router = Router();
 
+	// Serializes connect attempts: without this, two concurrent POST /connect requests
+	// (a double-click, or a client retry racing the original) could interleave their
+	// holder swap / state assignment / file write, leaving the in-memory provider and the
+	// persisted account describing two different keys until the next restart.
+	let connectInFlight: Promise<void> = Promise.resolve();
+
 	router.get("/status", (_req, res) => {
 		const account = llmAccountState.current;
 		if (account === undefined) {
@@ -42,6 +56,12 @@ export function llmAccountRouter(
 	});
 
 	router.post("/connect", localOnly, requireAdminHeader, validateBody(ConnectSchema), async (req, res, next) => {
+		const previous = connectInFlight;
+		let release!: () => void;
+		connectInFlight = new Promise((resolve) => {
+			release = resolve;
+		});
+		await previous;
 		try {
 			const { provider, apiKey } = req.body as z.infer<typeof ConnectSchema>;
 			const account: ConnectedLlmAccount = { provider, apiKey, connectedAt: new Date().toISOString() };
@@ -65,6 +85,8 @@ export function llmAccountRouter(
 			res.json({ connected: true, provider: account.provider, connectedAt: account.connectedAt });
 		} catch (err) {
 			next(err);
+		} finally {
+			release();
 		}
 	});
 
