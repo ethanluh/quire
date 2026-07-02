@@ -10,6 +10,7 @@ import { GitHubClientHolder } from "../../src/engine/github/clientHolder.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
+import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { ConnectedAccount } from "../../src/engine/github/account.js";
@@ -37,6 +38,7 @@ function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 		repo: "hello-world",
 		title: "Add OTP login",
 		body: "",
+		headSha: "sha-1",
 		diff: "diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -0,0 +1 @@\n+export function login() {}\n",
 		ciStatus: "success",
 		declaredDirection: "add passwordless auth",
@@ -89,6 +91,7 @@ describe("refreshRepoQueue", () => {
 				provider: overrides.provider ?? new StubLlmProvider(),
 				analyzer: new StubStaticAnalyzer(),
 				auditStore: new AuditStore(),
+				prCache: new PrEffectCache(),
 			},
 		};
 	}
@@ -232,6 +235,7 @@ describe("enqueueRefresh", () => {
 				provider: new StubLlmProvider(),
 				analyzer: new StubStaticAnalyzer(),
 				auditStore: new AuditStore(),
+				prCache: new PrEffectCache(),
 			},
 		};
 

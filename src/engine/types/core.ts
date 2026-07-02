@@ -20,6 +20,9 @@ export interface PullRequest {
 	repoOwner: string;
 	repoName: string;
 	number: number;
+	// The head commit SHA at fetch time. Used to detect when a PR's content has changed
+	// since a prior pipeline run (see src/engine/cache/prCache.ts) — never a verdict input.
+	headSha: string;
 	declaredDirection: string;
 	diff: Diff;
 	filesTouched: ReadonlyArray<string>;

@@ -7,6 +7,7 @@ export interface RawPRPayload {
 	repo: string;
 	title: string;
 	body: string;
+	headSha: string;
 	diff: string;
 	ciStatus: "success" | "failure" | "pending" | "unknown";
 	declaredDirection: string;

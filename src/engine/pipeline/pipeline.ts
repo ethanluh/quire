@@ -8,11 +8,34 @@ import { runGate } from "../gate/gate.js";
 import { buildBundles, type BundleConfig } from "../bundle/bundler.js";
 import { runCheapScreen } from "../drift/screen.js";
 import { buildReviewCard } from "../review/card.js";
+import { PrEffectCache } from "../cache/prCache.js";
 
 export interface PipelineConfig {
 	gate: GateConfig;
 	bundle: BundleConfig;
 }
+
+export interface PipelineRunDeps {
+	provider: LlmProvider;
+	analyzer: StaticAnalyzer;
+	auditStore: AuditStore;
+	// Ephemeral by default: with no cache passed in, every PR is always a cache miss,
+	// reproducing today's "always extract, always cluster fresh" behavior exactly.
+	prCache?: PrEffectCache;
+	// Optional: instrumentation is a pluggable add-on, not a hard dependency for the
+	// pipeline to run. Omitting it (or the caller's sink lacking a method) is a no-op.
+	sink?: InstrumentationSink;
+}
+
+// The previous call's bundles/cards for this same PR set, used to seed clustering and
+// skip re-screening bundles that didn't change. Empty by default, which reproduces
+// today's full-batch clustering and full re-screening exactly.
+export interface PriorPipelineRun {
+	bundles: ReadonlyArray<Bundle>;
+	cards: ReadonlyMap<string, ReviewCard>;
+}
+
+const EMPTY_PRIOR_RUN: PriorPipelineRun = { bundles: [], cards: new Map() };
 
 export interface PipelineResult {
 	cards: ReadonlyArray<ReviewCard>;
@@ -42,13 +65,11 @@ async function logSafely(call: (() => Promise<void> | void) | undefined): Promis
 export async function orchestratePipeline(
 	prs: ReadonlyArray<PullRequest>,
 	config: PipelineConfig,
-	provider: LlmProvider,
-	analyzer: StaticAnalyzer,
-	auditStore: AuditStore,
-	// Optional: instrumentation is a pluggable add-on, not a hard dependency for the
-	// pipeline to run. Omitting it (or the caller's sink lacking a method) is a no-op.
-	sink?: InstrumentationSink,
+	deps: PipelineRunDeps,
+	priorRun: PriorPipelineRun = EMPTY_PRIOR_RUN,
 ): Promise<PipelineResult> {
+	const { provider, analyzer, auditStore, sink } = deps;
+	const prCache = deps.prCache ?? new PrEffectCache();
 	const passed: PullRequest[] = [];
 	const rejected: PullRequest[] = [];
 	const shadowed: PullRequest[] = [];
@@ -83,8 +104,8 @@ export async function orchestratePipeline(
 	const cards: ReviewCard[] = [];
 	let extractionError: string | undefined;
 	try {
-		const { bundles: builtBundles, effectsByPr, extractionFailures, clusteringFailures } = await buildBundles(
-			passed, provider, config.bundle,
+		const { bundles: builtBundles, effectsByPr, extractionFailures, clusteringFailures, reextractedPrIds } = await buildBundles(
+			passed, provider, config.bundle, prCache, priorRun.bundles,
 		);
 		bundles.push(...builtBundles);
 
@@ -104,6 +125,20 @@ export async function orchestratePipeline(
 		}
 
 		for (const bundle of bundles) {
+			// A bundle needs re-screening only if it's new/changed-membership (stableId()
+			// already hashes the member-id set, so a prior card under this exact id means
+			// same members) or one of its members' effects changed this run (cache miss —
+			// the orphan-clause input would differ even with the same member set). Every
+			// other bundle's drift verdict is provably identical to last time, so its prior
+			// ReviewCard is reused rather than re-calling the LLM matcher for each member.
+			const priorCard = priorRun.cards.get(bundle.id);
+			const needsRescreen =
+				priorCard === undefined || bundle.members.some((m) => reextractedPrIds.has(m.id));
+			if (!needsRescreen) {
+				cards.push(priorCard);
+				continue;
+			}
+
 			const driftVerdicts = new Map<string, DriftVerdict>();
 			for (const member of bundle.members) {
 				const rawClauses = effectsByPr.get(member.id) ?? [];

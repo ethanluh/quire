@@ -1,7 +1,8 @@
 import { describe, it, expect } from "@jest/globals";
 import { buildBundles } from "../../src/engine/bundle/bundler.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
-import type { PullRequest } from "../../src/engine/types/core.js";
+import { PrEffectCache } from "../../src/engine/cache/prCache.js";
+import type { Bundle, PullRequest } from "../../src/engine/types/core.js";
 import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "../../src/engine/drift/effectList/provider.js";
 import { LlmApiError } from "../../src/engine/drift/effectList/httpRetry.js";
 
@@ -33,6 +34,7 @@ class FlakyProvider implements LlmProvider {
 function makePR(id: string, direction: string, overrides: Partial<PullRequest> = {}): PullRequest {
 	return {
 		id, repoOwner: "org", repoName: "repo", number: 1,
+		headSha: `sha-${id}`,
 		declaredDirection: direction,
 		diff: { raw: "", hunks: [] },
 		filesTouched: [`src/${id}.ts`],
@@ -112,5 +114,87 @@ describe("buildBundles — clusters on drift-check evidence, not declaredDirecti
 		expect(extractionFailures.map((f) => f.pr.id)).toEqual(["pr-bad"]);
 		expect(bundles.length).toBe(1);
 		expect(bundles[0]?.members.map((m) => m.id)).toEqual(["pr-good"]);
+	});
+});
+
+describe("buildBundles — effect-extraction cache", () => {
+	it("skips extractEffects entirely on a cache hit (same PR id + headSha as a prior run)", async () => {
+		const cache = new PrEffectCache();
+		const stub = new StubLlmProvider();
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"])); // extractor
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP-based login flow", matchedDirection: true }])); // unused here, just headroom
+
+		const pr = makePR("pr-a", "add passwordless auth");
+		const first = await buildBundles([pr], stub, { similarityThreshold: 0.75 }, cache);
+		expect(first.reextractedPrIds.has("pr-a")).toBe(true);
+		expect(stub.calls).toHaveLength(1);
+
+		// Second run: same id + headSha, same cache instance — must not call complete() again.
+		const second = await buildBundles([pr], stub, { similarityThreshold: 0.75 }, cache);
+		expect(stub.calls).toHaveLength(1);
+		expect(second.reextractedPrIds.size).toBe(0);
+		expect(second.effectsByPr.get("pr-a")).toEqual(["adds OTP-based login flow"]);
+		expect(second.bundles[0]?.members.map((m) => m.id)).toEqual(["pr-a"]);
+	});
+
+	it("re-extracts a PR whose headSha changed since it was cached", async () => {
+		const cache = new PrEffectCache();
+		const stub = new StubLlmProvider();
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+		stub.queueCompletion(JSON.stringify(["adds passkey support"]));
+
+		const pr = makePR("pr-a", "add passwordless auth");
+		await buildBundles([pr], stub, { similarityThreshold: 0.75 }, cache);
+		expect(stub.calls).toHaveLength(1);
+
+		const updatedPr = { ...pr, headSha: "sha-pr-a-v2" };
+		const second = await buildBundles([updatedPr], stub, { similarityThreshold: 0.75 }, cache);
+		expect(stub.calls).toHaveLength(2);
+		expect(second.reextractedPrIds.has("pr-a")).toBe(true);
+		expect(second.effectsByPr.get("pr-a")).toEqual(["adds passkey support"]);
+	});
+});
+
+describe("buildBundles — seeded clustering from a prior run's bundles", () => {
+	it("carries an unchanged bundle forward without re-extracting or re-clustering its member", async () => {
+		const cache = new PrEffectCache();
+		const stub = new StubLlmProvider();
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+
+		const prA = makePR("pr-a", "add passwordless auth");
+		const first = await buildBundles([prA], stub, { similarityThreshold: 0.75 }, cache);
+		expect(first.bundles).toHaveLength(1);
+		const priorBundle = first.bundles[0]!;
+
+		// Second run: pr-a unchanged, seeded from the prior run's bundle. No new LLM calls
+		// (extraction skipped via cache) and no embed() calls needed for pr-a's comparison
+		// since it's carried over via the seed rather than re-clustered.
+		const second = await buildBundles([prA], stub, { similarityThreshold: 0.75 }, cache, [priorBundle]);
+		expect(stub.calls).toHaveLength(1);
+		expect(second.bundles).toHaveLength(1);
+		expect(second.bundles[0]?.id).toBe(priorBundle.id);
+		expect(second.bundles[0]?.members.map((m) => m.id)).toEqual(["pr-a"]);
+	});
+
+	it("does not seed a bundle whose member is missing from the current PR set (closed/merged)", async () => {
+		const cache = new PrEffectCache();
+		const stub = new StubLlmProvider();
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+
+		const prA = makePR("pr-a", "add passwordless auth");
+		const prB = makePR("pr-b", "add passwordless auth");
+		const first = await buildBundles([prA, prB], stub, { similarityThreshold: 0.75 }, cache);
+		const priorBundle = first.bundles[0]!;
+		expect(priorBundle.members.map((m) => m.id).sort()).toEqual(["pr-a", "pr-b"]);
+
+		// pr-b is gone this run (e.g. merged) — the seed must not be trusted as-is, and
+		// pr-a (still present, unchanged) must still end up clustered on its own.
+		const second: { bundles: ReadonlyArray<Bundle> } = await buildBundles(
+			[prA], stub, { similarityThreshold: 0.75 }, cache, [priorBundle],
+		);
+		expect(stub.calls).toHaveLength(2); // no new extraction; still just the two from setup
+		expect(second.bundles).toHaveLength(1);
+		expect(second.bundles[0]?.members.map((m) => m.id)).toEqual(["pr-a"]);
 	});
 });
