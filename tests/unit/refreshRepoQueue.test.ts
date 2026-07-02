@@ -87,6 +87,7 @@ describe("refreshRepoQueue", () => {
 		return {
 			accountState: createAccountState(overrides.binding ?? BASE_BINDING),
 			accountPath: join(dir, "installation.json"),
+			preferencesPath: join(dir, "preferences.json"),
 			clientHolder: new GitHubClientHolder(client),
 			appConfig: { appId: "1", privateKey: "unused" },
 			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),
@@ -194,6 +195,7 @@ describe("enqueueRefresh", () => {
 		const deps: RefreshDeps = {
 			accountState: createAccountState(BASE_BINDING),
 			accountPath: join(dir, "installation.json"),
+			preferencesPath: join(dir, "preferences.json"),
 			clientHolder: new GitHubClientHolder(client),
 			appConfig: { appId: "1", privateKey: "unused" },
 			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),

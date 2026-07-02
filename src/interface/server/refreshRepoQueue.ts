@@ -21,6 +21,7 @@ export class AccountChangedError extends Error {}
 export interface RefreshDeps {
 	accountState: AccountState;
 	accountPath: string;
+	preferencesPath: string;
 	clientHolder: GitHubClientHolder;
 	appConfig: GitHubAppConfig | undefined;
 	decidedStore: DecidedPrStore;
