@@ -17,11 +17,13 @@ export interface RepoSummary {
 // what an org admin explicitly granted), so sort order matters less.
 export async function listInstallationRepositories(octokit: Octokit): Promise<ReadonlyArray<RepoSummary>> {
 	const repos = await octokit.paginate(octokit.rest.apps.listReposAccessibleToInstallation, { per_page: 100 });
-	return repos.map((r) => ({
-		owner: r.owner.login,
-		name: r.name,
-		fullName: r.full_name,
-		private: r.private,
-		defaultBranch: r.default_branch,
-	}));
+	return repos
+		.filter((r) => !r.archived)
+		.map((r) => ({
+			owner: r.owner.login,
+			name: r.name,
+			fullName: r.full_name,
+			private: r.private,
+			defaultBranch: r.default_branch,
+		}));
 }
