@@ -2,7 +2,7 @@ import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "./provide
 import { fetchWithRetry } from "./httpRetry.js";
 
 export const DEFAULT_MODEL = "gemini-2.0-flash";
-const DEFAULT_EMBEDDING_MODEL = "text-embedding-004";
+const DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001";
 const DEFAULT_MAX_TOKENS = 1024;
 
 export interface GeminiProviderConfig {

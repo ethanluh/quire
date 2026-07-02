@@ -92,7 +92,7 @@ describe("GeminiLlmProvider", () => {
 
 			expect(vec).toEqual([0.1, 0.2, 0.3]);
 			expect(requestUrl(fetchMock)).toBe(
-				"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=gemini-test",
+				"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=gemini-test",
 			);
 		});
 
