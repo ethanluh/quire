@@ -57,6 +57,30 @@ describe("llm account persistence", () => {
 		expect(loaded).toBeUndefined();
 	});
 
+	it("treats an empty apiKey as not connected", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-llm-account-"));
+		const path = join(dir, "llm-account.json");
+		const { writeFile } = await import("node:fs/promises");
+		await writeFile(path, JSON.stringify({ provider: "anthropic", apiKey: "", connectedAt: "now" }), "utf8");
+
+		const loaded = await loadAccount(path);
+
+		expect(loaded).toBeUndefined();
+	});
+
+	it("treats a missing or empty connectedAt as not connected", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-llm-account-"));
+		const path = join(dir, "llm-account.json");
+		const { writeFile } = await import("node:fs/promises");
+		await writeFile(path, JSON.stringify({ provider: "anthropic", apiKey: "sk-1" }), "utf8");
+
+		expect(await loadAccount(path)).toBeUndefined();
+
+		await writeFile(path, JSON.stringify({ provider: "anthropic", apiKey: "sk-1", connectedAt: "" }), "utf8");
+
+		expect(await loadAccount(path)).toBeUndefined();
+	});
+
 	it("clearAccount removes the file without throwing if it never existed", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-llm-account-"));
 		const path = join(dir, "llm-account.json");

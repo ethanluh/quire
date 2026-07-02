@@ -1,6 +1,7 @@
 const RETRYABLE_STATUSES = new Set([429, 503]);
 const MAX_ATTEMPTS = 3;
 const BASE_DELAY_MS = 200;
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 // Preserves the HTTP status as data (not just flattened into the message text)
 // so a future caller can tell a transient rate-limit apart from a fatal
@@ -29,12 +30,24 @@ function delay(attempt: number): Promise<void> {
 // response exists) with linear backoff. Every other non-2xx status is fatal on
 // the first attempt, since retrying a bad request or bad credentials just
 // wastes time and quota.
-export async function fetchWithRetry(provider: string, url: string, init: RequestInit): Promise<Response> {
+//
+// Each attempt carries its own AbortSignal.timeout(): without one, a black-holed
+// connection (packets silently dropped, not a fast connection-refused) hangs fetch()
+// forever, since Node's global fetch has no default timeout. This bounds both the
+// background pipeline calls this was originally written for and the newer synchronous,
+// user-facing LLM-account connect-validation call, which would otherwise leave the
+// browser's "Connect" button waiting indefinitely with no feedback.
+export async function fetchWithRetry(
+	provider: string,
+	url: string,
+	init: RequestInit,
+	timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
 	let lastNetworkError: unknown;
 	for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
 		let res: Response;
 		try {
-			res = await fetch(url, init);
+			res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 		} catch (err) {
 			lastNetworkError = err;
 			if (attempt === MAX_ATTEMPTS) throw err;

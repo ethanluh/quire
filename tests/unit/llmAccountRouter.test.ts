@@ -58,6 +58,20 @@ function failingProvider(message: string): LlmProvider {
 	};
 }
 
+// Simulates a key scoped/restricted to allow chat completion but not embeddings (e.g. a
+// Gemini key permitted to call generateContent but not embedContent).
+function embedRestrictedProvider(message: string): LlmProvider {
+	return {
+		calls: [],
+		async complete() {
+			return "ok";
+		},
+		async embed(): Promise<ReadonlyArray<number>> {
+			throw new Error(message);
+		},
+	};
+}
+
 const ADMIN_HEADERS = { "X-Quire-Admin": "1" };
 
 describe("llmAccountRouter", () => {
@@ -191,6 +205,53 @@ describe("llmAccountRouter", () => {
 		expect(status).toBe(500);
 		expect(setProviderSpy).not.toHaveBeenCalled();
 		expect(state.current).toBeUndefined();
+	});
+
+	it("rejects a key that fails embed() validation even though complete() succeeds, without persisting or swapping", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-llm-router-"));
+		const { accountPath, holder } = setup(() => ({
+			provider: embedRestrictedProvider("Gemini API error 403: embedContent not permitted for this key"),
+			description: "gemini",
+		}));
+		const setProviderSpy = jest.spyOn(holder, "setProvider");
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(
+			server,
+			"POST",
+			"/account/llm/connect",
+			{ provider: "gemini", apiKey: "gk-restricted" },
+			ADMIN_HEADERS,
+		);
+
+		expect(status).toBe(400);
+		expect(body["error"]).toContain("embedContent not permitted");
+		expect(setProviderSpy).not.toHaveBeenCalled();
+		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+	});
+
+	it("serializes concurrent connect requests so the in-memory holder and the persisted file never disagree on which provider is active", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-llm-router-"));
+		const anthropicProvider = workingProvider("anthropic");
+		const geminiProvider = workingProvider("gemini");
+		const { accountPath, holder } = setup((account) => ({
+			provider: account.provider === "anthropic" ? anthropicProvider : geminiProvider,
+			description: account.provider,
+		}));
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const [r1, r2] = await Promise.all([
+			call(server, "POST", "/account/llm/connect", { provider: "anthropic", apiKey: "sk-ant-1" }, ADMIN_HEADERS),
+			call(server, "POST", "/account/llm/connect", { provider: "gemini", apiKey: "gk-1" }, ADMIN_HEADERS),
+		]);
+
+		expect(r1.status).toBe(200);
+		expect(r2.status).toBe(200);
+
+		const persisted = await loadAccount(accountPath);
+		expect(persisted).toBeDefined();
+		const liveResponse = await holder.complete([{ role: "user", content: "check" }]);
+		expect(liveResponse).toBe(`${persisted?.provider} ok`);
 	});
 
 	it("rejects connect attempts missing the admin header (CSRF guard) without storing anything", async () => {
