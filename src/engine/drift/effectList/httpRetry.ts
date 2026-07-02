@@ -1,8 +1,4 @@
-// 500 (generic "INTERNAL" fault) is included alongside 429/503: it's Google's
-// catch-all for a transient server-side hiccup, not a bad-request/credentials
-// problem, so it's worth the same retry treatment rather than failing on the
-// first attempt.
-const RETRYABLE_STATUSES = new Set([429, 500, 503]);
+const RETRYABLE_STATUSES = new Set([429, 503]);
 const MAX_ATTEMPTS = 3;
 const BASE_DELAY_MS = 200;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -67,13 +63,13 @@ function delay(attempt: number, overrideMs?: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Retries 429 (rate-limited), 500 (internal server error), 503 (overloaded), and
-// network-level failures (fetch() itself rejecting — DNS, connection reset, TLS,
-// timeout — before any response exists) with linear backoff. Every other non-2xx
-// status is fatal on the first attempt, since retrying a bad request or bad
-// credentials just wastes time and quota.
+// Retries 429 (rate-limited), 503 (overloaded), and network-level failures
+// (fetch() itself rejecting — DNS, connection reset, TLS, timeout — before any
+// response exists) with linear backoff. Every other non-2xx status is fatal on
+// the first attempt, since retrying a bad request or bad credentials just
+// wastes time and quota.
 //
-// A retryable body is inspected for a server-suggested retryDelay: a short one
+// A 429/503 body is inspected for a server-suggested retryDelay: a short one
 // (≤ SHORT_RETRY_THRESHOLD_MS) replaces the linear backoff for the next attempt,
 // since it's a real hint about a genuine short burst. A long one (Gemini's
 // RESOURCE_EXHAUSTED/zero-quota case says 23s) isn't worth sleeping through inside

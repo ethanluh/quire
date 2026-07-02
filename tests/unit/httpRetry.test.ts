@@ -61,21 +61,6 @@ describe("fetchWithRetry", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(3);
 	});
 
-	it("retries a 500 (generic internal error) and succeeds once the response turns healthy", async () => {
-		const fetchMock = jest.fn<() => Promise<unknown>>();
-		fetchMock
-			.mockResolvedValueOnce(
-				jsonResponse(500, { error: { code: 500, message: "Internal error encountered.", status: "INTERNAL" } }),
-			)
-			.mockResolvedValueOnce(jsonResponse(200, { ok: true }));
-		global.fetch = fetchMock as unknown as typeof fetch;
-
-		const res = await fetchWithRetry("Gemini", "https://example.com", {});
-
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-		expect(res.status).toBe(200);
-	});
-
 	it("does not retry a non-retryable status like 403", async () => {
 		const fetchMock = jest.fn(async () => jsonResponse(403, { error: "forbidden" }));
 		global.fetch = fetchMock as unknown as typeof fetch;
