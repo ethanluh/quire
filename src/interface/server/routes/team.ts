@@ -3,20 +3,20 @@ import { z } from "zod";
 import type { TeamStore } from "../../../engine/team/teamStore.js";
 import { createInvite, verifyInvite } from "../invite.js";
 import { validateBody } from "../middleware/validation.js";
+import { requireRole } from "../middleware/requireRole.js";
 
 const CreateTeamSchema = z.object({ name: z.string().min(1) });
 const RenameTeamSchema = z.object({ name: z.string().min(1) });
 const SwitchTeamSchema = z.object({ teamId: z.string().min(1) });
 const JoinTeamSchema = z.object({ token: z.string().min(1) });
 const LeaveTeamSchema = z.object({ teamId: z.string().min(1) });
+const ChangeRoleSchema = z.object({ role: z.enum(["owner", "admin", "member"]) });
 
 // Mounted right after resolveMembership and before resolveTenant (see index.ts) —
 // unlike githubAppRouter/llmAccountRouter, nothing here touches a TenantContext (GitHub
 // client, merge queue, ...), only the login-level membership index and the team roster,
 // so there's no reason to pay for resolving/loading a tenant just to manage team
-// membership. Deliberately self-service only: no member-removal or role-change route
-// lands here — both need real role enforcement to be safe, which arrives in the
-// follow-up PR that also activates TeamRole enforcement everywhere else.
+// membership.
 export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUrl: string): Router {
 	const router = Router();
 
@@ -78,7 +78,7 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 		}
 	});
 
-	router.patch("/", validateBody(RenameTeamSchema), async (req, res, next) => {
+	router.patch("/", requireRole("owner", "admin"), validateBody(RenameTeamSchema), async (req, res, next) => {
 		try {
 			const membership = res.locals.membership;
 			if (membership === undefined) {
@@ -118,7 +118,7 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 		}
 	});
 
-	router.post("/invite", async (_req, res, next) => {
+	router.post("/invite", requireRole("owner", "admin"), async (_req, res, next) => {
 		try {
 			const membership = res.locals.membership;
 			const login = res.locals.login;
@@ -199,6 +199,92 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 			const activeTeamId = index.activeTeamId === teamId ? (remainingTeamIds[0] ?? index.activeTeamId) : index.activeTeamId;
 			await teamStore.saveMembershipIndex(login, { teamIds: remainingTeamIds, activeTeamId });
 			res.json({ activeTeamId });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// An admin can shuffle member <-> admin freely, but only an owner may grant or revoke
+	// the owner role itself — checked here, not by requireRole alone, since it depends on
+	// the target's *current* role as well as the requested one. Combined with the
+	// last-owner guard below, a team can never end up with zero owners through this route.
+	router.post("/members/:login/role", requireRole("owner", "admin"), validateBody(ChangeRoleSchema), async (req, res, next) => {
+		try {
+			const membership = res.locals.membership;
+			if (membership === undefined) {
+				res.status(401).json({ error: "Sign in required" });
+				return;
+			}
+			const targetLogin = req.params["login"] ?? "";
+			const { role: newRole } = req.body as z.infer<typeof ChangeRoleSchema>;
+
+			const members = await teamStore.listMembers(membership.teamId);
+			const target = members.find((m) => m.login === targetLogin);
+			if (target === undefined) {
+				res.status(404).json({ error: "That login is not a member of this team" });
+				return;
+			}
+
+			const touchesOwnerRole = target.role === "owner" || newRole === "owner";
+			if (touchesOwnerRole && membership.role !== "owner") {
+				res.status(403).json({ error: "Only an owner can grant or revoke the owner role" });
+				return;
+			}
+			if (target.role === "owner" && newRole !== "owner" && members.filter((m) => m.role === "owner").length <= 1) {
+				res.status(409).json({ error: "A team must always have at least one owner" });
+				return;
+			}
+
+			await teamStore.setMemberRole(membership.teamId, targetLogin, newRole);
+			res.json({ login: targetLogin, role: newRole });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// Removing a login from the team never leaves it teamless — mirrors /leave's own
+	// "never zero teams" guarantee, just applied to someone else's membership index.
+	router.post("/members/:login/remove", requireRole("owner", "admin"), async (req, res, next) => {
+		try {
+			const membership = res.locals.membership;
+			if (membership === undefined) {
+				res.status(401).json({ error: "Sign in required" });
+				return;
+			}
+			const targetLogin = req.params["login"] ?? "";
+
+			const members = await teamStore.listMembers(membership.teamId);
+			const target = members.find((m) => m.login === targetLogin);
+			if (target === undefined) {
+				res.status(404).json({ error: "That login is not a member of this team" });
+				return;
+			}
+			if (target.role === "owner" && membership.role !== "owner") {
+				res.status(403).json({ error: "Only an owner can remove another owner" });
+				return;
+			}
+			if (target.role === "owner" && members.filter((m) => m.role === "owner").length <= 1) {
+				res.status(409).json({ error: "A team must always have at least one owner" });
+				return;
+			}
+
+			await teamStore.removeMember(membership.teamId, targetLogin);
+
+			const targetIndex = await teamStore.loadMembershipIndex(targetLogin);
+			if (targetIndex !== undefined) {
+				const remainingTeamIds = targetIndex.teamIds.filter((id) => id !== membership.teamId);
+				if (remainingTeamIds.length === 0) {
+					await teamStore.createTeamForLogin(targetLogin, `${targetLogin}'s team`);
+				} else {
+					const activeTeamId =
+						targetIndex.activeTeamId === membership.teamId
+							? (remainingTeamIds[0] ?? targetIndex.activeTeamId)
+							: targetIndex.activeTeamId;
+					await teamStore.saveMembershipIndex(targetLogin, { teamIds: remainingTeamIds, activeTeamId });
+				}
+			}
+
+			res.json({ login: targetLogin, removed: true });
 		} catch (err) {
 			next(err);
 		}
