@@ -24,6 +24,7 @@ import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 import type { PipelineDeps } from "../../src/interface/server/ingestIntoQueue.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
 import type { InstallationAccount } from "../../src/engine/github/installationClient.js";
+import { RequestError } from "@octokit/request-error";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -178,7 +179,7 @@ describe("githubAppRouter", () => {
 		expect(url.searchParams.get("state")).toBeTruthy();
 	});
 
-	it("mints a fresh, independent state on every /install/start call", async () => {
+	it("mints a fresh state when no pending-state cookie is presented", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		setup();
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -189,6 +190,36 @@ describe("githubAppRouter", () => {
 		const firstState = new URL(first.body["installUrl"] as string).searchParams.get("state");
 		const secondState = new URL(second.body["installUrl"] as string).searchParams.get("state");
 		expect(firstState).not.toBe(secondState);
+	});
+
+	it("reuses the pending state when the same browser calls /install/start twice (double-click / second tab)", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main" },
+		];
+		setup(async () => repos);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const first = await call(server, "POST", "/account/github/install/start");
+		const firstState = new URL(first.body["installUrl"] as string).searchParams.get("state");
+		const firstCookie = cookiePair(first.setCookie);
+
+		// A second tab, or a double-click, from the SAME browser — its cookie jar already
+		// holds the first call's state cookie.
+		const second = await call(server, "POST", "/account/github/install/start", undefined, firstCookie);
+		const secondState = new URL(second.body["installUrl"] as string).searchParams.get("state");
+		expect(secondState).toBe(firstState);
+
+		// The first tab's already-rendered install URL (embedding `firstState`) still
+		// completes successfully — the old singleton design's double-click tolerance,
+		// restored without reintroducing cross-browser clobbering.
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/install/callback?installation_id=555&state=${firstState}`,
+			firstCookie,
+		);
+		expect(status).toBe(302);
+		expect(location).toBe("/?account=connected");
 	});
 
 	it("does not let one browser's /install/start invalidate another's in-flight install", async () => {
@@ -266,6 +297,35 @@ describe("githubAppRouter", () => {
 		const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
 		expect(persisted["accountLogin"]).toBe("octocat");
 		expect(persisted["accountType"]).toBe("User");
+	});
+
+	it("redirects gracefully when the installation was revoked before the callback completes", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const revokedError = new RequestError("Not Found", 404, {
+			request: { method: "GET", url: "https://api.github.com/app/installations/555", headers: {}, body: undefined },
+		});
+		const { accountPath } = setup(
+			async () => [],
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			undefined,
+			async () => {
+				throw revokedError;
+			},
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+		const start = await call(server, "POST", "/account/github/install/start");
+		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
+
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/install/callback?installation_id=555&state=${state}`,
+			cookiePair(start.setCookie),
+		);
+
+		expect(status).toBe(302);
+		expect(location).toContain("account=error");
+		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
 	});
 
 	it("rejects an install callback whose state doesn't match the pending one", async () => {

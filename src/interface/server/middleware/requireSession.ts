@@ -1,7 +1,8 @@
 import { parse } from "cookie";
-import type { CookieOptions, Request, Response, NextFunction } from "express";
+import type { Request, Response, NextFunction } from "express";
 import type { Allowlist } from "../allowlist.js";
 import { SESSION_COOKIE_NAME, SESSION_TTL_MS, renewSession, verifySession } from "../session.js";
+import { cookieOptions } from "../stateCookie.js";
 
 declare global {
 	// eslint-disable-next-line @typescript-eslint/no-namespace
@@ -12,19 +13,6 @@ declare global {
 			login?: string;
 		}
 	}
-}
-
-function cookieOptions(secure: boolean): CookieOptions {
-	return {
-		httpOnly: true,
-		sameSite: "lax",
-		secure,
-		path: "/",
-		// res.cookie's maxAge is milliseconds (converted internally to the wire-format
-		// Max-Age in seconds) — SESSION_TTL_MS is already in ms, so use it directly rather
-		// than re-deriving a seconds constant that's easy to pass here by mistake.
-		maxAge: SESSION_TTL_MS,
-	};
 }
 
 // Replaces localOnly+requireAdminHeader everywhere except the login-establishing routes
@@ -48,7 +36,7 @@ export function requireSession(sessionSecret: string, allowlist: Allowlist, secu
 		}
 
 		res.locals.login = payload.login;
-		res.cookie(SESSION_COOKIE_NAME, renewSession(payload.login, sessionSecret), cookieOptions(secureCookies));
+		res.cookie(SESSION_COOKIE_NAME, renewSession(payload.login, sessionSecret), cookieOptions(secureCookies, SESSION_TTL_MS));
 		next();
 	};
 }
