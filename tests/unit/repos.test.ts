@@ -46,6 +46,33 @@ describe("listInstallationRepositories", () => {
 
 		expect(repos).toEqual([]);
 	});
+
+	it("excludes archived repos", async () => {
+		const octokit = makeFakeOctokit([
+			{
+				owner: { login: "octocat" },
+				name: "hello-world",
+				full_name: "octocat/hello-world",
+				private: false,
+				default_branch: "main",
+				archived: false,
+			},
+			{
+				owner: { login: "octocat" },
+				name: "dead-project",
+				full_name: "octocat/dead-project",
+				private: false,
+				default_branch: "main",
+				archived: true,
+			},
+		]);
+
+		const repos = await listInstallationRepositories(octokit);
+
+		expect(repos).toEqual([
+			{ owner: "octocat", name: "hello-world", fullName: "octocat/hello-world", private: false, defaultBranch: "main" },
+		]);
+	});
 });
 
 function repo(overrides: Partial<RepoSummary> & { fullName: string }): RepoSummary {

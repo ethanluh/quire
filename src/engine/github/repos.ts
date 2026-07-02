@@ -19,6 +19,7 @@ export interface RepoSummary {
 export async function listInstallationRepositories(octokit: Octokit): Promise<ReadonlyArray<RepoSummary>> {
 	const repos = await octokit.paginate(octokit.rest.apps.listReposAccessibleToInstallation, { per_page: 100 });
 	return repos.map((r) => ({
+		.filter((r) => !r.archived)
 		owner: r.owner.login,
 		name: r.name,
 		fullName: r.full_name,

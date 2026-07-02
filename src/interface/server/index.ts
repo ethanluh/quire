@@ -60,6 +60,7 @@ const PR_CACHE_PATH = join(DATA_DIR, "pr-cache.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
 const GATE_LOG_PATH = join(DATA_DIR, "instrumentation/gate-decisions.ndjson");
 const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjson");
+const CONFLICT_LOG_PATH = join(DATA_DIR, "instrumentation/conflict-resolution.ndjson");
 const AUDIT_LOG_PATH = join(DATA_DIR, "instrumentation/audit.ndjson");
 const INSTALLATION_PATH = join(DATA_DIR, "installation.json");
 const LLM_ACCOUNT_PATH = join(DATA_DIR, "llm-account.json");
@@ -153,16 +154,19 @@ async function main(): Promise<void> {
 		console.log("GitHub client: stub (no GitHub App installation bound yet)");
 	}
 	const github = new GitHubClientHolder(initialClient);
-	const queue = new MergeQueue(QUEUE_PATH, github);
-	await queue.load();
 
 	// An LLM account connected through the UI takes priority over env-based resolution.
+	// Resolved before MergeQueue below, which needs a provider for conflict resolution.
 	const connectedLlmAccount = await loadLlmAccount(LLM_ACCOUNT_PATH);
 	const llmAccountState = createLlmAccountState(connectedLlmAccount);
 	const { provider: initialLlmProvider, description } =
 		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : resolveLlmProvider(process.env);
 	console.log(`LLM provider: ${description}`);
 	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
+
+	const queue = new MergeQueue(QUEUE_PATH, github, llmProviderHolder, CONFLICT_LOG_PATH);
+	await queue.load();
+
 	const analyzer = new TypeScriptAnalyzer();
 	const state = createServerState();
 	const instrumentationSink = createNdjsonInstrumentationSink({
@@ -242,7 +246,13 @@ async function main(): Promise<void> {
 	app.use("/audit", auditRouter(auditStore));
 	app.use(
 		"/admin",
-		adminRouter(state, auditStore, queue, [DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH], decidedStore),
+		adminRouter(
+			state,
+			auditStore,
+			queue,
+			[DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH, CONFLICT_LOG_PATH],
+			decidedStore,
+		),
 	);
 	app.use(
 		"/account/llm",

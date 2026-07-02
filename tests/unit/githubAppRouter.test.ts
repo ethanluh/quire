@@ -507,6 +507,61 @@ describe("githubAppRouter", () => {
 		expect(body["error"]).toBe("Install the GitHub App first");
 	});
 
+	describe("POST /repos/setup", () => {
+		it("opens a setup PR documenting and enforcing the declared-direction convention", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const client = new StubGitHubClient();
+			setup(async () => [], client, new StubLlmProvider(), {
+				installationId: 555,
+				accountLogin: "acme-corp",
+				accountType: "Organization",
+				boundAt: "2026-06-30T00:00:00.000Z",
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/setup", { owner: "acme-corp", name: "widgets" });
+
+			expect(status).toBe(200);
+			expect(body["status"]).toBe("created");
+			expect(body["prUrl"]).toContain("acme-corp/widgets/pull/");
+		});
+
+		it("reports already-set-up without opening a PR when the conventions are already in place", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const client = new StubGitHubClient();
+			client.seedFile(
+				"acme-corp",
+				"widgets",
+				".github/pull_request_template.md",
+				"## Declared direction\n\n<!-- declared-direction: ... -->\n",
+			);
+			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-declared-direction.yml", "name: existing\n");
+			setup(async () => [], client, new StubLlmProvider(), {
+				installationId: 555,
+				accountLogin: "acme-corp",
+				accountType: "Organization",
+				boundAt: "2026-06-30T00:00:00.000Z",
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/setup", { owner: "acme-corp", name: "widgets" });
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ status: "already-set-up" });
+		});
+
+		it("returns 400 for repo setup when no installation is bound", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup();
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/setup", { owner: "acme-corp", name: "widgets" });
+
+			expect(status).toBe(400);
+			expect(body["error"]).toBe("Install the GitHub App first");
+		});
+	});
+
 	describe("POST /repos/refresh", () => {
 		it("is a no-op when no installation is bound", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));

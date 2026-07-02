@@ -203,6 +203,21 @@ export function githubAppRouter(
 		}
 	});
 
+	router.post("/repos/setup", validateBody(SelectRepoSchema), async (req, res, next) => {
+		try {
+			const binding = accountState.current;
+			if (binding === undefined) {
+				res.status(400).json({ error: "Install the GitHub App first" });
+				return;
+			}
+			const { owner, name } = req.body as z.infer<typeof SelectRepoSchema>;
+			const result = await setUpDeclaredDirectionConvention(clientHolder, owner, name);
+			res.json(result);
+		} catch (err) {
+			next(err);
+		}
+	});
+
 	// A cheap, no-bookkeeping refresh of whatever repo is already selected — reused by the
 	// frontend on every page load/reload.
 	router.post("/repos/refresh", async (_req, res, next) => {
