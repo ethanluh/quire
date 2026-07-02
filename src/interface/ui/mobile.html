@@ -314,6 +314,20 @@
       <div id="llm-account-result" class="result-msg" style="display:none"></div>
     </div>
 
+    <div class="account-panel">
+      <h3>Team</h3>
+      <p>Teammates on the same team share this GitHub connection, repo, LLM key, and merge queue.</p>
+      <div class="account-status" id="team-status">Checking team&hellip;</div>
+      <div id="team-members-list"></div>
+      <select id="team-switcher"></select>
+      <input type="text" id="team-name-input" placeholder="Team name">
+      <button class="btn btn-defer" id="btn-team-rename">Save name</button>
+      <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
+      <button class="btn btn-defer" id="btn-team-create">Create new team</button>
+      <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
+      <div id="team-result" class="result-msg" style="display:none"></div>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-defer" id="btn-settings-modal-close">Close</button>
     </div>
@@ -355,6 +369,7 @@ tabs.forEach(tab => {
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
     if (tab.dataset.tab === 'audit') loadAudit();
+    if (tab.dataset.tab === 'account') { loadAccount(); loadLlmAccount(); loadTeam(); }
   });
 });
 
@@ -1101,6 +1116,109 @@ llmDisconnectBtn.addEventListener('click', async () => {
   await api('POST', '/account/llm/disconnect', undefined);
   loadLlmAccount();
 });
+
+let loadedTeamId = null;
+
+async function loadTeam() {
+  const statusEl = document.getElementById('team-status');
+  const resultEl = document.getElementById('team-result');
+  resultEl.style.display = 'none';
+
+  const status = await api('GET', '/account/team');
+  if (status.error) {
+    statusEl.textContent = 'Error: ' + status.error;
+    return;
+  }
+  loadedTeamId = status.teamId;
+  statusEl.innerHTML = `On <span class="login">${escapeHtml(status.name)}</span> as ${escapeHtml(status.role)}`;
+  document.getElementById('team-name-input').value = status.name;
+  document.getElementById('team-members-list').innerHTML = status.members
+    .map((m) => `<div>${escapeHtml(m.login)} — <span class="badge badge-neutral">${escapeHtml(m.role)}</span></div>`)
+    .join('');
+
+  const { teams } = await api('GET', '/account/team/list');
+  document.getElementById('team-switcher').innerHTML = (teams || [])
+    .map((t) => `<option value="${escapeHtml(t.teamId)}" ${t.active ? 'selected' : ''}>${escapeHtml(t.name)}</option>`)
+    .join('');
+}
+
+function showTeamResult(message, isError) {
+  const resultEl = document.getElementById('team-result');
+  resultEl.textContent = message;
+  resultEl.className = isError ? 'result-msg error' : 'result-msg';
+  resultEl.style.display = 'block';
+}
+
+document.getElementById('team-switcher').addEventListener('change', async (e) => {
+  const result = await api('POST', '/account/team/switch', { teamId: e.target.value });
+  if (result.error) {
+    showTeamResult('Error: ' + result.error, true);
+    return;
+  }
+  location.reload();
+});
+
+document.getElementById('btn-team-rename').addEventListener('click', async () => {
+  const name = document.getElementById('team-name-input').value.trim();
+  if (!name) return;
+  const result = await api('PATCH', '/account/team', { name });
+  if (result.error) {
+    showTeamResult('Error: ' + result.error, true);
+    return;
+  }
+  showTeamResult('Team renamed.', false);
+  loadTeam();
+});
+
+document.getElementById('btn-team-invite').addEventListener('click', async () => {
+  const result = await api('POST', '/account/team/invite', undefined);
+  if (result.error) {
+    showTeamResult('Error: ' + result.error, true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(result.inviteUrl);
+    showTeamResult('Invite link copied to clipboard (valid for 7 days).', false);
+  } catch {
+    showTeamResult('Invite link: ' + result.inviteUrl, false);
+  }
+});
+
+document.getElementById('btn-team-create').addEventListener('click', async () => {
+  const name = prompt("Name your new team:");
+  if (!name) return;
+  const result = await api('POST', '/account/team/create', { name });
+  if (result.error) {
+    showTeamResult('Error: ' + result.error, true);
+    return;
+  }
+  location.reload();
+});
+
+document.getElementById('btn-team-leave').addEventListener('click', async () => {
+  if (!loadedTeamId || !confirm('Leave this team?')) return;
+  const result = await api('POST', '/account/team/leave', { teamId: loadedTeamId });
+  if (result.error) {
+    showTeamResult('Error: ' + result.error, true);
+    return;
+  }
+  location.reload();
+});
+
+// An invite link is a top-level navigation from wherever it was shared, carrying
+// ?joinTeam=<token> — same redirect-callback shape as handleAccountRedirect above.
+(async function handleJoinTeamRedirect() {
+  const params = new URLSearchParams(location.search);
+  const token = params.get('joinTeam');
+  if (!token) return;
+  history.replaceState(null, '', location.pathname);
+  const signedIn = await checkSignedIn();
+  if (!signedIn) return;
+  const result = await api('POST', '/account/team/join', { token });
+  document.querySelector('.tab[data-tab="account"]').click();
+  await loadTeam();
+  showTeamResult(result.error ? 'Could not join team: ' + result.error : `Joined ${result.name}.`, Boolean(result.error));
+})();
 
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name && selectedRepo.installationId === repo.installationId;

@@ -44,10 +44,10 @@ import { adminRouter } from "./routes/admin.js";
 import { githubAppRouter } from "./routes/githubApp.js";
 import { llmAccountRouter } from "./routes/llmAccount.js";
 
-// Only GitHub username syntax is ever expected here — login always comes from our own
-// HMAC-verified session payload (see session.ts), but this is joined straight into a
-// filesystem path below, so it's validated defensively rather than trusted blindly.
-const VALID_LOGIN = /^[A-Za-z0-9-]+$/;
+// A teamId is always one this process minted itself (see teamStore.ts's randomBytes hex
+// id), but it's joined straight into a filesystem path below, so it's validated
+// defensively rather than trusted blindly.
+const VALID_TEAM_ID = /^[A-Za-z0-9-]+$/;
 
 // Config shared by every tenant: the one GitHub App's own identity, the pipeline's
 // tuning, and the single static analyzer instance — none of this is per-account data,
@@ -69,12 +69,14 @@ export interface TenantSharedConfig {
 
 // Everything that used to be a single process-wide singleton (accountState, the GitHub
 // client, the LLM account, the review-queue state, the merge queue, ...) now lives here
-// instead, one instance per signed-in GitHub login — see the plan this implements for
-// why: a second teammate connecting their own GitHub App installation was silently
-// overwriting the first's, because all of this used to be shared by every request
-// regardless of who was signed in.
+// instead, one instance per TEAM — a second teammate connecting their own GitHub App
+// installation used to silently overwrite the first's, because all of this used to be
+// shared by every request regardless of who was signed in. It was briefly one instance
+// per signed-in GitHub login; resolveMembership.js now maps a login to its *active*
+// team's id before this is ever looked up, so several logins on the same team share one
+// TenantContext (and its installation/repo/queue/API key) on purpose.
 export interface TenantContext {
-	login: string;
+	teamId: string;
 	accountState: AccountState;
 	clientHolder: GitHubClientHolder;
 	llmAccountState: LlmAccountState;
@@ -92,15 +94,15 @@ export interface TenantContext {
 	router: Router;
 }
 
-function sanitizeLogin(login: string): string {
-	if (!VALID_LOGIN.test(login)) {
-		throw new Error(`Refusing to scope tenant data to unexpected GitHub login: ${JSON.stringify(login)}`);
+function sanitizeTeamId(teamId: string): string {
+	if (!VALID_TEAM_ID.test(teamId)) {
+		throw new Error(`Refusing to scope tenant data to unexpected team id: ${JSON.stringify(teamId)}`);
 	}
-	return login;
+	return teamId;
 }
 
-async function loadTenant(login: string, shared: TenantSharedConfig): Promise<TenantContext> {
-	const dir = join(shared.dataDir, "users", login);
+async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<TenantContext> {
+	const dir = join(shared.dataDir, "teams", teamId);
 	const installationPath = join(dir, "installation.json");
 	const llmAccountPath = join(dir, "llm-account.json");
 	const queuePath = join(dir, "queue.json");
@@ -176,7 +178,7 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 		decidedStore,
 		state,
 		pipelineDeps,
-		tenantKey: login,
+		tenantKey: teamId,
 	};
 
 	const router = Router();
@@ -216,7 +218,7 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 	);
 
 	return {
-		login,
+		teamId,
 		accountState,
 		clientHolder,
 		llmAccountState,
@@ -231,17 +233,17 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 	};
 }
 
-// Keyed by GitHub login (already unique per allowlisted account — see allowlist.ts), not
-// a new tenant-id scheme. One TenantContext per login, created lazily on that login's
-// first request and reused for the life of the process.
+// Keyed by teamId (see teamStore.ts — every login resolves to one via its membership
+// index before this is ever called). One TenantContext per team, created lazily on that
+// team's first request and reused for the life of the process.
 export class TenantRegistry {
 	private readonly tenants = new Map<string, TenantContext>();
 	private readonly loading = new Map<string, Promise<TenantContext>>();
 
 	constructor(private readonly shared: TenantSharedConfig) {}
 
-	async getOrCreate(login: string): Promise<TenantContext> {
-		const key = sanitizeLogin(login);
+	async getOrCreate(teamId: string): Promise<TenantContext> {
+		const key = sanitizeTeamId(teamId);
 		const existing = this.tenants.get(key);
 		if (existing !== undefined) return existing;
 
@@ -275,13 +277,13 @@ export class TenantRegistry {
 		return undefined;
 	}
 
-	// Loads every tenant that has ever connected anything, so the reconciliation poll and
+	// Loads every team that has ever connected anything, so the reconciliation poll and
 	// incoming webhooks work for a teammate who isn't actively browsing right now — not
 	// just the tenants lazily created by getOrCreate on their next request.
 	async hydrateExisting(): Promise<void> {
-		const usersDir = join(this.shared.dataDir, "users");
-		if (!existsSync(usersDir)) return;
-		const entries = await readdir(usersDir, { withFileTypes: true });
+		const teamsDir = join(this.shared.dataDir, "teams");
+		if (!existsSync(teamsDir)) return;
+		const entries = await readdir(teamsDir, { withFileTypes: true });
 		await Promise.all(entries.filter((entry) => entry.isDirectory()).map((entry) => this.getOrCreate(entry.name)));
 	}
 }

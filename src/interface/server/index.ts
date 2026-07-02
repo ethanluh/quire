@@ -17,9 +17,13 @@ import type { TenantSharedConfig } from "./tenant.js";
 import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
 import { createAllowlist } from "./allowlist.js";
 import { requireSession } from "./middleware/requireSession.js";
+import { resolveMembership } from "./middleware/resolveMembership.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { eventsRouter } from "./routes/events.js";
 import { accountRouter } from "./routes/account.js";
+import { teamRouter } from "./routes/team.js";
+import { migrateLegacyData } from "./migrateLegacyData.js";
+import { TeamStore } from "../../engine/team/teamStore.js";
 import type { WebhookConfig } from "./routes/webhook.js";
 import { webhookRouter } from "./routes/webhook.js";
 import { verifyGithubSignature } from "./middleware/webhookSignature.js";
@@ -131,13 +135,16 @@ async function main(): Promise<void> {
 		enrichWithUserToken,
 	};
 
-	// Every signed-in GitHub login gets its own isolated set of GitHub App installations,
-	// repo selection, PR queue, and LLM account (see tenant.ts) — replaces the single set of
-	// process-wide singletons a prior version of this file wired up once and shared across
-	// every request regardless of who was signed in.
+	// Every team gets its own isolated GitHub App installation, repo selection, PR queue,
+	// and LLM account (see tenant.ts) — replaces the single set of process-wide singletons
+	// a prior version of this file wired up once and shared across every request
+	// regardless of who was signed in. A login resolves to a team via resolveMembership,
+	// mounted ahead of resolveTenant below.
 	const registry = new TenantRegistry(sharedConfig);
+	const teamStore = new TeamStore(DATA_DIR);
+	await migrateLegacyData(DATA_DIR, teamStore, allowedLogins);
 	await registry.hydrateExisting();
-	console.log(`Loaded ${registry.all().length} existing tenant(s) from ${join(DATA_DIR, "users")}`);
+	console.log(`Loaded ${registry.all().length} existing team(s) from ${join(DATA_DIR, "teams")}`);
 
 	// The webhook path needs its exact raw request bytes to verify GitHub's HMAC signature,
 	// so it must be parsed (and mounted) before the global express.json() below would
@@ -174,6 +181,14 @@ async function main(): Promise<void> {
 	);
 
 	app.use(session);
+	app.use(resolveMembership(teamStore));
+
+	// Team management (create/join/switch/invite/leave) operates on the login-level
+	// membership index and team roster, not on anything a TenantContext holds — mounted
+	// here, ahead of resolveTenant, so it never pays for (or depends on) resolving a
+	// team's GitHub client/queue/LLM account just to manage who's on the team.
+	app.use("/account/team", teamRouter(teamStore, sessionSecret, publicUrl ?? `http://localhost:${PORT}`));
+
 	app.use(resolveTenant(registry));
 
 	// Shared across every tenant on purpose: it carries no payload, just a "something
@@ -207,14 +222,14 @@ async function main(): Promise<void> {
 			if (repo === undefined) continue;
 			enqueueRefresh(repo.owner, repo.name, tenant.refreshDeps).catch((err: unknown) => {
 				if (err instanceof InstallationRevokedError) {
-					console.warn(`Reconciliation poll paused for ${tenant.login} (${repo.owner}/${repo.name}): ${err.message}`);
+					console.warn(`Reconciliation poll paused for ${tenant.teamId} (${repo.owner}/${repo.name}): ${err.message}`);
 					return;
 				}
 				if (err instanceof AccountChangedError) {
-					console.warn(`Reconciliation poll for ${tenant.login} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
+					console.warn(`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
 					return;
 				}
-				console.error(`Reconciliation poll failed for ${tenant.login} (${repo.owner}/${repo.name}):`, err);
+				console.error(`Reconciliation poll failed for ${tenant.teamId} (${repo.owner}/${repo.name}):`, err);
 			});
 		}
 	}, RECONCILE_INTERVAL_MS);
