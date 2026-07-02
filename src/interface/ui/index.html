@@ -1100,9 +1100,14 @@ async function removeMember(login) {
 
 // Owner-only controls live outside the Team panel too (queue processing, auto-merge) —
 // applied here so every loadTeam() call keeps them in sync with the caller's current role.
+// Rename/invite are gated to owner+admin server-side (PATCH /account/team, POST
+// /account/team/invite) — kept in sync with canManageMembers() for the same reason.
 function applyRoleVisibility() {
   document.getElementById('btn-process').style.display = isOwner() ? 'inline-block' : 'none';
   document.getElementById('chk-auto-merge').disabled = !isOwner();
+  document.getElementById('team-name-input').disabled = !canManageMembers();
+  document.getElementById('btn-team-rename').style.display = canManageMembers() ? 'inline-block' : 'none';
+  document.getElementById('btn-team-invite').style.display = canManageMembers() ? 'inline-block' : 'none';
 }
 
 async function loadTeam() {

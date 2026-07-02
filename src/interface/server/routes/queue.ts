@@ -16,9 +16,11 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 	});
 
 	// Everything below actually mutates the shared merge queue (merges, reverts, requeues,
-	// pulls a bundle back to review) — restricted to the team's owner. Everyday triage
-	// (the accept/defer/reject gestures, which only enqueue) stays open to every member;
-	// see gestures.ts.
+	// pulls a bundle back to review) — restricted to the team's owner. Everyday triage (the
+	// accept/defer/reject gestures) stays open to every member; accept only enqueues, EXCEPT
+	// when the owner has turned on autoMergeOnAccept (itself gated to requireRole("owner") —
+	// see routes/githubApp.ts), in which case any member's accept also drains the queue the
+	// same way /process below does. See gestures.ts for that interaction.
 	router.post("/process", requireRole("owner"), async (_req, res, next) => {
 		try {
 			const entry = await queue.dequeueNext();

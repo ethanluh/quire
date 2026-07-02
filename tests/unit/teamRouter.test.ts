@@ -341,7 +341,7 @@ describe("teamRouter", () => {
 			expect(res.status).toBe(403);
 		});
 
-		it("blocks demoting the sole remaining owner (409)", async () => {
+		it("blocks a caller from changing their own role (400, before any other check)", async () => {
 			const teamId = await signIn("owner");
 
 			const res = await fetch(`${baseUrl}/account/team/members/owner/role`, {
@@ -349,8 +349,17 @@ describe("teamRouter", () => {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ role: "admin" }),
 			});
-			expect(res.status).toBe(409);
+			expect(res.status).toBe(400);
+			expect((await store.getMembership(teamId, "owner"))?.role).toBe("owner");
 		});
+
+		// The 409 "would leave the team with no owner" case is unreachable through this route
+		// once self-action is blocked: touching the owner role requires the caller to already
+		// be an owner (see touchesOwnerRole below), so the only caller who could ever demote a
+		// *sole* owner is that owner themselves — which the self-action guard above rejects
+		// first. The invariant itself still lives in TeamStore.setMemberRole (see
+		// teamStore.test.ts's "last-owner invariant" suite) so any other caller — a script, a
+		// future route — stays protected.
 
 		it("allows demoting a co-owner when another owner remains", async () => {
 			const teamId = await signIn("owner");
@@ -438,12 +447,19 @@ describe("teamRouter", () => {
 			expect(res.status).toBe(403);
 		});
 
-		it("blocks removing the sole remaining owner (409)", async () => {
-			await signIn("owner");
+		it("blocks a caller from removing themselves this way (400)", async () => {
+			const teamId = await signIn("owner");
 
 			const res = await fetch(`${baseUrl}/account/team/members/owner/remove`, { method: "POST" });
-			expect(res.status).toBe(409);
+			expect(res.status).toBe(400);
+			expect(await store.getMembership(teamId, "owner")).toBeDefined();
 		});
+
+		// The 409 "would leave the team with no owner" case is unreachable through this route
+		// once self-action is blocked, for the same reason as /role above: removing an owner
+		// requires the caller to already be an owner, so the only caller who could ever remove
+		// a *sole* owner is that owner themselves — rejected first. See
+		// teamStore.test.ts's "last-owner invariant" suite for the invariant itself.
 
 		it("allows removing a co-owner when another owner remains", async () => {
 			const teamId = await signIn("owner");
