@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach } from "@jest/globals";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { refreshRepoQueue, enqueueRefresh, NeedsReconnectError, AccountChangedError } from "../../src/interface/server/refreshRepoQueue.js";
+import { RequestError } from "@octokit/request-error";
+import { refreshRepoQueue, enqueueRefresh, InstallationRevokedError, AccountChangedError } from "../../src/interface/server/refreshRepoQueue.js";
 import type { RefreshDeps } from "../../src/interface/server/refreshRepoQueue.js";
 import { createAccountState } from "../../src/interface/server/accountState.js";
 import { createServerState } from "../../src/interface/server/state.js";
@@ -13,9 +14,8 @@ import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
-import type { ConnectedAccount } from "../../src/engine/github/account.js";
+import type { InstallationBinding } from "../../src/engine/github/installation.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
-import type { OAuthDeps } from "../../src/engine/github/oauth.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
@@ -23,11 +23,11 @@ const PIPELINE_CONFIG: PipelineConfig = {
 	bundle: { similarityThreshold: 0.75 },
 };
 
-const BASE_ACCOUNT: ConnectedAccount = {
-	login: "octocat",
-	token: "ghp_abc",
-	scopes: [],
-	connectedAt: "2026-06-30T00:00:00.000Z",
+const BASE_BINDING: InstallationBinding = {
+	installationId: 1,
+	accountLogin: "octocat",
+	accountType: "User",
+	boundAt: "2026-06-30T00:00:00.000Z",
 };
 
 function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
@@ -65,6 +65,12 @@ class BlockingGitHubClient extends StubGitHubClient {
 	}
 }
 
+class RevokedGitHubClient extends StubGitHubClient {
+	override async listOpenPullRequests(): Promise<never> {
+		throw new RequestError("Not Found", 404, { request: { method: "GET", url: "", headers: {} } });
+	}
+}
+
 describe("refreshRepoQueue", () => {
 	let dir: string;
 
@@ -74,16 +80,15 @@ describe("refreshRepoQueue", () => {
 
 	function makeDeps(overrides: {
 		client?: StubGitHubClient;
-		account?: ConnectedAccount;
-		oauth?: OAuthDeps;
+		binding?: InstallationBinding;
 		provider?: StubLlmProvider;
 	} = {}): RefreshDeps {
 		const client = overrides.client ?? new StubGitHubClient();
 		return {
-			accountState: createAccountState(overrides.account ?? BASE_ACCOUNT),
-			accountPath: join(dir, "github-account.json"),
+			accountState: createAccountState(overrides.binding ?? BASE_BINDING),
+			accountPath: join(dir, "installation.json"),
 			clientHolder: new GitHubClientHolder(client),
-			oauth: overrides.oauth,
+			appConfig: { appId: "1", privateKey: "unused" },
 			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),
 			state: createServerState(),
 			pipelineDeps: {
@@ -114,81 +119,44 @@ describe("refreshRepoQueue", () => {
 		expect(bundle?.members.map((m) => m.id)).toEqual(["pr-2"]);
 	});
 
-	it("does not touch the token when tokenExpiresAt is unset (PAT or non-expiring OAuth token)", async () => {
+	it("throws InstallationRevokedError when GitHub 404s the PR list (installation lost access)", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
-		const deps = makeDeps();
+		const deps = makeDeps({ client: new RevokedGitHubClient() });
 
-		await refreshRepoQueue("octocat", "hello-world", deps);
-
-		expect(deps.accountState.current?.token).toBe("ghp_abc");
-		expect(deps.accountState.current?.needsReconnect).toBeUndefined();
+		await expect(refreshRepoQueue("octocat", "hello-world", deps)).rejects.toBeInstanceOf(InstallationRevokedError);
 	});
 
-	// The successful-refresh path is covered directly against ensureValidAccessToken in
-	// tokenRefresh.test.ts — a successful refresh here swaps the GitHubClientHolder to a
-	// real OctokitGitHubClient (correct production behavior), which would otherwise make
-	// this test's subsequent listOpenPullRequests call hit the real GitHub API.
-
-	it("throws NeedsReconnectError and flags needsReconnect when the token expired with no refresh token available", async () => {
+	it("throws a plain error, not InstallationRevokedError, for an unrelated failure", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
-		const expiredAccount: ConnectedAccount = {
-			...BASE_ACCOUNT,
-			tokenExpiresAt: new Date(Date.now() - 1000).toISOString(),
-		};
-		const deps = makeDeps({ account: expiredAccount });
+		class FailingClient extends StubGitHubClient {
+			override async listOpenPullRequests(): Promise<never> {
+				throw new Error("network blip");
+			}
+		}
+		const deps = makeDeps({ client: new FailingClient() });
 
-		await expect(refreshRepoQueue("octocat", "hello-world", deps)).rejects.toBeInstanceOf(NeedsReconnectError);
+		await expect(refreshRepoQueue("octocat", "hello-world", deps)).rejects.not.toBeInstanceOf(InstallationRevokedError);
 	});
 
-	it("throws NeedsReconnectError and flags needsReconnect when the refresh call itself fails", async () => {
+	it("does not resurrect the binding if it's disconnected while a refresh is in flight", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
-		const expiringAccount: ConnectedAccount = {
-			...BASE_ACCOUNT,
-			refreshToken: "refresh-1",
-			tokenExpiresAt: new Date(Date.now() - 1000).toISOString(),
-		};
-		const oauth: OAuthDeps = {
-			config: { clientId: "id", clientSecret: "secret" },
-			buildAuthorizeUrl: () => "",
-			exchangeCodeForToken: async () => ({ accessToken: "unused" }),
-			refreshAccessToken: async () => {
-				throw new Error("GitHub rejected the refresh token");
-			},
-			redirectUri: "http://localhost:3000/callback",
-		};
-		const deps = makeDeps({ account: expiringAccount, oauth });
-
-		await expect(refreshRepoQueue("octocat", "hello-world", deps)).rejects.toBeInstanceOf(NeedsReconnectError);
-	});
-
-	it("does not resurrect the account if it's disconnected while a token refresh is in flight", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
-		const expiringAccount: ConnectedAccount = {
-			...BASE_ACCOUNT,
-			refreshToken: "refresh-1",
-			tokenExpiresAt: new Date(Date.now() - 1000).toISOString(),
-		};
-		let releaseRefresh: () => void = () => undefined;
+		let releaseFetch: () => void = () => undefined;
 		const gate = new Promise<void>((resolve) => {
-			releaseRefresh = resolve;
+			releaseFetch = resolve;
 		});
-		const oauth: OAuthDeps = {
-			config: { clientId: "id", clientSecret: "secret" },
-			buildAuthorizeUrl: () => "",
-			exchangeCodeForToken: async () => ({ accessToken: "unused" }),
-			refreshAccessToken: async () => {
+		class GatedClient extends StubGitHubClient {
+			override async listOpenPullRequests(owner: string, repo: string) {
 				await gate;
-				return { accessToken: "new-token", refreshToken: "refresh-2" };
-			},
-			redirectUri: "http://localhost:3000/callback",
-		};
-		const deps = makeDeps({ account: expiringAccount, oauth });
+				return super.listOpenPullRequests(owner, repo);
+			}
+		}
+		const deps = makeDeps({ client: new GatedClient() });
 
 		const refreshPromise = refreshRepoQueue("octocat", "hello-world", deps);
 		await new Promise((resolve) => setImmediate(resolve));
 		deps.accountState.current = undefined; // simulates a concurrent /disconnect
 
-		releaseRefresh();
+		releaseFetch();
 		await expect(refreshPromise).rejects.toBeInstanceOf(AccountChangedError);
 		expect(deps.accountState.current).toBeUndefined();
 	});
@@ -224,10 +192,10 @@ describe("enqueueRefresh", () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
 		const client = new BlockingGitHubClient();
 		const deps: RefreshDeps = {
-			accountState: createAccountState(BASE_ACCOUNT),
-			accountPath: join(dir, "github-account.json"),
+			accountState: createAccountState(BASE_BINDING),
+			accountPath: join(dir, "installation.json"),
 			clientHolder: new GitHubClientHolder(client),
-			oauth: undefined,
+			appConfig: { appId: "1", privateKey: "unused" },
 			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),
 			state: createServerState(),
 			pipelineDeps: {

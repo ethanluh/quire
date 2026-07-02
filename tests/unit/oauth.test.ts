@@ -9,7 +9,7 @@ function mockFetch(response: Pick<Response, "ok" | "status"> & { json: () => Pro
 }
 
 describe("buildAuthorizeUrl", () => {
-	it("includes client_id, redirect_uri, state, and the repo + admin:repo_hook scopes", () => {
+	it("includes client_id, redirect_uri, and state, with no scope requested by default", () => {
 		const url = buildAuthorizeUrl(CONFIG, "http://localhost:3000/account/github/oauth/callback", "nonce-1");
 		const parsed = new URL(url);
 
@@ -17,7 +17,14 @@ describe("buildAuthorizeUrl", () => {
 		expect(parsed.searchParams.get("client_id")).toBe("client-id");
 		expect(parsed.searchParams.get("redirect_uri")).toBe("http://localhost:3000/account/github/oauth/callback");
 		expect(parsed.searchParams.get("state")).toBe("nonce-1");
-		expect(parsed.searchParams.get("scope")).toBe("repo admin:repo_hook");
+		expect(parsed.searchParams.has("scope")).toBe(false);
+	});
+
+	it("includes an explicitly requested scope when the caller passes one", () => {
+		const url = buildAuthorizeUrl(CONFIG, "http://localhost:3000/callback", "nonce-1", "repo");
+		const parsed = new URL(url);
+
+		expect(parsed.searchParams.get("scope")).toBe("repo");
 	});
 });
 

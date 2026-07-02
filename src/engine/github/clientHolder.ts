@@ -1,5 +1,5 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
-import type { CreatedWebhook, GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
+import type { GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
 
 // MergeQueue is constructed once at startup holding a reference to a GitHubClient.
 // Connecting/disconnecting an account needs to change which client that reference
@@ -45,13 +45,5 @@ export class GitHubClientHolder implements GitHubClient {
 		card: ReviewCard,
 	): Promise<void> {
 		return this.current.postReviewCardComment(owner, repo, prNumber, action, card);
-	}
-
-	createWebhook(owner: string, repo: string, config: { url: string; secret: string }): Promise<CreatedWebhook> {
-		return this.current.createWebhook(owner, repo, config);
-	}
-
-	deleteWebhook(owner: string, repo: string, hookId: number): Promise<void> {
-		return this.current.deleteWebhook(owner, repo, hookId);
 	}
 }

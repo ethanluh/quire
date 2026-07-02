@@ -1,5 +1,5 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
-import type { CreatedWebhook, GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
+import type { GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
 
 export interface PostedReviewCardComment {
 	owner: string;
@@ -9,28 +9,12 @@ export interface PostedReviewCardComment {
 	card: ReviewCard;
 }
 
-export interface CreatedWebhookRecord {
-	owner: string;
-	repo: string;
-	url: string;
-	id: number;
-}
-
-export interface DeletedWebhookRecord {
-	owner: string;
-	repo: string;
-	hookId: number;
-}
-
 export class StubGitHubClient implements GitHubClient {
 	private readonly prFixtures: Map<string, RawPRPayload> = new Map();
 	readonly mergedPrs: string[] = [];
 	readonly closedPrs: string[] = [];
 	readonly revertedPrs: string[] = [];
 	readonly postedReviewCardComments: PostedReviewCardComment[] = [];
-	readonly createdWebhooks: CreatedWebhookRecord[] = [];
-	readonly deletedWebhooks: DeletedWebhookRecord[] = [];
-	private nextWebhookId = 1;
 
 	addFixture(owner: string, repo: string, pr: RawPRPayload): void {
 		this.prFixtures.set(`${owner}/${repo}/${pr.number}`, pr);
@@ -72,15 +56,5 @@ export class StubGitHubClient implements GitHubClient {
 		card: ReviewCard,
 	): Promise<void> {
 		this.postedReviewCardComments.push({ owner, repo, prNumber, action, card });
-	}
-
-	async createWebhook(owner: string, repo: string, config: { url: string; secret: string }): Promise<CreatedWebhook> {
-		const id = this.nextWebhookId++;
-		this.createdWebhooks.push({ owner, repo, url: config.url, id });
-		return { id };
-	}
-
-	async deleteWebhook(owner: string, repo: string, hookId: number): Promise<void> {
-		this.deletedWebhooks.push({ owner, repo, hookId });
 	}
 }

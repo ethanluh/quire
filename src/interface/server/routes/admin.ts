@@ -4,8 +4,6 @@ import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { ServerState } from "../state.js";
 import { truncateNdjson } from "../../../engine/instrumentation/store.js";
-import { localOnly } from "../middleware/localOnly.js";
-import { requireAdminHeader } from "../middleware/requireAdminHeader.js";
 
 export function adminRouter(
 	state: ServerState,
@@ -16,7 +14,10 @@ export function adminRouter(
 ): Router {
 	const router = Router();
 
-	router.post("/reset", localOnly, requireAdminHeader, async (_req, res, next) => {
+	// Access control (requireSession) is applied once, ahead of every data route, in
+	// index.ts — not per-route here. See middleware/requireSession.ts for why a real
+	// session cookie replaces the old localOnly+requireAdminHeader pair.
+	router.post("/reset", async (_req, res, next) => {
 		try {
 			state.bundles.clear();
 			state.cards.clear();

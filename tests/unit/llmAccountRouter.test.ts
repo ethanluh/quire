@@ -260,23 +260,6 @@ describe("llmAccountRouter", () => {
 		expect(liveResponse).toBe(`${persisted?.provider} ok`);
 	});
 
-	it("rejects connect attempts missing the admin header (CSRF guard) without storing anything", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-llm-router-"));
-		const { accountPath } = setup(() => ({ provider: workingProvider("anthropic"), description: "anthropic" }));
-		await new Promise((resolve) => server.once("listening", resolve));
-
-		const { status } = await call(
-			server,
-			"POST",
-			"/account/llm/connect",
-			{ provider: "anthropic", apiKey: "sk-ant-abc" },
-			{},
-		);
-
-		expect(status).toBe(403);
-		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
-	});
-
 	it("disconnects, clears the persisted account, and falls back to the injected resolver", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-llm-router-"));
 		const existing: ConnectedLlmAccount = { provider: "gemini", apiKey: "gk-1", connectedAt: "now" };
@@ -336,13 +319,4 @@ describe("llmAccountRouter", () => {
 		expect(await loadAccount(accountPath)).toEqual(existing);
 	});
 
-	it("rejects disconnect attempts missing the admin header", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-llm-router-"));
-		setup(() => ({ provider: workingProvider("anthropic"), description: "anthropic" }));
-		await new Promise((resolve) => server.once("listening", resolve));
-
-		const { status } = await call(server, "POST", "/account/llm/disconnect", undefined, {});
-
-		expect(status).toBe(403);
-	});
 });

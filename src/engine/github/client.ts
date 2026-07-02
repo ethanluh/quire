@@ -27,10 +27,6 @@ export interface ListOpenPullRequestsResult {
 	skipped: ReadonlyArray<SkippedPullRequest>;
 }
 
-export interface CreatedWebhook {
-	id: number;
-}
-
 export interface GitHubClient {
 	getPullRequest(owner: string, repo: string, prNumber: number): Promise<RawPRPayload>;
 	listOpenPullRequests(owner: string, repo: string): Promise<ListOpenPullRequestsResult>;
@@ -44,6 +40,4 @@ export interface GitHubClient {
 		action: GestureAction,
 		card: ReviewCard,
 	): Promise<void>;
-	createWebhook(owner: string, repo: string, config: { url: string; secret: string }): Promise<CreatedWebhook>;
-	deleteWebhook(owner: string, repo: string, hookId: number): Promise<void>;
 }
