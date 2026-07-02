@@ -17,6 +17,16 @@ const REVERT_PULL_REQUEST_MUTATION = `
 	}
 `;
 
+const MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION = `
+	mutation markPullRequestReadyForReview($pullRequestId: ID!) {
+		markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+			pullRequest {
+				id
+			}
+		}
+	}
+`;
+
 interface RevertPullRequestResponse {
 	revertPullRequest: {
 		pullRequest: {
@@ -107,6 +117,10 @@ export class OctokitGitHubClient implements GitHubClient {
 	}
 
 	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+		if (pr.draft === true) {
+			await this.octokit.graphql(MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION, { pullRequestId: pr.node_id });
+		}
 		await this.octokit.rest.pulls.merge({ owner, repo, pull_number: prNumber });
 	}
 
