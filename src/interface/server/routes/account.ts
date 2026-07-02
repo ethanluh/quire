@@ -32,6 +32,7 @@ const SettingsSchema = z.object({
 });
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const REPO_LIST_CACHE_TTL_MS = 30 * 1000;
 
 export interface WebhookConfig {
 	publicUrl: string;
@@ -96,6 +97,13 @@ export function githubAccountRouter(
 	}
 	let pendingOAuth: PendingOAuthState | undefined;
 
+	interface RepoListCacheEntry {
+		token: string;
+		expiresAt: number;
+		repos: ReadonlyArray<RepoSummary>;
+	}
+	let repoListCache: RepoListCacheEntry | undefined;
+
 	router.get("/status", (_req, res) => {
 		const account = accountState.current;
 		if (account === undefined) {
@@ -138,7 +146,14 @@ export function githubAccountRouter(
 				res.status(400).json({ error: "Connect a GitHub account first" });
 				return;
 			}
-			const repos = await listRepos(account.token);
+			const cached = repoListCache;
+			const repos =
+				cached !== undefined && cached.token === account.token && Date.now() < cached.expiresAt
+					? cached.repos
+					: await listRepos(account.token);
+			if (cached === undefined || repos !== cached.repos) {
+				repoListCache = { token: account.token, expiresAt: Date.now() + REPO_LIST_CACHE_TTL_MS, repos };
+			}
 			res.json({ repos, selected: account.selectedRepo });
 		} catch (err) {
 			next(err);
