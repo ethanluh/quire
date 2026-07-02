@@ -1,0 +1,42 @@
+# Generated for the team-testing deploy. Replace `app` and `primary_region` with your own
+# (`fly launch` will also offer to rewrite this file interactively if you prefer that route).
+#
+# The app crashes on boot without five of these set as `fly secrets set` (never as [env] —
+# they're credentials, not config): GITHUB_APP_ID, GITHUB_APP_SLUG,
+# GITHUB_APP_PRIVATE_KEY_BASE64, GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET. Two more are
+# optional but you want them before real use: QUIRE_SESSION_SECRET (unset = a fresh one is
+# generated per boot, logging out every session on each deploy) and
+# QUIRE_ALLOWED_GITHUB_LOGINS (unset = anyone with a GitHub account can sign in). Also set
+# QUIRE_PUBLIC_URL to this app's https:// domain, or the webhook receiver never mounts and
+# Quire falls back to polling only. See .env.example for what each does.
+app = "quire-team"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PORT = "3000"
+  QUIRE_DATA_DIR = "/data"
+
+# Create once before the first deploy: `fly volumes create quire_data --size 1 -a quire-team`
+# Holds queue.json, installation.json, decided-prs.json, and instrumentation/*.ndjson — the
+# only persisted state, since there's no database.
+[[mounts]]
+  source = "quire_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Always-on: a stopped machine would delay webhook delivery and drop in-flight sessions
+  # mid-test, which defeats the point of a shared always-reachable instance for the team.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/"

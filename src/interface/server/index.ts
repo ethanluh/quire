@@ -47,7 +47,12 @@ import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
 import type { PipelineDeps } from "./ingestIntoQueue.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "../../../data");
+// Not derived from __dirname: the compiled dist/ output nests one level deeper than the
+// source (dist/src/interface/server vs. src/interface/server), so a fixed "../../../data"
+// walk lands in the wrong place in production. process.cwd() is stable across `npm run dev`
+// and `npm start` (both invoked from the project root); QUIRE_DATA_DIR lets a deploy mount
+// its persistent volume anywhere.
+const DATA_DIR = process.env.QUIRE_DATA_DIR ?? join(process.cwd(), "data");
 const QUEUE_PATH = join(DATA_DIR, "queue.json");
 const DECIDED_PRS_PATH = join(DATA_DIR, "decided-prs.json");
 const PR_CACHE_PATH = join(DATA_DIR, "pr-cache.json");
