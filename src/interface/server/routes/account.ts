@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { parse } from "cookie";
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import type { Allowlist } from "../allowlist.js";
@@ -6,8 +7,9 @@ import type { OAuthDeps } from "../../../engine/github/oauth.js";
 import { OAuthExchangeError } from "../../../engine/github/oauth.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
-import { SESSION_COOKIE_NAME, createSession } from "../session.js";
+import { SESSION_COOKIE_NAME, SESSION_TTL_MS, createSession } from "../session.js";
 
+const OAUTH_STATE_COOKIE_NAME = "quire_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 // Where the OAuth callback sends the browser once it's done — GitHub's redirect is a
@@ -36,40 +38,38 @@ export function accountRouter(
 ): Router {
 	const router = Router();
 
-	interface PendingOAuthState {
-		state: string;
-		expiresAt: number;
-	}
-	let pendingOAuth: PendingOAuthState | undefined;
-
 	// GET, not POST: unlike the old dual-purpose flow, this has no side effect worth CSRF
 	// protection — it only mints a nonce and returns GitHub's own authorize URL. GitHub's
 	// login screen is the real gate; a page tricking a visitor into "starting" a login (via
 	// GET or POST) at worst just opens a GitHub authorize prompt that bounces back to
 	// Quire's own sign-in page.
+	//
+	// The nonce lives in a short-lived cookie scoped to the browser that started this flow,
+	// not a server-wide variable — this endpoint is reachable by anyone (that's the point,
+	// it's how you log in), so a shared singleton here would let any visitor silently
+	// invalidate every other in-flight login on the server just by hitting this route.
 	router.get("/oauth/start", (_req, res) => {
-		// Idempotent while a flow is still pending: a double-click before the page
-		// navigates away, or a second tab, reuses the same nonce instead of minting a
-		// fresh one that would silently orphan the first flow's eventual callback.
-		if (pendingOAuth === undefined || Date.now() >= pendingOAuth.expiresAt) {
-			pendingOAuth = { state: randomBytes(32).toString("hex"), expiresAt: Date.now() + OAUTH_STATE_TTL_MS };
-		}
-		res.json({ authorizeUrl: oauth.buildAuthorizeUrl(oauth.config, oauth.redirectUri, pendingOAuth.state) });
+		const state = randomBytes(32).toString("hex");
+		res.cookie(OAUTH_STATE_COOKIE_NAME, state, {
+			httpOnly: true,
+			sameSite: "lax",
+			secure: secureCookies,
+			path: "/",
+			maxAge: OAUTH_STATE_TTL_MS,
+		});
+		res.json({ authorizeUrl: oauth.buildAuthorizeUrl(oauth.config, oauth.redirectUri, state) });
 	});
 
 	router.get("/oauth/callback", async (req, res) => {
 		const { code, state: returnedState } = req.query;
-		const pending = pendingOAuth;
-		// Consumed before the exchange awaits, so a concurrent double-submit of the same
-		// code+state can't both pass this check — only the first request still sees it.
-		pendingOAuth = undefined;
+		const pendingState = parse(req.headers.cookie ?? "")[OAUTH_STATE_COOKIE_NAME];
+		res.clearCookie(OAUTH_STATE_COOKIE_NAME, { path: "/" });
 
 		if (
-			pending === undefined ||
+			pendingState === undefined ||
 			typeof code !== "string" ||
 			typeof returnedState !== "string" ||
-			returnedState !== pending.state ||
-			Date.now() >= pending.expiresAt
+			returnedState !== pendingState
 		) {
 			res.redirect(oauthResultRedirectUrl("error", "the sign-in request expired or was invalid"));
 			return;
@@ -91,7 +91,7 @@ export function accountRouter(
 				sameSite: "lax",
 				secure: secureCookies,
 				path: "/",
-				maxAge: 30 * 24 * 60 * 60,
+				maxAge: SESSION_TTL_MS,
 			});
 			res.redirect(oauthResultRedirectUrl("connected", undefined));
 		} catch (err) {

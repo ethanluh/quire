@@ -1,7 +1,7 @@
 import { parse } from "cookie";
 import type { CookieOptions, Request, Response, NextFunction } from "express";
 import type { Allowlist } from "../allowlist.js";
-import { SESSION_COOKIE_NAME, renewSession, verifySession } from "../session.js";
+import { SESSION_COOKIE_NAME, SESSION_TTL_MS, renewSession, verifySession } from "../session.js";
 
 declare global {
 	// eslint-disable-next-line @typescript-eslint/no-namespace
@@ -14,15 +14,16 @@ declare global {
 	}
 }
 
-const COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
-
 function cookieOptions(secure: boolean): CookieOptions {
 	return {
 		httpOnly: true,
 		sameSite: "lax",
 		secure,
 		path: "/",
-		maxAge: COOKIE_MAX_AGE_SECONDS,
+		// res.cookie's maxAge is milliseconds (converted internally to the wire-format
+		// Max-Age in seconds) — SESSION_TTL_MS is already in ms, so use it directly rather
+		// than re-deriving a seconds constant that's easy to pass here by mistake.
+		maxAge: SESSION_TTL_MS,
 	};
 }
 

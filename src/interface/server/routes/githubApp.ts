@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
+import { parse } from "cookie";
 import { Router } from "express";
 import { z } from "zod";
 import type { InstallationBinding } from "../../../engine/github/installation.js";
 import { saveInstallation, clearInstallation } from "../../../engine/github/installation.js";
-import type { GitHubAppConfig } from "../../../engine/github/installationClient.js";
+import type { GitHubAppConfig, InstallationAccount } from "../../../engine/github/installationClient.js";
 import { buildInstallationClient } from "../../../engine/github/installationClient.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
 import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
@@ -19,6 +20,7 @@ const SettingsSchema = z.object({
 	autoMergeOnAccept: z.boolean(),
 });
 
+const INSTALL_STATE_COOKIE_NAME = "quire_install_state";
 const INSTALL_STATE_TTL_MS = 10 * 60 * 1000;
 const REPO_LIST_CACHE_TTL_MS = 30 * 1000;
 
@@ -33,15 +35,11 @@ export function githubAppRouter(
 	appSlug: string,
 	appConfig: GitHubAppConfig,
 	listInstallationRepos: (installationId: number) => Promise<ReadonlyArray<RepoSummary>>,
+	getInstallationAccount: (installationId: number) => Promise<InstallationAccount>,
+	secureCookies: boolean,
 ): Router {
 	const router = Router();
 	const { accountState, accountPath, clientHolder } = refreshDeps;
-
-	interface PendingInstall {
-		state: string;
-		expiresAt: number;
-	}
-	let pendingInstall: PendingInstall | undefined;
 
 	interface RepoListCacheEntry {
 		installationId: number;
@@ -83,49 +81,47 @@ export function githubAppRouter(
 		}
 	});
 
+	// The nonce lives in a short-lived cookie scoped to the browser doing the install,
+	// not a server-wide variable — a second, unrelated install flow (a different admin,
+	// a retry) can't clobber this one's pending state the way a shared singleton would.
 	router.post("/install/start", (_req, res) => {
-		// Idempotent while a flow is still pending, same rationale as account.ts's OAuth
-		// nonce: a double-click or a second tab reuses the pending nonce instead of
-		// orphaning the first flow's eventual Setup URL callback.
-		if (pendingInstall === undefined || Date.now() >= pendingInstall.expiresAt) {
-			pendingInstall = { state: randomBytes(32).toString("hex"), expiresAt: Date.now() + INSTALL_STATE_TTL_MS };
-		}
-		const params = new URLSearchParams({ state: pendingInstall.state });
+		const state = randomBytes(32).toString("hex");
+		res.cookie(INSTALL_STATE_COOKIE_NAME, state, {
+			httpOnly: true,
+			sameSite: "lax",
+			secure: secureCookies,
+			path: "/",
+			maxAge: INSTALL_STATE_TTL_MS,
+		});
+		const params = new URLSearchParams({ state });
 		res.json({ installUrl: `https://github.com/apps/${appSlug}/installations/new?${params.toString()}` });
 	});
 
 	// The App's Setup URL — GitHub redirects here after the user installs (or updates)
-	// the App, carrying installation_id, setup_action, and Quire's own state. Not gated
-	// behind requireSession's normal flow the way data routes are: reachable the moment
-	// GitHub redirects back, since the browser's session cookie may have expired mid-flow
-	// and there is nothing tenant-scoped to bind to yet in this single-global-instance
-	// version (a later stage carries the initiating tenant inside `state` once
-	// multi-tenancy exists).
+	// the App, carrying installation_id, setup_action, and Quire's own state.
 	router.get("/install/callback", async (req, res, next) => {
 		try {
 			const { installation_id: installationIdRaw, state: returnedState } = req.query;
-			const pending = pendingInstall;
-			pendingInstall = undefined;
+			const pendingState = parse(req.headers.cookie ?? "")[INSTALL_STATE_COOKIE_NAME];
+			res.clearCookie(INSTALL_STATE_COOKIE_NAME, { path: "/" });
 
 			if (
-				pending === undefined ||
+				pendingState === undefined ||
 				typeof installationIdRaw !== "string" ||
 				typeof returnedState !== "string" ||
-				returnedState !== pending.state ||
-				Date.now() >= pending.expiresAt
+				returnedState !== pendingState
 			) {
 				res.redirect("/?account=error&reason=the+installation+request+expired+or+was+invalid");
 				return;
 			}
 
 			const installationId = Number(installationIdRaw);
-			const repos = await listInstallationRepos(installationId);
-			const firstOwner = repos[0]?.owner;
+			const { accountLogin, accountType } = await getInstallationAccount(installationId);
 
 			const binding: InstallationBinding = {
 				installationId,
-				accountLogin: firstOwner ?? `installation-${installationId}`,
-				accountType: "Organization",
+				accountLogin,
+				accountType,
 				boundAt: new Date().toISOString(),
 			};
 			accountState.current = binding;

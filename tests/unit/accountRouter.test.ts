@@ -18,7 +18,7 @@ const SECRET = "test-secret";
 interface RedirectResponse {
 	status: number;
 	location: string | undefined;
-	setCookie: string | undefined;
+	setCookies: ReadonlyArray<string>;
 }
 
 // The OAuth callback always redirects (never JSON) — global fetch() follows redirects by
@@ -35,7 +35,7 @@ async function callRedirect(server: Server, path: string, cookie?: string): Prom
 					resolve({
 						status: res.statusCode ?? 0,
 						location: res.headers.location,
-						setCookie: res.headers["set-cookie"]?.[0],
+						setCookies: res.headers["set-cookie"] ?? [],
 					}),
 				);
 			},
@@ -43,6 +43,12 @@ async function callRedirect(server: Server, path: string, cookie?: string): Prom
 		req.on("error", reject);
 		req.end();
 	});
+}
+
+// The callback always clears the oauth-state cookie in addition to (on success) setting a
+// session cookie, so there are multiple Set-Cookie headers to pick through — find by name.
+function findCookie(setCookies: ReadonlyArray<string>, name: string): string | undefined {
+	return setCookies.find((c) => c.startsWith(`${name}=`));
 }
 
 interface JsonResponse {
@@ -95,62 +101,105 @@ describe("accountRouter (login-only)", () => {
 		server = app.listen(0);
 	}
 
-	async function startOAuth(): Promise<string> {
-		const { body } = await call(server, "GET", "/account/github/oauth/start");
+	interface PendingOAuth {
+		state: string;
+		cookie: string;
+	}
+
+	async function startOAuth(): Promise<PendingOAuth> {
+		const { body, setCookie } = await call(server, "GET", "/account/github/oauth/start");
 		const authorizeUrl = body["authorizeUrl"] as string;
 		const state = new URL(authorizeUrl).searchParams.get("state");
 		if (state === null) throw new Error("authorizeUrl had no state param");
-		return state;
+		if (setCookie === undefined) throw new Error("oauth/start set no state cookie");
+		return { state, cookie: setCookie.split(";")[0] ?? "" };
 	}
 
-	it("reuses the same pending state across repeated /oauth/start calls (idempotent against a double-click)", async () => {
+	it("mints a fresh, independent state on every /oauth/start call", async () => {
 		setup(async () => ({ login: "octocat", scopes: [] }), undefined);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const first = await startOAuth();
 		const second = await startOAuth();
 
-		expect(first).toBe(second);
+		expect(first.state).not.toBe(second.state);
+	});
+
+	it("does not let one browser's /oauth/start invalidate another's in-flight login", async () => {
+		setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		// Two independent browsers (cookie jars) both start a login around the same time.
+		const browserA = await startOAuth();
+		await startOAuth();
+
+		// Browser A's callback fires after browser B has already started (and, under the
+		// old shared-singleton design, would have clobbered A's pending state).
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/oauth/callback?code=good-code&state=${browserA.state}`,
+			browserA.cookie,
+		);
+
+		expect(status).toBe(302);
+		expect(location).toBe("/?account=connected");
 	});
 
 	it("signs in via a valid code+state, setting a session cookie for an allowlisted login", async () => {
 		setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
 		await new Promise((resolve) => server.once("listening", resolve));
-		const state = await startOAuth();
+		const { state, cookie } = await startOAuth();
 
-		const { status, location, setCookie } = await callRedirect(
+		const { status, location, setCookies } = await callRedirect(
 			server,
 			`/account/github/oauth/callback?code=good-code&state=${state}`,
+			cookie,
 		);
 
 		expect(status).toBe(302);
 		expect(location).toBe("/?account=connected");
-		expect(setCookie).toBeDefined();
-		const cookieValue = parse(setCookie ?? "")[SESSION_COOKIE_NAME];
+		const sessionCookie = findCookie(setCookies, SESSION_COOKIE_NAME);
+		expect(sessionCookie).toBeDefined();
+		const cookieValue = parse(sessionCookie ?? "")[SESSION_COOKIE_NAME];
 		expect(verifySession(cookieValue ?? "", SECRET)?.login).toBe("octocat");
 	});
 
-	it("rejects a login not on the allowlist, without setting a cookie", async () => {
+	it("rejects a login not on the allowlist, without setting a session cookie", async () => {
 		setup(async () => ({ login: "octocat", scopes: [] }), "someone-else");
 		await new Promise((resolve) => server.once("listening", resolve));
-		const state = await startOAuth();
+		const { state, cookie } = await startOAuth();
 
-		const { status, location, setCookie } = await callRedirect(
+		const { status, location, setCookies } = await callRedirect(
 			server,
 			`/account/github/oauth/callback?code=good-code&state=${state}`,
+			cookie,
 		);
 
 		expect(status).toBe(302);
 		expect(location).toContain("account=error");
-		expect(setCookie).toBeUndefined();
+		expect(findCookie(setCookies, SESSION_COOKIE_NAME)).toBeUndefined();
 	});
 
 	it("rejects a callback whose state doesn't match the pending one", async () => {
 		setup(async () => ({ login: "octocat", scopes: [] }), undefined);
 		await new Promise((resolve) => server.once("listening", resolve));
-		await startOAuth();
+		const { cookie } = await startOAuth();
 
-		const { status, location } = await callRedirect(server, "/account/github/oauth/callback?code=x&state=wrong-state");
+		const { status, location } = await callRedirect(
+			server,
+			"/account/github/oauth/callback?code=x&state=wrong-state",
+			cookie,
+		);
+
+		expect(status).toBe(302);
+		expect(location).toContain("account=error");
+	});
+
+	it("rejects a callback with no pending state cookie at all", async () => {
+		setup(async () => ({ login: "octocat", scopes: [] }), undefined);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, location } = await callRedirect(server, "/account/github/oauth/callback?code=x&state=anything");
 
 		expect(status).toBe(302);
 		expect(location).toContain("account=error");
@@ -162,9 +211,13 @@ describe("accountRouter (login-only)", () => {
 		});
 		setup(async () => ({ login: "octocat", scopes: [] }), undefined, makeOAuthDeps(exchangeCodeForToken));
 		await new Promise((resolve) => server.once("listening", resolve));
-		const state = await startOAuth();
+		const { state, cookie } = await startOAuth();
 
-		const { status, location } = await callRedirect(server, `/account/github/oauth/callback?code=bad&state=${state}`);
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/oauth/callback?code=bad&state=${state}`,
+			cookie,
+		);
 
 		expect(status).toBe(302);
 		expect(location).toContain("account=error");
@@ -178,9 +231,13 @@ describe("accountRouter (login-only)", () => {
 			undefined,
 		);
 		await new Promise((resolve) => server.once("listening", resolve));
-		const state = await startOAuth();
+		const { state, cookie } = await startOAuth();
 
-		const { status, location } = await callRedirect(server, `/account/github/oauth/callback?code=good&state=${state}`);
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/oauth/callback?code=good&state=${state}`,
+			cookie,
+		);
 
 		expect(status).toBe(302);
 		expect(location).toContain("account=error");
@@ -189,9 +246,13 @@ describe("accountRouter (login-only)", () => {
 	it("GET /session reports the logged-in login when a valid cookie is presented", async () => {
 		setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
 		await new Promise((resolve) => server.once("listening", resolve));
-		const state = await startOAuth();
-		const { setCookie } = await callRedirect(server, `/account/github/oauth/callback?code=good&state=${state}`);
-		const cookieValue = parse(setCookie ?? "")[SESSION_COOKIE_NAME];
+		const { state, cookie } = await startOAuth();
+		const { setCookies } = await callRedirect(
+			server,
+			`/account/github/oauth/callback?code=good&state=${state}`,
+			cookie,
+		);
+		const cookieValue = parse(findCookie(setCookies, SESSION_COOKIE_NAME) ?? "")[SESSION_COOKIE_NAME];
 
 		const { status, body } = await call(server, "GET", "/account/github/session", `${SESSION_COOKIE_NAME}=${cookieValue}`);
 
