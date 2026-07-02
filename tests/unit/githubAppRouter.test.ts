@@ -23,6 +23,7 @@ import type { InstallationBinding } from "../../src/engine/github/installation.j
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 import type { PipelineDeps } from "../../src/interface/server/ingestIntoQueue.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
+import type { InstallationAccount } from "../../src/engine/github/installationClient.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -49,15 +50,22 @@ function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 interface JsonResponse {
 	status: number;
 	body: Record<string, unknown>;
+	setCookie: string | undefined;
 }
 
-async function call(server: Server, method: string, path: string, body?: unknown): Promise<JsonResponse> {
+async function call(server: Server, method: string, path: string, body?: unknown, cookie?: string): Promise<JsonResponse> {
 	const address = server.address();
 	if (address === null || typeof address === "string") throw new Error("no address");
-	const init: RequestInit = { method, headers: { "Content-Type": "application/json" } };
+	const headers: Record<string, string> = { "Content-Type": "application/json" };
+	if (cookie !== undefined) headers["Cookie"] = cookie;
+	const init: RequestInit = { method, headers };
 	if (body !== undefined) init.body = JSON.stringify(body);
 	const res = await fetch(`http://127.0.0.1:${address.port}${path}`, init);
-	return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+	return {
+		status: res.status,
+		body: (await res.json()) as Record<string, unknown>,
+		setCookie: res.headers.get("set-cookie") ?? undefined,
+	};
 }
 
 interface RedirectResponse {
@@ -65,17 +73,27 @@ interface RedirectResponse {
 	location: string | undefined;
 }
 
-async function callRedirect(server: Server, path: string): Promise<RedirectResponse> {
+async function callRedirect(server: Server, path: string, cookie?: string): Promise<RedirectResponse> {
 	const address = server.address();
 	if (address === null || typeof address === "string") throw new Error("no address");
 	return new Promise((resolve, reject) => {
-		const req = httpRequest({ host: "127.0.0.1", port: address.port, path }, (res) => {
-			res.resume();
-			res.on("end", () => resolve({ status: res.statusCode ?? 0, location: res.headers.location }));
-		});
+		const req = httpRequest(
+			{ host: "127.0.0.1", port: address.port, path, headers: cookie !== undefined ? { cookie } : {} },
+			(res) => {
+				res.resume();
+				res.on("end", () => resolve({ status: res.statusCode ?? 0, location: res.headers.location }));
+			},
+		);
 		req.on("error", reject);
 		req.end();
 	});
+}
+
+// The install-state cookie's Set-Cookie header looks like "quire_install_state=<value>;
+// Path=/; ..." — only the first segment is the actual Cookie-header-ready pair.
+function cookiePair(setCookie: string | undefined): string {
+	if (setCookie === undefined) throw new Error("expected a Set-Cookie header");
+	return setCookie.split(";")[0] ?? "";
 }
 
 describe("githubAppRouter", () => {
@@ -92,6 +110,10 @@ describe("githubAppRouter", () => {
 		client: StubGitHubClient = new StubGitHubClient(),
 		provider: StubLlmProvider = new StubLlmProvider(),
 		initialBinding: InstallationBinding | undefined = undefined,
+		getInstallationAccount: (installationId: number) => Promise<InstallationAccount> = async () => ({
+			accountLogin: "acme-corp",
+			accountType: "Organization",
+		}),
 	): { accountPath: string; state: ServerState; refreshDeps: RefreshDeps } {
 		const accountPath = join(dir, "installation.json");
 		const holder = new GitHubClientHolder(client);
@@ -116,7 +138,17 @@ describe("githubAppRouter", () => {
 		};
 		const app = express();
 		app.use(express.json());
-		app.use("/account/github", githubAppRouter(refreshDeps, "quire-review", { appId: "1", privateKey: "unused" }, listRepos));
+		app.use(
+			"/account/github",
+			githubAppRouter(
+				refreshDeps,
+				"quire-review",
+				{ appId: "1", privateKey: "unused" },
+				listRepos,
+				getInstallationAccount,
+				false,
+			),
+		);
 		app.use(errorHandler);
 		server = app.listen(0);
 		return { accountPath, state, refreshDeps };
@@ -146,7 +178,7 @@ describe("githubAppRouter", () => {
 		expect(url.searchParams.get("state")).toBeTruthy();
 	});
 
-	it("reuses the same pending state across repeated /install/start calls", async () => {
+	it("mints a fresh, independent state on every /install/start call", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		setup();
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -156,7 +188,33 @@ describe("githubAppRouter", () => {
 
 		const firstState = new URL(first.body["installUrl"] as string).searchParams.get("state");
 		const secondState = new URL(second.body["installUrl"] as string).searchParams.get("state");
-		expect(firstState).toBe(secondState);
+		expect(firstState).not.toBe(secondState);
+	});
+
+	it("does not let one browser's /install/start invalidate another's in-flight install", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main" },
+		];
+		setup(async () => repos);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		// Two independent browsers (cookie jars) both start an install around the same time.
+		const browserA = await call(server, "POST", "/account/github/install/start");
+		const browserB = await call(server, "POST", "/account/github/install/start");
+		const stateA = new URL(browserA.body["installUrl"] as string).searchParams.get("state");
+
+		// Browser A's callback fires after browser B has already started (and, under the
+		// old shared-singleton design, would have clobbered A's pending state).
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/install/callback?installation_id=555&state=${stateA}`,
+			cookiePair(browserA.setCookie),
+		);
+
+		expect(status).toBe(302);
+		expect(location).toBe("/?account=connected");
+		expect(browserB.status).toBe(200);
 	});
 
 	it("binds the installation on a valid callback, persisting it and swapping in a real client", async () => {
@@ -172,6 +230,7 @@ describe("githubAppRouter", () => {
 		const { status, location } = await callRedirect(
 			server,
 			`/account/github/install/callback?installation_id=555&state=${state}`,
+			cookiePair(start.setCookie),
 		);
 
 		expect(status).toBe(302);
@@ -185,15 +244,55 @@ describe("githubAppRouter", () => {
 		expect(statusResult.body).toEqual(expect.objectContaining({ connected: true, accountLogin: "acme-corp" }));
 	});
 
+	it("derives accountType from the real installation instead of hardcoding it", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const { accountPath } = setup(
+			async () => [],
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			undefined,
+			async () => ({ accountLogin: "octocat", accountType: "User" }),
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+		const start = await call(server, "POST", "/account/github/install/start");
+		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
+
+		await callRedirect(
+			server,
+			`/account/github/install/callback?installation_id=777&state=${state}`,
+			cookiePair(start.setCookie),
+		);
+
+		const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
+		expect(persisted["accountLogin"]).toBe("octocat");
+		expect(persisted["accountType"]).toBe("User");
+	});
+
 	it("rejects an install callback whose state doesn't match the pending one", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		const { accountPath } = setup();
 		await new Promise((resolve) => server.once("listening", resolve));
-		await call(server, "POST", "/account/github/install/start");
+		const start = await call(server, "POST", "/account/github/install/start");
 
 		const { status, location } = await callRedirect(
 			server,
 			"/account/github/install/callback?installation_id=555&state=wrong",
+			cookiePair(start.setCookie),
+		);
+
+		expect(status).toBe(302);
+		expect(location).toContain("account=error");
+		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+	});
+
+	it("rejects an install callback with no pending state cookie at all", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const { accountPath } = setup();
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, location } = await callRedirect(
+			server,
+			"/account/github/install/callback?installation_id=555&state=anything",
 		);
 
 		expect(status).toBe(302);

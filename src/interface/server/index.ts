@@ -10,7 +10,7 @@ import type { GitHubClient } from "../../engine/github/client.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { loadInstallation } from "../../engine/github/installation.js";
-import { buildInstallationClient, buildInstallationOctokit } from "../../engine/github/installationClient.js";
+import { buildInstallationClient, buildInstallationOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
 import { InstallationRevokedError } from "../../engine/github/installationClient.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
@@ -209,8 +209,13 @@ async function main(): Promise<void> {
 
 	app.use(
 		"/account/github",
-		githubAppRouter(refreshDeps, appSlug, appConfig, (installationId) =>
-			listInstallationRepositories(buildInstallationOctokit(appConfig, installationId)),
+		githubAppRouter(
+			refreshDeps,
+			appSlug,
+			appConfig,
+			(installationId) => listInstallationRepositories(buildInstallationOctokit(appConfig, installationId)),
+			(installationId) => getInstallationAccount(appConfig, installationId),
+			isProduction,
 		),
 	);
 	app.use("/prs", prsRouter(state, pipelineDeps, queue));
