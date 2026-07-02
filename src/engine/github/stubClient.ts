@@ -1,5 +1,14 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
+import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
+
+export interface CommitResolvedFilesCall {
+	owner: string;
+	repo: string;
+	prNumber: number;
+	baseTipSha: string;
+	files: ReadonlyArray<ResolvedFile>;
+}
 
 export interface PostedReviewCardComment {
 	owner: string;
@@ -26,10 +35,22 @@ export class StubGitHubClient implements GitHubClient {
 	private readonly pullRequests: Map<string, StubPullRequest[]> = new Map();
 	private nextPrNumber = 1000;
 	defaultBranch = "main";
+	private readonly mergeabilityFixtures: Map<string, MergeabilityResult> = new Map();
+	private readonly conflictTreesFixtures: Map<string, ConflictTrees> = new Map();
+	private readonly blobFixtures: Map<string, string> = new Map();
 	readonly mergedPrs: string[] = [];
 	readonly closedPrs: string[] = [];
 	readonly revertedPrs: string[] = [];
 	readonly postedReviewCardComments: PostedReviewCardComment[] = [];
+	readonly updateBranchCalls: string[] = [];
+	readonly commitResolvedFilesCalls: CommitResolvedFilesCall[] = [];
+	// One-shot: thrown on the next call, then cleared, so a test can simulate a single
+	// transient failure (e.g. a non-fast-forward race) without permanently breaking the stub.
+	updateBranchError: Error | undefined;
+	commitResolvedFilesError: Error | undefined;
+	// Set false to simulate updateBranch/commitResolvedFiles succeeding but the PR staying
+	// not-mergeable anyway (e.g. the base branch moved again during resolution).
+	autoMarkMergeableAfterSuccess = true;
 
 	addFixture(owner: string, repo: string, pr: RawPRPayload): void {
 		this.prFixtures.set(`${owner}/${repo}/${pr.number}`, pr);
@@ -51,6 +72,21 @@ export class StubGitHubClient implements GitHubClient {
 			this.files.set(key, map);
 		}
 		return map;
+	}
+
+	// Defaults to "clean" when unset so every existing test exercising mergePullRequest
+	// through dequeueNext() keeps working unchanged — only conflict-resolution tests need
+	// to call this.
+	setMergeability(owner: string, repo: string, prNumber: number, result: MergeabilityResult): void {
+		this.mergeabilityFixtures.set(`${owner}/${repo}/${prNumber}`, result);
+	}
+
+	setConflictTrees(owner: string, repo: string, prNumber: number, trees: ConflictTrees): void {
+		this.conflictTreesFixtures.set(`${owner}/${repo}/${prNumber}`, trees);
+	}
+
+	setBlobContent(sha: string, content: string): void {
+		this.blobFixtures.set(sha, content);
 	}
 
 	async getPullRequest(owner: string, repo: string, prNumber: number): Promise<RawPRPayload> {
@@ -135,5 +171,71 @@ export class StubGitHubClient implements GitHubClient {
 		prs.push({ number, url, head: params.head, base: params.base, title: params.title, body: params.body, open: true });
 		this.pullRequests.set(repoKey, prs);
 		return { number, url, created: true };
+	}
+
+	async getMergeability(owner: string, repo: string, prNumber: number): Promise<MergeabilityResult> {
+		const key = `${owner}/${repo}/${prNumber}`;
+		return (
+			this.mergeabilityFixtures.get(key) ?? {
+				state: "clean",
+				isFork: false,
+				headBranch: "head",
+				headSha: "head-sha",
+				baseBranch: "base",
+				baseSha: "base-sha",
+			}
+		);
+	}
+
+	async updateBranch(owner: string, repo: string, prNumber: number): Promise<void> {
+		this.updateBranchCalls.push(`${owner}/${repo}/${prNumber}`);
+		if (this.updateBranchError !== undefined) {
+			const err = this.updateBranchError;
+			this.updateBranchError = undefined;
+			throw err;
+		}
+		// Mirrors reality: a successful branch update is exactly what makes the PR
+		// mergeable again, so the next getMergeability() call should reflect that.
+		this.markMergeableAfterSuccess(owner, repo, prNumber);
+	}
+
+	async getConflictTrees(owner: string, repo: string, prNumber: number): Promise<ConflictTrees> {
+		const key = `${owner}/${repo}/${prNumber}`;
+		const fixture = this.conflictTreesFixtures.get(key);
+		if (fixture === undefined) throw new Error(`No conflict-trees fixture for ${key}`);
+		return fixture;
+	}
+
+	async getBlobContent(_owner: string, _repo: string, sha: string): Promise<string> {
+		const fixture = this.blobFixtures.get(sha);
+		if (fixture === undefined) throw new Error(`No blob fixture for ${sha}`);
+		return fixture;
+	}
+
+	async commitResolvedFiles(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		baseTipSha: string,
+		files: ReadonlyArray<ResolvedFile>,
+	): Promise<void> {
+		this.commitResolvedFilesCalls.push({ owner, repo, prNumber, baseTipSha, files });
+		if (this.commitResolvedFilesError !== undefined) {
+			const err = this.commitResolvedFilesError;
+			this.commitResolvedFilesError = undefined;
+			throw err;
+		}
+		// Mirrors reality: a successful resolution commit is exactly what makes the PR
+		// mergeable again, so the next getMergeability() call should reflect that.
+		this.markMergeableAfterSuccess(owner, repo, prNumber);
+	}
+
+	private markMergeableAfterSuccess(owner: string, repo: string, prNumber: number): void {
+		if (!this.autoMarkMergeableAfterSuccess) return;
+		const key = `${owner}/${repo}/${prNumber}`;
+		const current = this.mergeabilityFixtures.get(key);
+		if (current !== undefined) {
+			this.mergeabilityFixtures.set(key, { ...current, state: "clean" });
+		}
 	}
 }

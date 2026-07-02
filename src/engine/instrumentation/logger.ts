@@ -1,5 +1,6 @@
 import type { ReviewCard } from "../types/core.js";
 import type {
+	ConflictResolutionLog,
 	DeferLog,
 	HumanFinding,
 	InstrumentationSink,
@@ -21,6 +22,23 @@ export async function logDefer(
 
 export async function logHumanFinding(logPath: string, finding: HumanFinding): Promise<void> {
 	await appendNdjson(logPath, finding);
+}
+
+export async function logConflictResolution(
+	logPath: string,
+	bundleId: string,
+	prId: string,
+	outcome: "resolved" | "unresolved",
+	reason?: string,
+): Promise<void> {
+	const entry: ConflictResolutionLog = {
+		bundleId,
+		prId,
+		outcome,
+		...(reason !== undefined ? { reason } : {}),
+		recordedAt: new Date().toISOString(),
+	};
+	await appendNdjson(logPath, entry);
 }
 
 export interface NdjsonInstrumentationPaths {

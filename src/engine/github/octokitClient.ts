@@ -1,7 +1,11 @@
 import type { Octokit } from "@octokit/rest";
+import { RequestError } from "@octokit/request-error";
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import { formatReviewCardComment } from "../review/comment.js";
 import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
+import { BinaryFileError } from "./client.js";
+import type { ConflictTrees, MergeabilityResult, MergeabilityState, ResolvedFile, TreeEntry } from "../types/mergeability.js";
+import { NotFastForwardError } from "../types/mergeability.js";
 
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
 // declares direction in an HTML comment so it renders invisibly in the PR body.
@@ -74,6 +78,32 @@ async function mapWithConcurrency<T, R>(
 
 function isNotFoundError(err: unknown): boolean {
 	return typeof err === "object" && err !== null && "status" in err && (err as { status: unknown }).status === 404;
+}
+
+// GitHub's `mergeable_state` is an untyped string in Octokit's own schema (it has grown
+// new values before) — map it once, here, to the closed union the rest of the codebase
+// works with. Anything not explicitly recognized falls into "unrecognized", the same
+// fail-closed bucket as "blocked": not something conflict resolution should ever attempt.
+function normalizeMergeableState(draft: boolean, mergeableState: string): MergeabilityState {
+	if (draft) return "draft";
+	switch (mergeableState) {
+		case "clean":
+			return "clean";
+		case "has_hooks":
+			return "hasHooks";
+		case "behind":
+			return "behind";
+		case "dirty":
+			return "dirty";
+		case "blocked":
+			return "blocked";
+		case "unstable":
+			return "unstable";
+		case "unknown":
+			return "unknownPending";
+		default:
+			return "unrecognized";
+	}
 }
 
 function extractDeclaredDirection(body: string | null, owner: string, repo: string, prNumber: number): string {
@@ -237,6 +267,141 @@ export class OctokitGitHubClient implements GitHubClient {
 			if (isNotFoundError(err)) return undefined;
 			throw err;
 		}
+	}
+
+	async getMergeability(owner: string, repo: string, prNumber: number): Promise<MergeabilityResult> {
+		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+		// Repos are nullable in GitHub's schema (deleted fork) — either a null head repo or
+		// one with a different id than the base means resolution can't write to it.
+		const isFork = pr.head.repo === null || pr.base.repo === null || pr.head.repo.id !== pr.base.repo.id;
+		return {
+			state: normalizeMergeableState(pr.draft === true, pr.mergeable_state ?? "unknown"),
+			isFork,
+			headBranch: pr.head.ref,
+			headSha: pr.head.sha,
+			baseBranch: pr.base.ref,
+			baseSha: pr.base.sha,
+		};
+	}
+
+	async updateBranch(owner: string, repo: string, prNumber: number): Promise<void> {
+		await this.octokit.rest.pulls.updateBranch({ owner, repo, pull_number: prNumber });
+	}
+
+	async getConflictTrees(owner: string, repo: string, prNumber: number): Promise<ConflictTrees> {
+		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+		const baseSha = pr.base.sha;
+		const headSha = pr.head.sha;
+
+		const { data: comparison } = await this.octokit.rest.repos.compareCommitsWithBasehead({
+			owner,
+			repo,
+			basehead: `${baseSha}...${headSha}`,
+		});
+		const mergeBaseSha = comparison.merge_base_commit.sha;
+
+		const [mergeBaseTree, baseTree, headTree] = await Promise.all([
+			this.getFlatTree(owner, repo, mergeBaseSha),
+			this.getFlatTree(owner, repo, baseSha),
+			this.getFlatTree(owner, repo, headSha),
+		]);
+
+		return { mergeBaseSha, baseSha, headSha, mergeBaseTree, baseTree, headTree };
+	}
+
+	async getBlobContent(owner: string, repo: string, sha: string): Promise<string> {
+		const { data } = await this.octokit.rest.git.getBlob({ owner, repo, file_sha: sha });
+		if (data.encoding !== "base64") {
+			throw new BinaryFileError(`Blob ${sha} in ${owner}/${repo} had unexpected encoding "${data.encoding}"`);
+		}
+		const buffer = Buffer.from(data.content, "base64");
+		// A null byte anywhere is the same heuristic git itself uses to flag a file binary —
+		// text files never legitimately contain one.
+		if (buffer.includes(0)) {
+			throw new BinaryFileError(`Blob ${sha} in ${owner}/${repo} is binary`);
+		}
+		return buffer.toString("utf-8");
+	}
+
+	async commitResolvedFiles(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		baseTipSha: string,
+		files: ReadonlyArray<ResolvedFile>,
+	): Promise<void> {
+		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+		const headSha = pr.head.sha;
+		const headBranch = pr.head.ref;
+
+		const { data: headCommit } = await this.octokit.rest.git.getCommit({ owner, repo, commit_sha: headSha });
+
+		const blobs = await Promise.all(
+			files.map(async (file) => {
+				const { data: blob } = await this.octokit.rest.git.createBlob({
+					owner,
+					repo,
+					content: file.content,
+					encoding: "utf-8",
+				});
+				return { path: file.path, mode: file.mode, sha: blob.sha };
+			}),
+		);
+
+		// base_tree inherits every untouched path from the head commit's tree — only the
+		// resolved files' entries are replaced, nothing else is dropped.
+		const { data: newTree } = await this.octokit.rest.git.createTree({
+			owner,
+			repo,
+			base_tree: headCommit.tree.sha,
+			tree: blobs.map((b) => ({
+				path: b.path,
+				mode: b.mode as "100644" | "100755",
+				type: "blob",
+				sha: b.sha,
+			})),
+		});
+
+		// Two parents — the PR's current head and the base branch's current tip — is exactly
+		// the commit shape a local `git merge <base> && git push` would produce.
+		const { data: newCommit } = await this.octokit.rest.git.createCommit({
+			owner,
+			repo,
+			message: "Resolve merge conflict via automated resolution",
+			tree: newTree.sha,
+			parents: [headSha, baseTipSha],
+		});
+
+		try {
+			// A merge commit built on top of the current head is a fast-forward from the
+			// branch's own perspective, so force:false should succeed unless someone pushed
+			// to the PR branch after headSha was read above.
+			await this.octokit.rest.git.updateRef({
+				owner,
+				repo,
+				ref: `heads/${headBranch}`,
+				sha: newCommit.sha,
+				force: false,
+			});
+		} catch (err) {
+			if (err instanceof RequestError && (err.status === 422 || err.status === 409)) {
+				throw new NotFastForwardError(`${owner}/${repo} branch ${headBranch} moved during conflict resolution`);
+			}
+			throw err;
+		}
+	}
+
+	private async getFlatTree(owner: string, repo: string, treeSha: string): Promise<ReadonlyMap<string, TreeEntry>> {
+		const { data } = await this.octokit.rest.git.getTree({ owner, repo, tree_sha: treeSha, recursive: "true" });
+		const map = new Map<string, TreeEntry>();
+		for (const entry of data.tree) {
+			// Subdirectory "tree" entries are skipped — recursive:true already flattens to
+			// full file paths, so only "blob" (file) and "commit" (submodule) entries matter.
+			if (entry.type !== "blob" && entry.type !== "commit") continue;
+			if (entry.path === undefined || entry.sha === undefined || entry.mode === undefined) continue;
+			map.set(entry.path, { type: entry.type, mode: entry.mode, sha: entry.sha });
+		}
+		return map;
 	}
 
 	private async toRawPRPayload(owner: string, repo: string, pr: PullRequestRef): Promise<RawPRPayload> {
