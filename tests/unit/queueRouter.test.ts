@@ -133,7 +133,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 				bundle.members[0]!.repoOwner,
 				bundle.members[0]!.repoName,
 				bundle.members[0]!.number,
-				{ state: "blocked", isFork: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
+				{ state: "blocked", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
 			);
 			const localQueue = new MergeQueue(join(dataDir, "queue2.json"), github, new StubLlmProvider(), join(dataDir, "conflict.ndjson"));
 			await localQueue.load();
@@ -174,7 +174,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 				bundle.members[0]!.repoOwner,
 				bundle.members[0]!.repoName,
 				bundle.members[0]!.number,
-				{ state: "blocked", isFork: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
+				{ state: "blocked", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
 			);
 			const localQueue = new MergeQueue(join(dataDir, "queue3.json"), github, new StubLlmProvider(), join(dataDir, "conflict.ndjson"));
 			await localQueue.load();

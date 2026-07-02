@@ -38,6 +38,7 @@ function makeMergeability(overrides: Partial<MergeabilityResult> = {}): Mergeabi
 	return {
 		state: "clean",
 		isFork: false,
+		merged: false,
 		headBranch: "feature",
 		headSha: "head-sha",
 		baseBranch: "main",
@@ -319,6 +320,23 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		expect(blocked?.status).toBe("conflict");
 		expect(blocked?.conflict?.reason).toContain("fork");
 		expect(github.updateBranchCalls).toEqual([]);
+	});
+
+	it("lands a PR GitHub already reports as merged, without calling mergePullRequest again", async () => {
+		// Simulates a prior dequeueNext() attempt that merged the PR on GitHub but crashed
+		// before persisting mergedPrIds — GitHub reports mergeable_state "unknown" forever
+		// for a merged PR, so without the `merged` short-circuit this would poll out to a
+		// timeout and get misreported as a conflict (see the next test).
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unknownPending", merged: true }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		const landed = await queue.dequeueNext();
+
+		expect(landed?.status).toBe("landed");
+		expect(landed?.mergedPrIds).toEqual([pr.id]);
+		expect(github.mergedPrs).toEqual([]);
 	});
 
 	it("bails to conflict when GitHub never finishes computing mergeability", async () => {

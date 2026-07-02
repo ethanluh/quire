@@ -13,7 +13,7 @@ const MERGEABLE_STATES: ReadonlyArray<MergeabilityState> = ["clean", "hasHooks",
 // and the re-check after updateBranch()/commitResolvedFiles() poll on this same schedule.
 const DEFAULT_MERGEABILITY_POLL_DELAYS_MS: ReadonlyArray<number> = [1000, 2000, 4000, 4000, 4000];
 
-type MergeableCheck = { ok: true } | { ok: false; reason: string };
+type MergeableCheck = { ok: true; alreadyMerged?: boolean } | { ok: false; reason: string };
 
 export class MergeQueue {
 	private state: QueueState = { entries: [] };
@@ -85,7 +85,12 @@ export class MergeQueue {
 				return blocked;
 			}
 
-			await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+			// alreadyMerged means GitHub reports this PR merged (out of band, or a prior
+			// attempt that merged it but crashed before recording mergedPrIds) — calling
+			// mergePullRequest again would just 405 against an already-closed PR.
+			if (check.alreadyMerged !== true) {
+				await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+			}
 			entry = { ...entry, mergedPrIds: [...entry.mergedPrIds, pr.id] };
 			await this.setEntry(entry.bundleId, entry);
 		}
@@ -101,6 +106,11 @@ export class MergeQueue {
 	// resolution attempt at all.
 	private async ensureMergeable(bundleId: string, pr: PullRequest): Promise<MergeableCheck> {
 		let mergeability = await this.github.getMergeability(pr.repoOwner, pr.repoName, pr.number);
+		// Checked before anything looks at `state`: GitHub never computes mergeable_state for
+		// a closed/merged PR (it reports "unknown" forever), so without this a PR that's
+		// already merged — out of band, or by a prior attempt that crashed before persisting
+		// mergedPrIds — would poll out to a timeout and get misreported as a conflict.
+		if (mergeability.merged) return { ok: true, alreadyMerged: true };
 		if (mergeability.state === "unknownPending") {
 			mergeability = await this.pollMergeability(pr);
 		}
