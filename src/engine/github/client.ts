@@ -34,6 +34,7 @@ export interface GitHubClient {
 	getPullRequest(owner: string, repo: string, prNumber: number): Promise<RawPRPayload>;
 	listOpenPullRequests(owner: string, repo: string): Promise<ListOpenPullRequestsResult>;
 	mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void>;
+	closePullRequest(owner: string, repo: string, prNumber: number): Promise<void>;
 	revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string>;
 	postReviewCardComment(
 		owner: string,

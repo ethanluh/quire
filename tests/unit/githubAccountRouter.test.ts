@@ -1207,4 +1207,87 @@ describe("githubAccountRouter", () => {
 			expect(body["needsReconnect"]).toBe(false);
 		});
 	});
+
+	describe("POST /settings", () => {
+		it("persists autoMergeOnAccept and surfaces it on status", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			const { accountPath } = setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(
+				server,
+				"POST",
+				"/account/github/settings",
+				{ autoMergeOnAccept: true },
+				ADMIN_HEADERS,
+			);
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ autoMergeOnAccept: true });
+
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
+			expect(persisted["autoMergeOnAccept"]).toBe(true);
+
+			const statusResult = await call(server, "GET", "/account/github/status");
+			expect(statusResult.body["autoMergeOnAccept"]).toBe(true);
+		});
+
+		it("defaults autoMergeOnAccept to false on status when unset", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { body } = await call(server, "GET", "/account/github/status");
+
+			expect(body["autoMergeOnAccept"]).toBe(false);
+		});
+
+		it("returns 400 when no account is connected", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(async () => ({ login: "octocat", scopes: [] }));
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(
+				server,
+				"POST",
+				"/account/github/settings",
+				{ autoMergeOnAccept: true },
+				ADMIN_HEADERS,
+			);
+
+			expect(status).toBe(400);
+			expect(body["error"]).toBe("Connect a GitHub account first");
+		});
+
+		it("rejects requests missing the admin header", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+			setup(
+				async () => ({ login: "octocat", scopes: [] }),
+				undefined,
+				undefined,
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ login: "octocat", token: "ghp_abc", scopes: [], connectedAt: "2026-06-30T00:00:00.000Z" },
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true }, {});
+
+			expect(status).toBe(403);
+		});
+	});
 });

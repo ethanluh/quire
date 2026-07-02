@@ -27,6 +27,10 @@ const SelectRepoSchema = z.object({
 	name: z.string().min(1),
 });
 
+const SettingsSchema = z.object({
+	autoMergeOnAccept: z.boolean(),
+});
+
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 export interface WebhookConfig {
@@ -106,7 +110,25 @@ export function githubAccountRouter(
 			selectedRepo: account.selectedRepo,
 			oauthAvailable: oauth !== undefined,
 			needsReconnect: account.needsReconnect ?? false,
+			autoMergeOnAccept: account.autoMergeOnAccept ?? false,
 		});
+	});
+
+	router.post("/settings", localOnly, requireAdminHeader, validateBody(SettingsSchema), async (req, res, next) => {
+		try {
+			const current = accountState.current;
+			if (current === undefined) {
+				res.status(400).json({ error: "Connect a GitHub account first" });
+				return;
+			}
+			const { autoMergeOnAccept } = req.body as z.infer<typeof SettingsSchema>;
+			const updated: ConnectedAccount = { ...current, autoMergeOnAccept };
+			accountState.current = updated;
+			await saveAccount(accountPath, updated);
+			res.json({ autoMergeOnAccept });
+		} catch (err) {
+			next(err);
+		}
 	});
 
 	router.get("/repos", localOnly, requireAdminHeader, async (_req, res, next) => {

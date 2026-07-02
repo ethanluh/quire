@@ -22,6 +22,9 @@ export interface ConnectedAccount {
 	// Set when a token refresh failed (or wasn't possible) and background ingestion has
 	// stopped until the user reconnects — surfaced on GET /status for the UI to prompt.
 	needsReconnect?: boolean;
+	// Opt-in override of INV-5: when true, accept merges immediately instead of just
+	// enqueuing — see CLAUDE.md INV-5 for the documented exception this represents.
+	autoMergeOnAccept?: boolean;
 }
 
 function isConnectedAccount(value: unknown): value is ConnectedAccount {
