@@ -9,7 +9,7 @@
 # QUIRE_ALLOWED_GITHUB_LOGINS (unset = anyone with a GitHub account can sign in). Also set
 # QUIRE_PUBLIC_URL to this app's https:// domain, or the webhook receiver never mounts and
 # Quire falls back to polling only. See .env.example for what each does.
-app = "quire-team"
+app = "quire"
 primary_region = "iad"
 
 [build]
@@ -18,7 +18,7 @@ primary_region = "iad"
   PORT = "3000"
   QUIRE_DATA_DIR = "/data"
 
-# Create once before the first deploy: `fly volumes create quire_data --size 1 -a quire-team`
+# Create once before the first deploy: `fly volumes create quire_data --size 1 -a quire`
 # Holds queue.json, installation.json, decided-prs.json, and instrumentation/*.ndjson — the
 # only persisted state, since there's no database.
 [[mounts]]
