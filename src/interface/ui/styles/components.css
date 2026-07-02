@@ -92,6 +92,15 @@ body {
 	animation: drift-reveal var(--duration-base) var(--ease-standard);
 }
 
+/* Reuses the reject color rather than inventing a new one — this is the same
+   "most severe" semantic tier as the reject gesture, for signals grounded in
+   static analysis / confirmed behavior rather than an LLM judgment call. */
+.badge-critical {
+	background: var(--color-reject-wash);
+	color: var(--color-reject);
+	animation: drift-reveal var(--duration-base) var(--ease-standard);
+}
+
 /* Residual disclosure — permanent and legible, never fine print. */
 .residual {
 	margin-top: var(--space-3);

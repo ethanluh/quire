@@ -395,11 +395,21 @@ function ciStatusBadge(status) {
   return `<span class="badge ${cls}">CI: ${escapeHtml(status)}</span>`;
 }
 
-function prDriftBadge(prId, drift) {
+function prDriftBadges(prId, drift) {
   if (!drift || drift.status !== 'flagged') return '';
-  const count = drift.signals.filter(s => s.prId === prId).length;
-  if (count === 0) return '';
-  return `<span class="badge badge-flagged">Drift: ${count}</span>`;
+  const signals = drift.signals.filter(s => s.prId === prId);
+  const footprintCount = signals.filter(s => s.kind === 'footprintAnomaly').length;
+  const behavioralCount = signals.filter(s => s.kind === 'behavioralDelta').length;
+  const effectCount = signals.filter(s => s.kind === 'effectList').length;
+  const badges = [];
+  // footprintAnomaly/behavioralDelta are grounded in static analysis or confirmed
+  // behavior, not an LLM judgment call — treated as the more severe tier (red).
+  // effectList is the matcher's best-effort read on declared vs. actual effects,
+  // more prone to false positives — the existing "flagged" tier (amber).
+  if (footprintCount > 0) badges.push(`<span class="badge badge-critical">Footprint: ${footprintCount}</span>`);
+  if (behavioralCount > 0) badges.push(`<span class="badge badge-critical">Behavioral: ${behavioralCount}</span>`);
+  if (effectCount > 0) badges.push(`<span class="badge badge-flagged">Effects: ${effectCount}</span>`);
+  return badges.join('');
 }
 
 function prMemberListHtml(members, drift) {
@@ -412,7 +422,7 @@ function prMemberListHtml(members, drift) {
         <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)}</span>
       </div>
       <div class="pr-member-tags">
-        ${prDriftBadge(pr.id, drift)}
+        ${prDriftBadges(pr.id, drift)}
         ${ciStatusBadge(pr.ciStatus)}
         <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
       </div>
