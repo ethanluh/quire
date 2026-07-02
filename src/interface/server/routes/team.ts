@@ -217,20 +217,26 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 
 	// An admin can shuffle member <-> admin freely, but only an owner may grant or revoke
 	// the owner role itself — checked here, not by requireRole alone, since it depends on
-	// the target's *current* role as well as the requested one. Combined with the
-	// last-owner guard below, a team can never end up with zero owners through this route.
+	// the target's *current* role as well as the requested one. The "does this leave the
+	// team with zero owners" invariant itself lives in TeamStore.setMemberRole (enforced
+	// atomically under its per-team lock, so two concurrent role changes can't both slip
+	// past a stale count) — this route only translates that into a 409.
 	router.post("/members/:login/role", requireRole("owner", "admin"), validateBody(ChangeRoleSchema), async (req, res, next) => {
 		try {
 			const membership = res.locals.membership;
-			if (membership === undefined) {
+			const login = res.locals.login;
+			if (membership === undefined || login === undefined) {
 				res.status(401).json({ error: "Sign in required" });
 				return;
 			}
 			const targetLogin = req.params["login"] ?? "";
+			if (targetLogin === login) {
+				res.status(400).json({ error: "You can't change your own role this way" });
+				return;
+			}
 			const { role: newRole } = req.body as z.infer<typeof ChangeRoleSchema>;
 
-			const members = await teamStore.listMembers(membership.teamId);
-			const target = members.find((m) => m.login === targetLogin);
+			const target = await teamStore.getMembership(membership.teamId, targetLogin);
 			if (target === undefined) {
 				res.status(404).json({ error: "That login is not a member of this team" });
 				return;
@@ -241,31 +247,42 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				res.status(403).json({ error: "Only an owner can grant or revoke the owner role" });
 				return;
 			}
-			if (target.role === "owner" && newRole !== "owner" && members.filter((m) => m.role === "owner").length <= 1) {
-				res.status(409).json({ error: "A team must always have at least one owner" });
-				return;
-			}
 
-			await teamStore.setMemberRole(membership.teamId, targetLogin, newRole);
+			try {
+				await teamStore.setMemberRole(membership.teamId, targetLogin, newRole);
+			} catch (err) {
+				if (err instanceof LastOwnerError) {
+					res.status(409).json({ error: "A team must always have at least one owner" });
+					return;
+				}
+				throw err;
+			}
 			res.json({ login: targetLogin, role: newRole });
 		} catch (err) {
 			next(err);
 		}
 	});
 
-	// Removing a login from the team never leaves it teamless — mirrors /leave's own
-	// "never zero teams" guarantee, just applied to someone else's membership index.
+	// Removing a login from the team never leaves it teamless — releaseLoginFromTeam is the
+	// same helper /leave uses for a login removing itself, applied here to someone else's
+	// membership index. The "does this leave the team with zero owners" invariant lives in
+	// TeamStore.removeMember (enforced atomically under its per-team lock) — this route only
+	// translates that into a 409.
 	router.post("/members/:login/remove", requireRole("owner", "admin"), async (req, res, next) => {
 		try {
 			const membership = res.locals.membership;
-			if (membership === undefined) {
+			const login = res.locals.login;
+			if (membership === undefined || login === undefined) {
 				res.status(401).json({ error: "Sign in required" });
 				return;
 			}
 			const targetLogin = req.params["login"] ?? "";
+			if (targetLogin === login) {
+				res.status(400).json({ error: "You can't remove yourself this way — use Leave team instead" });
+				return;
+			}
 
-			const members = await teamStore.listMembers(membership.teamId);
-			const target = members.find((m) => m.login === targetLogin);
+			const target = await teamStore.getMembership(membership.teamId, targetLogin);
 			if (target === undefined) {
 				res.status(404).json({ error: "That login is not a member of this team" });
 				return;
@@ -274,27 +291,18 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				res.status(403).json({ error: "Only an owner can remove another owner" });
 				return;
 			}
-			if (target.role === "owner" && members.filter((m) => m.role === "owner").length <= 1) {
-				res.status(409).json({ error: "A team must always have at least one owner" });
-				return;
-			}
 
-			await teamStore.removeMember(membership.teamId, targetLogin);
-
-			const targetIndex = await teamStore.loadMembershipIndex(targetLogin);
-			if (targetIndex !== undefined) {
-				const remainingTeamIds = targetIndex.teamIds.filter((id) => id !== membership.teamId);
-				if (remainingTeamIds.length === 0) {
-					await teamStore.createTeamForLogin(targetLogin, `${targetLogin}'s team`);
-				} else {
-					const activeTeamId =
-						targetIndex.activeTeamId === membership.teamId
-							? (remainingTeamIds[0] ?? targetIndex.activeTeamId)
-							: targetIndex.activeTeamId;
-					await teamStore.saveMembershipIndex(targetLogin, { teamIds: remainingTeamIds, activeTeamId });
+			try {
+				await teamStore.removeMember(membership.teamId, targetLogin);
+			} catch (err) {
+				if (err instanceof LastOwnerError) {
+					res.status(409).json({ error: "A team must always have at least one owner" });
+					return;
 				}
+				throw err;
 			}
 
+			await teamStore.releaseLoginFromTeam(targetLogin, membership.teamId);
 			res.json({ login: targetLogin, removed: true });
 		} catch (err) {
 			next(err);
