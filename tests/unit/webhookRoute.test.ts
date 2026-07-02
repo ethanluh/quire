@@ -49,11 +49,12 @@ function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 	};
 }
 
-function pullRequestEventPayload(owner: string, repo: string, action: string, prId = 123): unknown {
+function pullRequestEventPayload(owner: string, repo: string, action: string, prId = 123, installationId = ACCOUNT.installationId): unknown {
 	return {
 		action,
 		repository: { owner: { login: owner }, name: repo },
 		pull_request: { id: prId },
+		installation: { id: installationId },
 	};
 }
 
@@ -84,7 +85,7 @@ describe("webhookRouter", () => {
 		};
 		const app = express();
 		app.use(express.raw({ type: "application/json" }));
-		app.use(webhookRouter(refreshDeps));
+		app.use(webhookRouter((installationId) => (installationId === ACCOUNT.installationId ? refreshDeps : undefined)));
 		server = app.listen(0);
 		return refreshDeps;
 	}
