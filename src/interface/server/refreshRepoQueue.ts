@@ -7,6 +7,7 @@ import { rawPRPayloadToIncomingPR } from "../../engine/github/toIncomingPR.js";
 import { normalizePR } from "../../engine/ingest/ingest.js";
 import type { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
 import type { AccountState } from "./accountState.js";
+import { activeInstallation } from "./accountState.js";
 import { ingestIntoQueue } from "./ingestIntoQueue.js";
 import type { IngestSummary, PipelineDeps } from "./ingestIntoQueue.js";
 import type { ServerState } from "./state.js";
@@ -60,8 +61,8 @@ export async function refreshRepoQueue(
 	name: string,
 	deps: RefreshDeps,
 ): Promise<RefreshRepoQueueResult> {
-	const account = deps.accountState.current;
-	if (account === undefined) throw new Error("No connected installation");
+	const activeAtStart = activeInstallation(deps.accountState.current);
+	if (activeAtStart === undefined) throw new Error("No connected installation backs the selected repo");
 
 	let rawPRs, skipped;
 	try {
@@ -75,8 +76,16 @@ export async function refreshRepoQueue(
 		throw err;
 	}
 	// A disconnect (or rebind/reselect) racing this refresh's network round-trip would
-	// otherwise silently proceed against a now-stale binding — bail instead.
-	if (deps.accountState.current !== account) {
+	// otherwise silently proceed against a now-stale binding — bail instead. Compared by
+	// identity fields (installation + repo), not object reference: with multiple bound
+	// installations, an unrelated one being added/removed mid-flight must NOT abort this
+	// refresh, which a whole-object reference-equality check would incorrectly do.
+	const selected = deps.accountState.current.selectedRepo;
+	if (
+		activeInstallation(deps.accountState.current)?.installationId !== activeAtStart.installationId ||
+		selected?.owner !== owner ||
+		selected?.name !== name
+	) {
 		throw new AccountChangedError("Installation binding changed mid-refresh; aborting this refresh");
 	}
 

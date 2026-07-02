@@ -24,12 +24,11 @@ const PIPELINE_CONFIG: PipelineConfig = {
 	bundle: { similarityThreshold: 0.75 },
 };
 
-const ACCOUNT: InstallationBinding = {
+const BINDING: InstallationBinding = {
 	installationId: 1,
 	accountLogin: "octocat",
 	accountType: "User",
 	boundAt: "2026-06-30T00:00:00.000Z",
-	selectedRepo: { owner: "octocat", name: "hello-world" },
 };
 
 function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
@@ -68,7 +67,10 @@ describe("webhookRouter", () => {
 
 	function setup(client: StubGitHubClient = new StubGitHubClient(), provider = new StubLlmProvider()): RefreshDeps {
 		const refreshDeps: RefreshDeps = {
-			accountState: createAccountState(ACCOUNT),
+			accountState: createAccountState({
+				installations: [BINDING],
+				selectedRepo: { owner: "octocat", name: "hello-world", installationId: BINDING.installationId },
+			}),
 			accountPath: join(dir, "installation.json"),
 			clientHolder: new GitHubClientHolder(client),
 			appConfig: { appId: "1", privateKey: "unused" },

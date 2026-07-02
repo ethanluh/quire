@@ -63,7 +63,7 @@ export function gesturesRouter(
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action);
 					postCardToMembers(github, action, bundle, card);
-					if (accountState.current?.autoMergeOnAccept === true) {
+					if (accountState.current.autoMergeOnAccept === true) {
 						const landed = await queue.dequeueNext();
 						res.json({ status: landed?.status ?? "queued", bundleId: landed?.bundleId ?? bundleId });
 						return;

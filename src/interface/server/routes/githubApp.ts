@@ -1,10 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
-import type { InstallationBinding } from "../../../engine/github/installation.js";
+import type { InstallationAccountState, InstallationBinding } from "../../../engine/github/installation.js";
 import { saveInstallation, clearInstallation } from "../../../engine/github/installation.js";
-import type { GitHubAppConfig, InstallationAccount } from "../../../engine/github/installationClient.js";
-import { buildInstallationClient, isInstallationRevoked } from "../../../engine/github/installationClient.js";
+import type { InstallationAccount } from "../../../engine/github/installationClient.js";
+import { isInstallationRevoked } from "../../../engine/github/installationClient.js";
+import { StubGitHubClient } from "../../../engine/github/stubClient.js";
+import type { GitHubClient } from "../../../engine/github/client.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
+import { activeInstallation } from "../accountState.js";
 import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { validateBody } from "../middleware/validation.js";
@@ -13,6 +16,7 @@ import { mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
 const SelectRepoSchema = z.object({
 	owner: z.string().min(1),
 	name: z.string().min(1),
+	installationId: z.number().int().positive(),
 });
 
 const SettingsSchema = z.object({
@@ -23,17 +27,18 @@ const INSTALL_STATE_COOKIE_NAME = "quire_install_state";
 const INSTALL_STATE_TTL_MS = 10 * 60 * 1000;
 const REPO_LIST_CACHE_TTL_MS = 30 * 1000;
 
-// Everything installation-shaped: binding a GitHub App installation to Quire, listing the
-// repos it covers, and picking which one to actively watch. Deliberately separate from
-// account.ts (pure login/session) — the two used to be one router because a personal
-// OAuth token served as both identity and API credential; an installation is a
-// structurally different kind of grant (org/repo-level, not person-level), with its own
-// state machine and its own callback shape (a Setup URL redirect, not an OAuth callback).
+// Everything installation-shaped: binding GitHub App installations to Quire (an operator
+// may bind several — their personal account plus N orgs), listing the repos they cover,
+// and picking which one to actively watch. Deliberately separate from account.ts (pure
+// login/session) — the two used to be one router because a personal OAuth token served as
+// both identity and API credential; an installation is a structurally different kind of
+// grant (org/repo-level, not person-level), with its own state machine and its own
+// callback shape (a Setup URL redirect, not an OAuth callback).
 export function githubAppRouter(
 	refreshDeps: RefreshDeps,
 	appSlug: string,
-	appConfig: GitHubAppConfig,
-	listInstallationRepos: (installationId: number) => Promise<ReadonlyArray<RepoSummary>>,
+	buildClient: (installationId: number) => GitHubClient,
+	listInstallationRepos: (installationId: number, accountLogin: string) => Promise<ReadonlyArray<RepoSummary>>,
 	getInstallationAccount: (installationId: number) => Promise<InstallationAccount>,
 	secureCookies: boolean,
 ): Router {
@@ -41,37 +46,37 @@ export function githubAppRouter(
 	const { accountState, accountPath, clientHolder } = refreshDeps;
 
 	interface RepoListCacheEntry {
-		installationId: number;
 		expiresAt: number;
 		repos: ReadonlyArray<RepoSummary>;
 	}
-	let repoListCache: RepoListCacheEntry | undefined;
+	// Keyed per-installation so binding/disconnecting one installation doesn't invalidate
+	// the others' still-fresh cached lists.
+	const repoListCache = new Map<number, RepoListCacheEntry>();
 
 	router.get("/status", (_req, res) => {
-		const binding = accountState.current;
-		if (binding === undefined) {
-			res.json({ connected: false });
-			return;
-		}
+		const { installations, selectedRepo, autoMergeOnAccept } = accountState.current;
 		res.json({
-			connected: true,
-			accountLogin: binding.accountLogin,
-			accountType: binding.accountType,
-			boundAt: binding.boundAt,
-			selectedRepo: binding.selectedRepo,
-			autoMergeOnAccept: binding.autoMergeOnAccept ?? false,
+			connected: installations.length > 0,
+			installations: installations.map((i) => ({
+				installationId: i.installationId,
+				accountLogin: i.accountLogin,
+				accountType: i.accountType,
+				boundAt: i.boundAt,
+			})),
+			selectedRepo,
+			autoMergeOnAccept: autoMergeOnAccept ?? false,
 		});
 	});
 
 	router.post("/settings", validateBody(SettingsSchema), async (req, res, next) => {
 		try {
 			const current = accountState.current;
-			if (current === undefined) {
+			if (current.installations.length === 0) {
 				res.status(400).json({ error: "Install the GitHub App first" });
 				return;
 			}
 			const { autoMergeOnAccept } = req.body as z.infer<typeof SettingsSchema>;
-			const updated: InstallationBinding = { ...current, autoMergeOnAccept };
+			const updated: InstallationAccountState = { ...current, autoMergeOnAccept };
 			accountState.current = updated;
 			await saveInstallation(accountPath, updated);
 			res.json({ autoMergeOnAccept });
@@ -133,9 +138,21 @@ export function githubAppRouter(
 				accountType: account.accountType,
 				boundAt: new Date().toISOString(),
 			};
-			accountState.current = binding;
-			clientHolder.setClient(buildInstallationClient(appConfig, installationId));
-			await saveInstallation(accountPath, binding);
+			// Upsert by installationId: re-installing (GitHub can redirect back through this
+			// same callback for an "update" action) replaces that one binding's metadata
+			// without touching any other bound installation or the current selection.
+			const current = accountState.current;
+			const withoutExisting = current.installations.filter((i) => i.installationId !== installationId);
+			const updated: InstallationAccountState = { ...current, installations: [...withoutExisting, binding] };
+			accountState.current = updated;
+
+			// Only repoint the shared client if this (re)install happens to be the one
+			// currently backing the active selection — a fresh, unrelated installation
+			// shouldn't disturb whatever's already being watched.
+			if (activeInstallation(updated)?.installationId === installationId) {
+				clientHolder.setClient(buildClient(installationId));
+			}
+			await saveInstallation(accountPath, updated);
 
 			res.redirect("/?account=connected");
 		} catch (err) {
@@ -145,20 +162,32 @@ export function githubAppRouter(
 
 	router.get("/repos", async (_req, res, next) => {
 		try {
-			const binding = accountState.current;
-			if (binding === undefined) {
+			const { installations, selectedRepo } = accountState.current;
+			if (installations.length === 0) {
 				res.status(400).json({ error: "Install the GitHub App first" });
 				return;
 			}
-			const cached = repoListCache;
-			const repos =
-				cached !== undefined && cached.installationId === binding.installationId && Date.now() < cached.expiresAt
-					? cached.repos
-					: await listInstallationRepos(binding.installationId);
-			if (cached === undefined || repos !== cached.repos) {
-				repoListCache = { installationId: binding.installationId, expiresAt: Date.now() + REPO_LIST_CACHE_TTL_MS, repos };
-			}
-			res.json({ repos, selected: binding.selectedRepo });
+
+			const results = await Promise.allSettled(
+				installations.map((installation) => {
+					const cached = repoListCache.get(installation.installationId);
+					if (cached !== undefined && Date.now() < cached.expiresAt) return Promise.resolve(cached.repos);
+					return listInstallationRepos(installation.installationId, installation.accountLogin).then((repos) => {
+						repoListCache.set(installation.installationId, { expiresAt: Date.now() + REPO_LIST_CACHE_TTL_MS, repos });
+						return repos;
+					});
+				}),
+			);
+
+			const repos: RepoSummary[] = [];
+			const failedAccounts: string[] = [];
+			installations.forEach((installation, i) => {
+				const result = results[i];
+				if (result?.status === "fulfilled") repos.push(...result.value);
+				else failedAccounts.push(installation.accountLogin);
+			});
+
+			res.json({ repos, selected: selectedRepo, failedAccounts });
 		} catch (err) {
 			next(err);
 		}
@@ -166,23 +195,37 @@ export function githubAppRouter(
 
 	router.post("/repos/select", validateBody(SelectRepoSchema), async (req, res, next) => {
 		try {
-			const binding = accountState.current;
-			if (binding === undefined) {
-				res.status(400).json({ error: "Install the GitHub App first" });
+			const { owner, name, installationId } = req.body as z.infer<typeof SelectRepoSchema>;
+			const previousState = accountState.current;
+			const targetInstallation = previousState.installations.find((i) => i.installationId === installationId);
+			if (targetInstallation === undefined) {
+				res.status(400).json({ error: "Unknown installation" });
 				return;
 			}
-			const { owner, name } = req.body as z.infer<typeof SelectRepoSchema>;
-			const previousRepo = binding.selectedRepo;
+			const previousRepo = previousState.selectedRepo;
 
+			// Repoint the shared client BEFORE enqueueing the refresh, since enqueueRefresh
+			// reads through it — this is the one steady-state place "which installation is
+			// active" changes.
+			clientHolder.setClient(buildClient(installationId));
 			clearRepoFromQueue(refreshDeps.state, previousRepo);
-			const summary = await enqueueRefresh(owner, name, refreshDeps);
 
-			const current = accountState.current;
-			if (current === undefined) {
-				throw new Error("Installation was disconnected mid-request");
-			}
-			const updated: InstallationBinding = { ...current, selectedRepo: { owner, name } };
+			// Set the new selection BEFORE calling enqueueRefresh (rather than after, like the
+			// old single-installation flow could get away with): refreshRepoQueue now resolves
+			// "is there an active installation for this call" via activeInstallation(), which
+			// reads selectedRepo — with nothing selected yet, that resolution would fail on the
+			// very first selection. Rolled back below (only if nothing else changed it meanwhile)
+			// if the initial fetch fails, so a failed selection never sticks.
+			const updated: InstallationAccountState = { ...previousState, selectedRepo: { owner, name, installationId } };
 			accountState.current = updated;
+			let summary;
+			try {
+				summary = await enqueueRefresh(owner, name, refreshDeps);
+			} catch (err) {
+				if (accountState.current === updated) accountState.current = previousState;
+				throw err;
+			}
+
 			await saveInstallation(accountPath, updated);
 
 			res.json({ selected: updated.selectedRepo, ...summary });
@@ -195,9 +238,8 @@ export function githubAppRouter(
 	// frontend on every page load/reload.
 	router.post("/repos/refresh", async (_req, res, next) => {
 		try {
-			const binding = accountState.current;
-			const repo = binding?.selectedRepo;
-			if (binding === undefined || repo === undefined) {
+			const repo = accountState.current.selectedRepo;
+			if (repo === undefined) {
 				res.json({ refreshed: false });
 				return;
 			}
@@ -212,12 +254,45 @@ export function githubAppRouter(
 		}
 	});
 
-	// "Disconnect" here means unbinding — there is no token to revoke; the underlying
-	// installation on GitHub's side is untouched (an org admin manages that from GitHub's
-	// own App-installation settings, not from here).
-	router.post("/disconnect", async (_req, res, next) => {
+	// Unbinds exactly one installation — the underlying installation on GitHub's side is
+	// untouched (an org admin manages that from GitHub's own App-installation settings, not
+	// from here). If it was backing the active selection, the selection is cleared too,
+	// since no bound installation can serve that repo anymore.
+	router.post("/disconnect/:installationId", async (req, res, next) => {
 		try {
-			accountState.current = undefined;
+			const installationId = Number(req.params["installationId"]);
+			const current = accountState.current;
+			const remaining = current.installations.filter((i) => i.installationId !== installationId);
+			const wasActive = current.selectedRepo?.installationId === installationId;
+			const nextSelectedRepo = wasActive ? undefined : current.selectedRepo;
+
+			const updated: InstallationAccountState = {
+				installations: remaining,
+				...(nextSelectedRepo !== undefined ? { selectedRepo: nextSelectedRepo } : {}),
+				...(current.autoMergeOnAccept !== undefined ? { autoMergeOnAccept: current.autoMergeOnAccept } : {}),
+			};
+			accountState.current = updated;
+			repoListCache.delete(installationId);
+			if (wasActive) {
+				clearRepoFromQueue(refreshDeps.state, current.selectedRepo);
+				clientHolder.setClient(new StubGitHubClient());
+			}
+			await saveInstallation(accountPath, updated);
+			res.json({ disconnected: installationId, remaining: remaining.length });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// The "start over" nuke — wipes every bound installation and the persisted file itself,
+	// distinct from unbinding one at a time via /disconnect/:installationId above.
+	router.post("/disconnect-all", async (_req, res, next) => {
+		try {
+			const previousRepo = accountState.current.selectedRepo;
+			accountState.current = { installations: [] };
+			repoListCache.clear();
+			clearRepoFromQueue(refreshDeps.state, previousRepo);
+			clientHolder.setClient(new StubGitHubClient());
 			await clearInstallation(accountPath);
 			res.json({ connected: false });
 		} catch (err) {

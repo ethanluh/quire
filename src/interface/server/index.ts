@@ -24,7 +24,7 @@ import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken } from "../
 import type { OAuthDeps } from "../../engine/github/oauth.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
-import { createAccountState } from "./accountState.js";
+import { createAccountState, activeInstallation } from "./accountState.js";
 import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
 import type { RefreshDeps } from "./refreshRepoQueue.js";
 import { createAllowlist } from "./allowlist.js";
@@ -133,8 +133,8 @@ async function main(): Promise<void> {
 			: undefined;
 
 	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
-	const installationBinding = await loadInstallation(INSTALLATION_PATH);
-	const accountState = createAccountState(installationBinding);
+	const installationAccountState = await loadInstallation(INSTALLATION_PATH);
+	const accountState = createAccountState(installationAccountState);
 
 	const decidedStore = new DecidedPrStore(DECIDED_PRS_PATH);
 	await decidedStore.load();
@@ -143,12 +143,13 @@ async function main(): Promise<void> {
 	await prCache.load();
 
 	let initialClient: GitHubClient;
-	if (installationBinding !== undefined) {
-		initialClient = buildInstallationClient(appConfig, installationBinding.installationId);
-		console.log(`GitHub client: installation (bound to ${installationBinding.accountLogin})`);
+	const active = activeInstallation(accountState.current);
+	if (active !== undefined) {
+		initialClient = buildInstallationClient(appConfig, active.installationId);
+		console.log(`GitHub client: installation (bound to ${active.accountLogin}, ${accountState.current.installations.length} installation(s) total)`);
 	} else {
 		initialClient = new StubGitHubClient();
-		console.log("GitHub client: stub (no GitHub App installation bound yet)");
+		console.log(`GitHub client: stub (${accountState.current.installations.length} installation(s) bound, none backing a selected repo)`);
 	}
 	const github = new GitHubClientHolder(initialClient);
 	const queue = new MergeQueue(QUEUE_PATH, github);
@@ -221,8 +222,9 @@ async function main(): Promise<void> {
 		githubAppRouter(
 			refreshDeps,
 			appSlug,
-			appConfig,
-			(installationId) => listInstallationRepositories(buildInstallationOctokit(appConfig, installationId)),
+			(installationId) => buildInstallationClient(appConfig, installationId),
+			(installationId, accountLogin) =>
+				listInstallationRepositories(buildInstallationOctokit(appConfig, installationId), installationId, accountLogin),
 			(installationId) => getInstallationAccount(appConfig, installationId),
 			isProduction,
 		),
@@ -254,7 +256,7 @@ async function main(): Promise<void> {
 	// mechanism if webhooks aren't configured. Shares enqueueRefresh's per-repo coalescing
 	// lock with the webhook route, so the two never race on the same repo's queue.
 	const reconcileTimer = setInterval(() => {
-		const repo = accountState.current?.selectedRepo;
+		const repo = accountState.current.selectedRepo;
 		if (repo === undefined) return;
 		enqueueRefresh(repo.owner, repo.name, refreshDeps).catch((err: unknown) => {
 			if (err instanceof InstallationRevokedError) {

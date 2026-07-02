@@ -65,7 +65,7 @@ export function webhookRouter(refreshDeps: RefreshDeps): Router {
 		}
 
 		const parsed = parsePullRequestEvent(payload);
-		const selected = refreshDeps.accountState.current?.selectedRepo;
+		const selected = refreshDeps.accountState.current.selectedRepo;
 		if (
 			parsed === undefined ||
 			selected === undefined ||

@@ -30,18 +30,18 @@ describe("listInstallationRepositories", () => {
 			},
 		]);
 
-		const repos = await listInstallationRepositories(octokit);
+		const repos = await listInstallationRepositories(octokit, 555, "acme-corp");
 
 		expect(repos).toEqual([
-			{ owner: "octocat", name: "hello-world", fullName: "octocat/hello-world", private: false, defaultBranch: "main" },
-			{ owner: "octocat", name: "secret-project", fullName: "octocat/secret-project", private: true, defaultBranch: "trunk" },
+			{ owner: "octocat", name: "hello-world", fullName: "octocat/hello-world", private: false, defaultBranch: "main", installationId: 555, accountLogin: "acme-corp" },
+			{ owner: "octocat", name: "secret-project", fullName: "octocat/secret-project", private: true, defaultBranch: "trunk", installationId: 555, accountLogin: "acme-corp" },
 		]);
 	});
 
 	it("returns an empty list when the installation has no accessible repos", async () => {
 		const octokit = makeFakeOctokit([]);
 
-		const repos = await listInstallationRepositories(octokit);
+		const repos = await listInstallationRepositories(octokit, 555, "acme-corp");
 
 		expect(repos).toEqual([]);
 	});

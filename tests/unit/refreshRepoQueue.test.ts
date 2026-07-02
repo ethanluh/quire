@@ -84,8 +84,12 @@ describe("refreshRepoQueue", () => {
 		provider?: StubLlmProvider;
 	} = {}): RefreshDeps {
 		const client = overrides.client ?? new StubGitHubClient();
+		const binding = overrides.binding ?? BASE_BINDING;
 		return {
-			accountState: createAccountState(overrides.binding ?? BASE_BINDING),
+			accountState: createAccountState({
+				installations: [binding],
+				selectedRepo: { owner: "octocat", name: "hello-world", installationId: binding.installationId },
+			}),
 			accountPath: join(dir, "installation.json"),
 			clientHolder: new GitHubClientHolder(client),
 			appConfig: { appId: "1", privateKey: "unused" },
@@ -154,11 +158,42 @@ describe("refreshRepoQueue", () => {
 
 		const refreshPromise = refreshRepoQueue("octocat", "hello-world", deps);
 		await new Promise((resolve) => setImmediate(resolve));
-		deps.accountState.current = undefined; // simulates a concurrent /disconnect
+		deps.accountState.current = { installations: [] }; // simulates a concurrent /disconnect-all
 
 		releaseFetch();
 		await expect(refreshPromise).rejects.toBeInstanceOf(AccountChangedError);
-		expect(deps.accountState.current).toBeUndefined();
+		expect(deps.accountState.current).toEqual({ installations: [] });
+	});
+
+	it("does not abort when an unrelated installation is bound mid-flight, only when the active one/repo changes", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
+		let releaseFetch: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			releaseFetch = resolve;
+		});
+		class GatedClient extends StubGitHubClient {
+			override async listOpenPullRequests(owner: string, repo: string) {
+				await gate;
+				return super.listOpenPullRequests(owner, repo);
+			}
+		}
+		const deps = makeDeps({ client: new GatedClient() });
+
+		const refreshPromise = refreshRepoQueue("octocat", "hello-world", deps);
+		await new Promise((resolve) => setImmediate(resolve));
+		// An unrelated second installation gets bound while this refresh is in flight — the
+		// active installation and selected repo are untouched, so this must NOT be treated
+		// as a stale binding.
+		const unrelatedBinding: InstallationBinding = {
+			installationId: 99,
+			accountLogin: "acme-corp",
+			accountType: "Organization",
+			boundAt: "2026-06-30T00:00:00.000Z",
+		};
+		deps.accountState.current = { ...deps.accountState.current, installations: [...deps.accountState.current.installations, unrelatedBinding] };
+
+		releaseFetch();
+		await expect(refreshPromise).resolves.toBeDefined();
 	});
 
 	it("re-clusters the full undecided set on every call, not just newly-arrived PRs", async () => {
@@ -192,7 +227,10 @@ describe("enqueueRefresh", () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
 		const client = new BlockingGitHubClient();
 		const deps: RefreshDeps = {
-			accountState: createAccountState(BASE_BINDING),
+			accountState: createAccountState({
+				installations: [BASE_BINDING],
+				selectedRepo: { owner: "octocat", name: "hello-world", installationId: BASE_BINDING.installationId },
+			}),
 			accountPath: join(dir, "installation.json"),
 			clientHolder: new GitHubClientHolder(client),
 			appConfig: { appId: "1", privateKey: "unused" },

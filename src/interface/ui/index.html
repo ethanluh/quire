@@ -253,13 +253,13 @@
 <div id="pane-account" class="pane">
   <div class="account-panel">
     <div class="account-status" id="account-status">Checking connection&hellip;</div>
+    <div id="installations-list"></div>
     <div id="account-connect-form">
-      <p>Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
+      <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
       <div class="account-connect-actions">
         <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
       </div>
     </div>
-    <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
     <div id="account-result" class="result-msg" style="display:none"></div>
 
     <div class="repo-panel" id="repo-panel" style="display:none">
@@ -270,6 +270,7 @@
         Automatically merge accepted bundles (skips the manual "Process next" step)
       </label>
       <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
+      <div id="repo-list-warning" class="result-msg error" style="display:none"></div>
       <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
     </div>
   </div>
@@ -650,9 +651,23 @@ async function checkSignedIn() {
 }
 
 const accountConnectForm = document.getElementById('account-connect-form');
-const accountDisconnectBtn = document.getElementById('btn-account-disconnect');
 const repoPanel = document.getElementById('repo-panel');
 const installBtn = document.getElementById('btn-account-install');
+let loadedInstallations = [];
+
+function installationHtml(installation) {
+  return `<div class="repo-entry">
+    <span class="badge badge-neutral">${escapeHtml(installation.accountType)}</span>
+    <span class="repo-name">${escapeHtml(installation.accountLogin)}</span>
+    <button class="btn btn-reject" onclick="disconnectInstallation(${installation.installationId})">Disconnect</button>
+  </div>`;
+}
+
+async function disconnectInstallation(installationId) {
+  if (!confirm('Disconnect this GitHub App installation?')) return;
+  await api('POST', `/account/github/disconnect/${installationId}`, undefined);
+  loadAccount();
+}
 
 function renderAutomationStatus(selectedRepo) {
   const el = document.getElementById('automation-status');
@@ -667,21 +682,24 @@ function renderAutomationStatus(selectedRepo) {
 async function loadAccount() {
   const statusEl = document.getElementById('account-status');
   const resultEl = document.getElementById('account-result');
+  const listEl = document.getElementById('installations-list');
+  const copyEl = document.getElementById('account-connect-copy');
   resultEl.style.display = 'none';
   const status = await api('GET', '/account/github/status');
+  loadedInstallations = status.installations || [];
+  installBtn.disabled = false;
   if (status.connected) {
-    statusEl.innerHTML = `Connected to <span class="login">${escapeHtml(status.accountLogin)}</span>`;
-    accountConnectForm.style.display = 'none';
-    accountDisconnectBtn.style.display = 'inline-block';
+    statusEl.textContent = `Connected to ${loadedInstallations.length} installation${loadedInstallations.length === 1 ? '' : 's'}:`;
+    listEl.innerHTML = loadedInstallations.map(installationHtml).join('');
+    copyEl.textContent = 'Install on another organization or account.';
     repoPanel.style.display = 'block';
     renderAutomationStatus(status.selectedRepo);
     document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
     loadRepos(status.selectedRepo);
   } else {
     statusEl.textContent = 'Not connected.';
-    accountConnectForm.style.display = 'block';
-    installBtn.disabled = false;
-    accountDisconnectBtn.style.display = 'none';
+    listEl.innerHTML = '';
+    copyEl.textContent = 'Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.';
     repoPanel.style.display = 'none';
   }
 }
@@ -727,12 +745,6 @@ installBtn.addEventListener('click', async () => {
     showAccountResult('GitHub connection failed: ' + (params.get('reason') || 'unknown error'), true);
   }
 })();
-
-accountDisconnectBtn.addEventListener('click', async () => {
-  if (!confirm('Disconnect the installed GitHub App?')) return;
-  await api('POST', '/account/github/disconnect', undefined);
-  loadAccount();
-});
 
 const llmConnectBtn = document.getElementById('btn-llm-connect');
 const llmDisconnectBtn = document.getElementById('btn-llm-disconnect');
@@ -800,19 +812,23 @@ llmDisconnectBtn.addEventListener('click', async () => {
 });
 
 function repoHtml(repo, selectedRepo) {
-  const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
+  const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name && selectedRepo.installationId === repo.installationId;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
+  // Only shown once >1 installation is connected — with a single installation, every repo
+  // shares the same source, so the badge would just be clutter.
+  const sourceBadge = loadedInstallations.length > 1 ? `<span class="badge badge-neutral">via ${escapeHtml(repo.accountLogin)}</span>` : '';
   const starredBadge = repo.starred ? '<span class="badge badge-clean badge-priority">★ Favorite</span>' : '';
   const pinnedBadge = repo.pinned ? '<span class="badge badge-neutral badge-priority">📌 Pinned</span>' : '';
-  const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name;
+  const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name && repoSelectionTarget.installationId === repo.installationId;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
+    ${sourceBadge}
     ${starredBadge}
     ${pinnedBadge}
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isSelected
       ? '<span class="badge badge-clean">Selected</span>'
-      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">${isTarget ? 'Selecting…' : 'Select'}</button>`}
+      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}',${repo.installationId})">${isTarget ? 'Selecting…' : 'Select'}</button>`}
   </div>`;
 }
 
@@ -838,25 +854,34 @@ function renderRepoList() {
 
 async function loadRepos(selectedRepo) {
   const listEl = document.getElementById('repo-list');
+  const warningEl = document.getElementById('repo-list-warning');
   const result = await api('GET', '/account/github/repos', undefined);
   if (result.error) {
     listEl.innerHTML = `<div class="empty">${escapeHtml(result.error)}</div>`;
+    warningEl.style.display = 'none';
     return;
   }
   loadedRepos = result.repos || [];
   loadedSelectedRepo = result.selected || selectedRepo;
   renderRepoList();
+  const failedAccounts = result.failedAccounts || [];
+  if (failedAccounts.length) {
+    warningEl.textContent = `Couldn't load repos for: ${failedAccounts.join(', ')} — the installation may have been removed.`;
+    warningEl.style.display = 'block';
+  } else {
+    warningEl.style.display = 'none';
+  }
 }
 
 document.getElementById('repo-search').addEventListener('input', renderRepoList);
 
-async function selectRepo(owner, name) {
+async function selectRepo(owner, name, installationId) {
   repoSelectionInProgress = true;
-  repoSelectionTarget = { owner, name };
+  repoSelectionTarget = { owner, name, installationId };
   renderRepoList();
   showAccountResult(`Selecting ${owner}/${name} — fetching and ingesting pull requests…`, false);
   try {
-    const result = await api('POST', '/account/github/repos/select', { owner, name });
+    const result = await api('POST', '/account/github/repos/select', { owner, name, installationId });
     if (result.error) {
       showAccountResult('Error: ' + result.error, true);
       return;

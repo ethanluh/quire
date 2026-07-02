@@ -12,7 +12,7 @@ import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 import { createAccountState } from "../../src/interface/server/accountState.js";
 import type { AccountState } from "../../src/interface/server/accountState.js";
-import type { InstallationBinding } from "../../src/engine/github/installation.js";
+import type { InstallationAccountState } from "../../src/engine/github/installation.js";
 import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import type { Bundle, GestureAction, ReviewCard } from "../../src/engine/types/core.js";
 
@@ -57,12 +57,9 @@ function makeBundle(id: string): Bundle {
 	};
 }
 
-function makeAccount(overrides: { autoMergeOnAccept?: boolean } = {}): InstallationBinding {
+function makeAccount(overrides: { autoMergeOnAccept?: boolean } = {}): InstallationAccountState {
 	return {
-		installationId: 1,
-		accountLogin: "test-user",
-		accountType: "User",
-		boundAt: new Date(0).toISOString(),
+		installations: [{ installationId: 1, accountLogin: "test-user", accountType: "User", boundAt: new Date(0).toISOString() }],
 		...overrides,
 	};
 }
