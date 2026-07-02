@@ -46,6 +46,7 @@
 					"useESM": true
 				}
 			]
-		}
+		},
+		"testPathIgnorePatterns": ["/node_modules/", "/dist/"]
 	}
 }
