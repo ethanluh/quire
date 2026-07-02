@@ -1,5 +1,5 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
-import type { GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
+import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
 
 // MergeQueue is constructed once at startup holding a reference to a GitHubClient.
 // Connecting/disconnecting an account needs to change which client that reference
@@ -45,5 +45,32 @@ export class GitHubClientHolder implements GitHubClient {
 		card: ReviewCard,
 	): Promise<void> {
 		return this.current.postReviewCardComment(owner, repo, prNumber, action, card);
+	}
+
+	getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined> {
+		return this.current.getFileContent(owner, repo, path);
+	}
+
+	getDefaultBranch(owner: string, repo: string): Promise<string> {
+		return this.current.getDefaultBranch(owner, repo);
+	}
+
+	commitFileToBranch(
+		owner: string,
+		repo: string,
+		branch: string,
+		path: string,
+		content: string,
+		message: string,
+	): Promise<void> {
+		return this.current.commitFileToBranch(owner, repo, branch, path, content, message);
+	}
+
+	findOrCreatePullRequest(
+		owner: string,
+		repo: string,
+		params: { head: string; base: string; title: string; body: string },
+	): Promise<FoundOrCreatedPullRequest> {
+		return this.current.findOrCreatePullRequest(owner, repo, params);
 	}
 }
