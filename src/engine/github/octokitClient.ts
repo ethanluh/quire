@@ -80,6 +80,30 @@ function isNotFoundError(err: unknown): boolean {
 	return typeof err === "object" && err !== null && "status" in err && (err as { status: unknown }).status === 404;
 }
 
+// Thrown when the GitHub App's installation has read-only access but the call needs
+// write (merge/close/revert/comment) — surfaces as a raw, unhelpful 403 from GitHub
+// otherwise ("Resource not accessible by integration"). See README's "GitHub App setup".
+export class InsufficientGitHubPermissionError extends Error {}
+
+function isInsufficientPermission(err: unknown): boolean {
+	return err instanceof RequestError
+		&& err.status === 403
+		&& /Resource not accessible by integration/i.test(err.message);
+}
+
+async function withPermissionHint<T>(action: string, fn: () => Promise<T>): Promise<T> {
+	try {
+		return await fn();
+	} catch (err) {
+		if (isInsufficientPermission(err)) {
+			throw new InsufficientGitHubPermissionError(
+				`GitHub App is missing the permission needed to ${action}. See README.md's "GitHub App setup" section for the required permissions, then re-approve the installation.`,
+			);
+		}
+		throw err;
+	}
+}
+
 // GitHub's `mergeable_state` is an untyped string in Octokit's own schema (it has grown
 // new values before) — map it once, here, to the closed union the rest of the codebase
 // works with. Anything not explicitly recognized falls into "unrecognized", the same
@@ -151,23 +175,29 @@ export class OctokitGitHubClient implements GitHubClient {
 	}
 
 	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
-		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-		if (pr.draft === true) {
-			await this.octokit.graphql(MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION, { pullRequestId: pr.node_id });
-		}
-		await this.octokit.rest.pulls.merge({ owner, repo, pull_number: prNumber });
+		await withPermissionHint("merge a pull request", async () => {
+			const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+			if (pr.draft === true) {
+				await this.octokit.graphql(MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION, { pullRequestId: pr.node_id });
+			}
+			await this.octokit.rest.pulls.merge({ owner, repo, pull_number: prNumber });
+		});
 	}
 
 	async closePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
-		await this.octokit.rest.pulls.update({ owner, repo, pull_number: prNumber, state: "closed" });
+		await withPermissionHint("close a pull request", () =>
+			this.octokit.rest.pulls.update({ owner, repo, pull_number: prNumber, state: "closed" }),
+		);
 	}
 
 	async revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string> {
-		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-		const result = await this.octokit.graphql<RevertPullRequestResponse>(REVERT_PULL_REQUEST_MUTATION, {
-			pullRequestId: pr.node_id,
+		return withPermissionHint("revert a pull request", async () => {
+			const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+			const result = await this.octokit.graphql<RevertPullRequestResponse>(REVERT_PULL_REQUEST_MUTATION, {
+				pullRequestId: pr.node_id,
+			});
+			return result.revertPullRequest.pullRequest.url;
 		});
-		return result.revertPullRequest.pullRequest.url;
 	}
 
 	async postReviewCardComment(
@@ -177,12 +207,14 @@ export class OctokitGitHubClient implements GitHubClient {
 		action: GestureAction,
 		card: ReviewCard,
 	): Promise<void> {
-		await this.octokit.rest.issues.createComment({
-			owner,
-			repo,
-			issue_number: prNumber,
-			body: formatReviewCardComment(action, card),
-		});
+		await withPermissionHint("post a review card comment", () =>
+			this.octokit.rest.issues.createComment({
+				owner,
+				repo,
+				issue_number: prNumber,
+				body: formatReviewCardComment(action, card),
+			}),
+		);
 	}
 
 	async getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined> {
