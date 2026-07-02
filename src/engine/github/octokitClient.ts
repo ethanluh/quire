@@ -1,7 +1,7 @@
 import type { Octokit } from "@octokit/rest";
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import { formatReviewCardComment } from "../review/comment.js";
-import type { GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
+import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
 
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
 // declares direction in an HTML comment so it renders invisibly in the PR body.
@@ -70,6 +70,10 @@ async function mapWithConcurrency<T, R>(
 
 	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 	return results;
+}
+
+function isNotFoundError(err: unknown): boolean {
+	return typeof err === "object" && err !== null && "status" in err && (err as { status: unknown }).status === 404;
 }
 
 function extractDeclaredDirection(body: string | null, owner: string, repo: string, prNumber: number): string {
@@ -149,6 +153,90 @@ export class OctokitGitHubClient implements GitHubClient {
 			issue_number: prNumber,
 			body: formatReviewCardComment(action, card),
 		});
+	}
+
+	async getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined> {
+		return this.getFileContentAtRef(owner, repo, path, undefined);
+	}
+
+	async getDefaultBranch(owner: string, repo: string): Promise<string> {
+		const { data } = await this.octokit.rest.repos.get({ owner, repo });
+		return data.default_branch;
+	}
+
+	async commitFileToBranch(
+		owner: string,
+		repo: string,
+		branch: string,
+		path: string,
+		content: string,
+		message: string,
+	): Promise<void> {
+		const branchRef = `heads/${branch}`;
+		try {
+			await this.octokit.rest.git.getRef({ owner, repo, ref: branchRef });
+		} catch (err) {
+			if (!isNotFoundError(err)) throw err;
+			const defaultBranch = await this.getDefaultBranch(owner, repo);
+			const { data: defaultRef } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
+			await this.octokit.rest.git.createRef({ owner, repo, ref: `refs/${branchRef}`, sha: defaultRef.object.sha });
+		}
+
+		const existing = await this.getFileContentAtRef(owner, repo, path, branch);
+		await this.octokit.rest.repos.createOrUpdateFileContents({
+			owner,
+			repo,
+			path,
+			message,
+			content: Buffer.from(content, "utf8").toString("base64"),
+			branch,
+			...(existing !== undefined ? { sha: existing.sha } : {}),
+		});
+	}
+
+	async findOrCreatePullRequest(
+		owner: string,
+		repo: string,
+		params: { head: string; base: string; title: string; body: string },
+	): Promise<FoundOrCreatedPullRequest> {
+		const { data: openPrs } = await this.octokit.rest.pulls.list({
+			owner,
+			repo,
+			state: "open",
+			head: `${owner}:${params.head}`,
+		});
+		const found = openPrs[0];
+		if (found !== undefined) {
+			return { number: found.number, url: found.html_url, created: false };
+		}
+
+		const { data: created } = await this.octokit.rest.pulls.create({
+			owner,
+			repo,
+			head: params.head,
+			base: params.base,
+			title: params.title,
+			body: params.body,
+		});
+		return { number: created.number, url: created.html_url, created: true };
+	}
+
+	private async getFileContentAtRef(
+		owner: string,
+		repo: string,
+		path: string,
+		ref: string | undefined,
+	): Promise<RepoFile | undefined> {
+		try {
+			const { data } = await this.octokit.rest.repos.getContent({ owner, repo, path, ...(ref !== undefined ? { ref } : {}) });
+			if (Array.isArray(data) || data.type !== "file") {
+				throw new Error(`${owner}/${repo}: ${path} is not a file`);
+			}
+			return { content: Buffer.from(data.content, "base64").toString("utf8"), sha: data.sha };
+		} catch (err) {
+			if (isNotFoundError(err)) return undefined;
+			throw err;
+		}
 	}
 
 	private async toRawPRPayload(owner: string, repo: string, pr: PullRequestRef): Promise<RawPRPayload> {

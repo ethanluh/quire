@@ -5,6 +5,7 @@ import { saveInstallation, clearInstallation } from "../../../engine/github/inst
 import type { GitHubAppConfig, InstallationAccount } from "../../../engine/github/installationClient.js";
 import { buildInstallationClient, isInstallationRevoked } from "../../../engine/github/installationClient.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
+import { setUpDeclaredDirectionConvention } from "../../../engine/github/repoSetup.js";
 import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { validateBody } from "../middleware/validation.js";
@@ -186,6 +187,21 @@ export function githubAppRouter(
 			await saveInstallation(accountPath, updated);
 
 			res.json({ selected: updated.selectedRepo, ...summary });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	router.post("/repos/setup", validateBody(SelectRepoSchema), async (req, res, next) => {
+		try {
+			const binding = accountState.current;
+			if (binding === undefined) {
+				res.status(400).json({ error: "Install the GitHub App first" });
+				return;
+			}
+			const { owner, name } = req.body as z.infer<typeof SelectRepoSchema>;
+			const result = await setUpDeclaredDirectionConvention(clientHolder, owner, name);
+			res.json(result);
 		} catch (err) {
 			next(err);
 		}
