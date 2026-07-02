@@ -100,6 +100,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<T
 	const deferLogPath = join(dir, "instrumentation/defers.ndjson");
 	const gateLogPath = join(dir, "instrumentation/gate-decisions.ndjson");
 	const driftScreenLogPath = join(dir, "instrumentation/drift-screen.ndjson");
+	const conflictLogPath = join(dir, "instrumentation/conflict-resolution.ndjson");
 	const auditLogPath = join(dir, "instrumentation/audit.ndjson");
 
 	const installationBinding = await loadInstallation(installationPath);
@@ -120,14 +121,16 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<T
 		initialClient = new StubGitHubClient();
 	}
 	const clientHolder = new GitHubClientHolder(initialClient);
-	const queue = new MergeQueue(queuePath, clientHolder);
-	await queue.load();
 
+	// Resolved before MergeQueue below, which needs a provider for conflict resolution.
 	const connectedLlmAccount = await loadLlmAccount(llmAccountPath);
 	const llmAccountState = createLlmAccountState(connectedLlmAccount);
 	const { provider: initialLlmProvider } =
 		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : shared.resolveDefaultLlmProvider();
 	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
+
+	const queue = new MergeQueue(queuePath, clientHolder, llmProviderHolder, conflictLogPath);
+	await queue.load();
 
 	const instrumentationSink = createNdjsonInstrumentationSink({ gateLogPath, driftScreenLogPath });
 	const pipelineDeps: PipelineDeps = {
@@ -161,7 +164,10 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<T
 	router.use("/queue", queueRouter(queue, state, decidedStore));
 	router.use("/shelf", shelfRouter(state, decidedStore));
 	router.use("/audit", auditRouter(auditStore));
-	router.use("/admin", adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath], decidedStore));
+	router.use(
+		"/admin",
+		adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath, conflictLogPath], decidedStore),
+	);
 	router.use(
 		"/account/github",
 		githubAppRouter(
