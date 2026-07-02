@@ -211,7 +211,7 @@ describe("orchestratePipeline — integration", () => {
 			// mkdir to fail, simulating a disk error during a shadow-mode audit write.
 			const blockerPath = join(dir, "blocker");
 			await writeFile(blockerPath, "not a directory", "utf8");
-			const brokenAuditStore = new AuditStore(join(blockerPath, "audit.ndjson"));
+			const brokenAuditStore = new AuditStore(join(blockerPath, "audit.json"));
 
 			const config: PipelineConfig = {
 				gate: { criteria: [{ name: "buildFailure", mode: "shadow" }] },

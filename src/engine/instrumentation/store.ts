@@ -14,15 +14,6 @@ export async function truncateNdjson(path: string): Promise<void> {
 	await writeFile(path, "", "utf8");
 }
 
-// Rewrites the whole log from a full snapshot of its records, for logs that need to
-// mutate an existing row (e.g. recording an overturn) rather than only ever append —
-// NDJSON has no in-place update, so a mutation is a full rewrite instead of a single line.
-export async function writeNdjson<T>(path: string, records: ReadonlyArray<T>): Promise<void> {
-	await mkdir(dirname(path), { recursive: true });
-	const content = records.map((record) => JSON.stringify(record)).join("\n");
-	await writeFile(path, content.length > 0 ? content + "\n" : "", "utf8");
-}
-
 export async function readNdjson<T>(path: string): Promise<T[]> {
 	if (!existsSync(path)) return [];
 	const raw = await readFile(path, "utf8");

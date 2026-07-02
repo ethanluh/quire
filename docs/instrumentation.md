@@ -38,34 +38,7 @@ excluded upstream in `runGate`, before any `GateDecisionLog` row is built.
 
 Phase 0 derives from this log:
 - **Keep rate** — fraction of PRs with no `triggered: true` row at `mode: "enforce"`.
-- **Per-criterion false-positive rate** (gate health, §12 of the engineering handoff) — for `shadow`-mode criteria, the fraction of that criterion's entries in `audit.ndjson` (below) with `overturnedAt` set, i.e. a human reviewed the audit view and confirmed the gate would have rejected a PR that didn't deserve it.
-
-## Audit entries — `audit.ndjson`
-
-One row per `(PR, criterion)` a `shadow`-mode criterion triggered on — written
-by `AuditStore.add()` (`src/engine/gate/auditStore.ts`) from the same
-`runGate()` call that produces the corresponding `triggered: true` row above,
-so the two logs stay in lockstep for shadow-mode entries.
-
-```json
-{"id":"3f1e2c1a-...","pr":{"...":"..."},"criterionName":"duplicate","reason":"looks like a dup","addedAt":"2026-06-30T12:00:00.000Z","overturnedAt":null}
-```
-
-| field | meaning |
-| --- | --- |
-| `id` | stable identifier assigned at creation; targets a specific entry for overturn (`POST /audit/:id/overturn`) |
-| `pr` | the full `PullRequest` the criterion flagged |
-| `criterionName` | the shadow-mode criterion that triggered |
-| `reason` | the criterion's stated reason |
-| `addedAt` | ISO 8601 timestamp the entry was recorded |
-| `overturnedAt` | `null` until a human reviews the audit view and marks the flag wrong; an ISO 8601 timestamp once overturned |
-
-Unlike the other logs on this page, `audit.ndjson` is **not** pure-append: an
-overturn rewrites the whole file with that entry's `overturnedAt` set, since
-NDJSON has no in-place update (`writeNdjson`, `src/engine/instrumentation/store.ts`).
-It's still one JSON object per line and safe to inspect at any point, but a
-`tail -f` won't show incremental appends the way it does for
-`gate-decisions.ndjson` or `drift-screen.ndjson`.
+- **Per-criterion false-positive rate** (gate health, §12 of the engineering handoff) — for `shadow`-mode criteria, the fraction of that criterion's entries in `data/audit.json` with `overturnedAt` set, i.e. a human reviewed the audit view and confirmed the gate would have rejected a PR that didn't deserve it. `audit.json` is a mutable state file (`{ entries: AuditEntry[] }`, one entry per `(PR, criterion)` a `shadow`-mode criterion triggered on), not one of the NDJSON logs on this page — recording an overturn needs to update an existing entry in place, which NDJSON can't do, so it's persisted the same way as `data/decided-prs.json` instead (see `AuditStore`, `src/engine/gate/auditStore.ts`, and `POST /audit/:id/overturn`).
 
 ## Drift-screen results — `drift-screen.ndjson`
 

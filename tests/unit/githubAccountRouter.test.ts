@@ -548,7 +548,7 @@ describe("githubAccountRouter", () => {
 		client.addFixture("octocat", "hello-world", makePrFixture({ ciStatus: "failure" }));
 		const blockerPath = join(dir, "blocker");
 		await writeFile(blockerPath, "not a directory", "utf8");
-		const brokenAuditStore = new AuditStore(join(blockerPath, "audit.ndjson"));
+		const brokenAuditStore = new AuditStore(join(blockerPath, "audit.json"));
 
 		setup(
 			async () => ({ login: "octocat", scopes: [] }),

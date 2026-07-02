@@ -44,7 +44,10 @@ const DECIDED_PRS_PATH = join(DATA_DIR, "decided-prs.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
 const GATE_LOG_PATH = join(DATA_DIR, "instrumentation/gate-decisions.ndjson");
 const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjson");
-const AUDIT_LOG_PATH = join(DATA_DIR, "instrumentation/audit.ndjson");
+// A mutable state file, not an NDJSON instrumentation log (unlike the three paths
+// above) — audit entries need in-place updates (overturn), which NDJSON can't do —
+// so it lives alongside queue.json/decided-prs.json instead of under instrumentation/.
+const AUDIT_STATE_PATH = join(DATA_DIR, "audit.json");
 const ACCOUNT_PATH = join(DATA_DIR, "github-account.json");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
@@ -73,7 +76,7 @@ async function main(): Promise<void> {
 			? { publicUrl, secret: webhookSecret }
 			: undefined;
 
-	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
+	const auditStore = await loadAuditStore(AUDIT_STATE_PATH);
 	const connectedAccount = await loadAccount(ACCOUNT_PATH);
 	const accountState = createAccountState(connectedAccount);
 
