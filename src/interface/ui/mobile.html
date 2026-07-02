@@ -101,12 +101,14 @@
   .result-msg.error { color: var(--color-reject); }
 
   .account-panel p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
-  .account-panel input {
+  .account-panel input, .account-panel select {
     width: 100%; background: var(--color-surface-overlay); border: 1px solid var(--color-border);
     border-radius: var(--radius-md); color: var(--color-text-primary); font-family: var(--font-mono);
     font-size: var(--text-sm); padding: var(--space-3);
   }
+  .account-panel select { margin-bottom: var(--space-3); }
   .account-panel .btn { margin-top: var(--space-3); width: 100%; text-align: center; }
+  .account-panel + .account-panel { margin-top: var(--space-6); }
   .account-status { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); font-size: var(--text-sm); }
   .account-status .login { font-weight: var(--weight-medium); color: var(--color-text-primary); }
 
@@ -213,6 +215,22 @@
         <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
       </div>
     </div>
+
+    <div class="account-panel">
+      <h3>LLM provider</h3>
+      <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
+      <div id="llm-connect-form">
+        <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles.</p>
+        <select id="llm-provider-select">
+          <option value="anthropic">Anthropic</option>
+          <option value="gemini">Gemini</option>
+        </select>
+        <input type="password" id="llm-api-key" placeholder="API key" autocomplete="off">
+        <button class="btn btn-accept" id="btn-llm-connect">Connect</button>
+      </div>
+      <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
+      <div id="llm-account-result" class="result-msg" style="display:none"></div>
+    </div>
   </div>
 </main>
 
@@ -237,7 +255,7 @@ tabs.forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
-    if (tab.dataset.tab === 'account') loadAccount();
+    if (tab.dataset.tab === 'account') { loadAccount(); loadLlmAccount(); }
   });
 });
 
@@ -591,6 +609,50 @@ accountDisconnectBtn.addEventListener('click', async () => {
   if (!confirm('Disconnect the connected GitHub account?')) return;
   await api('POST', '/account/github/disconnect', undefined, { 'X-Quire-Admin': '1' });
   loadAccount();
+});
+
+const llmConnectForm = document.getElementById('llm-connect-form');
+const llmDisconnectBtn = document.getElementById('btn-llm-disconnect');
+
+async function loadLlmAccount() {
+  const statusEl = document.getElementById('llm-account-status');
+  const resultEl = document.getElementById('llm-account-result');
+  resultEl.style.display = 'none';
+  const status = await api('GET', '/account/llm/status');
+  if (status.connected) {
+    statusEl.textContent = `Connected to ${status.provider}`;
+    llmConnectForm.style.display = 'none';
+    llmDisconnectBtn.style.display = isLocalUi ? 'block' : 'none';
+  } else {
+    statusEl.textContent = isLocalUi
+      ? 'Not connected. Falling back to environment configuration.'
+      : 'Not connected. Connecting is only available from the machine running Quire.';
+    llmConnectForm.style.display = isLocalUi ? 'block' : 'none';
+    llmDisconnectBtn.style.display = 'none';
+  }
+}
+
+document.getElementById('btn-llm-connect').addEventListener('click', async () => {
+  const provider = document.getElementById('llm-provider-select').value;
+  const apiKeyInput = document.getElementById('llm-api-key');
+  const apiKey = apiKeyInput.value.trim();
+  const resultEl = document.getElementById('llm-account-result');
+  if (!apiKey) return;
+  const result = await api('POST', '/account/llm/connect', { provider, apiKey }, { 'X-Quire-Admin': '1' });
+  if (result.error) {
+    resultEl.textContent = 'Error: ' + result.error;
+    resultEl.className = 'result-msg error';
+    resultEl.style.display = 'block';
+    return;
+  }
+  apiKeyInput.value = '';
+  loadLlmAccount();
+});
+
+llmDisconnectBtn.addEventListener('click', async () => {
+  if (!confirm('Disconnect the connected LLM API key?')) return;
+  await api('POST', '/account/llm/disconnect', undefined, { 'X-Quire-Admin': '1' });
+  loadLlmAccount();
 });
 
 function repoHtml(repo, selectedRepo) {

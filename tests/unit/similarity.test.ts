@@ -42,6 +42,45 @@ describe("textSimilarity — propagates a real embed() failure instead of maskin
 	});
 });
 
+describe("textSimilarity — empty inputs must not read as perfect similarity", () => {
+	it("returns 0, not 1, for two empty strings via the Jaccard fallback", async () => {
+		const zeroVectorProvider: EmbeddingProvider = {
+			embed: async () => [0, 0],
+		};
+		await expect(textSimilarity("", "", zeroVectorProvider)).resolves.toBe(0);
+	});
+});
+
+describe("clusterPRs — PRs with no extracted effects must not spuriously merge", () => {
+	it("puts each PR with an empty effect list into its own singleton cluster", async () => {
+		const prA = makePR("pr-a");
+		const prB = makePR("pr-b");
+		const prC = makePR("pr-c");
+
+		const effectsByPr = new Map([
+			["pr-a", []],
+			["pr-b", []],
+			["pr-c", []],
+		]);
+
+		const zeroVectorProvider: EmbeddingProvider = {
+			embed: async () => [0, 0],
+		};
+		const { clusters, failures } = await clusterPRs(
+			[prA, prB, prC],
+			effectsByPr,
+			zeroVectorProvider,
+			{ threshold: 0.75 },
+		);
+
+		expect(failures).toEqual([]);
+		expect(clusters).toHaveLength(3);
+		for (const cluster of clusters) {
+			expect(cluster).toHaveLength(1);
+		}
+	});
+});
+
 describe("clusterPRs — isolates a clustering failure to the affected PR (mirrors extractionFailures)", () => {
 	it("excludes a PR whose comparison failed, without discarding clusters already built for the rest", async () => {
 		const prA = makePR("pr-a");

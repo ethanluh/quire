@@ -12,7 +12,11 @@ import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { loadAccount } from "../../engine/github/account.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
 import { listRepositories } from "../../engine/github/repos.js";
-import { resolveLlmProvider } from "./resolveLlmProvider.js";
+import { resolveLlmProvider, buildLlmProviderFromAccount } from "./resolveLlmProvider.js";
+import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.js";
+import { loadAccount as loadLlmAccount } from "../../engine/llm/account.js";
+import { createLlmAccountState } from "./llmAccountState.js";
+import { llmAccountRouter } from "./routes/llmAccount.js";
 import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken } from "../../engine/github/oauth.js";
 import type { OAuthDeps } from "../../engine/github/oauth.js";
 import { NeedsReconnectError } from "../../engine/github/tokenRefresh.js";
@@ -46,6 +50,7 @@ const GATE_LOG_PATH = join(DATA_DIR, "instrumentation/gate-decisions.ndjson");
 const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjson");
 const AUDIT_LOG_PATH = join(DATA_DIR, "instrumentation/audit.ndjson");
 const ACCOUNT_PATH = join(DATA_DIR, "github-account.json");
+const LLM_ACCOUNT_PATH = join(DATA_DIR, "llm-account.json");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const RECONCILE_INTERVAL_MS =
@@ -114,8 +119,14 @@ async function main(): Promise<void> {
 	const queue = new MergeQueue(QUEUE_PATH, github);
 	await queue.load();
 
-	const { provider, description } = resolveLlmProvider(process.env);
+	// An LLM account connected through the UI takes priority over env-based resolution,
+	// mirroring the GitHub connected-account precedence above.
+	const connectedLlmAccount = await loadLlmAccount(LLM_ACCOUNT_PATH);
+	const llmAccountState = createLlmAccountState(connectedLlmAccount);
+	const { provider: initialLlmProvider, description } =
+		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : resolveLlmProvider(process.env);
 	console.log(`LLM provider: ${description}`);
+	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
 	const analyzer = new TypeScriptAnalyzer();
 	const state = createServerState();
 	const instrumentationSink = createNdjsonInstrumentationSink({
@@ -124,7 +135,7 @@ async function main(): Promise<void> {
 	});
 	const pipelineDeps: PipelineDeps = {
 		config: pipelineConfig,
-		provider,
+		provider: llmProviderHolder,
 		analyzer,
 		auditStore,
 		instrumentationSink,
@@ -178,6 +189,16 @@ async function main(): Promise<void> {
 			fetchAuthenticatedUser,
 			(token) => listRepositories(new Octokit({ auth: token })),
 			webhookConfig,
+		),
+	);
+	app.use(
+		"/account/llm",
+		llmAccountRouter(
+			llmAccountState,
+			LLM_ACCOUNT_PATH,
+			llmProviderHolder,
+			buildLlmProviderFromAccount,
+			() => resolveLlmProvider(process.env),
 		),
 	);
 
