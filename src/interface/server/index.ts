@@ -1,11 +1,12 @@
-import { randomBytes } from "node:crypto";
 import express from "express";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
 import { InstallationRevokedError } from "../../engine/github/installationClient.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
+import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
 import { resolveLlmProvider } from "./resolveLlmProvider.js";
+import { resolveSessionSecret } from "./sessionSecret.js";
 import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken } from "../../engine/github/oauth.js";
 import type { OAuthDeps } from "../../engine/github/oauth.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
@@ -69,15 +70,7 @@ async function main(): Promise<void> {
 	const publicUrl = rawPublicUrl !== undefined && rawPublicUrl !== "" ? rawPublicUrl : undefined;
 	const isProduction = publicUrl !== undefined && publicUrl.startsWith("https://");
 
-	let sessionSecret = process.env["QUIRE_SESSION_SECRET"];
-	if (sessionSecret === undefined || sessionSecret === "") {
-		sessionSecret = randomBytes(32).toString("hex");
-		console.warn(
-			"QUIRE_SESSION_SECRET not set — generated a random one for this process. " +
-				"Every existing session will be invalidated on restart. Set it explicitly once hosted " +
-				"(e.g. `openssl rand -hex 32`).",
-		);
-	}
+	const sessionSecret = await resolveSessionSecret(DATA_DIR);
 	const allowedLogins = process.env["QUIRE_ALLOWED_GITHUB_LOGINS"];
 	const allowlist = createAllowlist(allowedLogins);
 	if (allowedLogins === undefined || allowedLogins === "") {
@@ -108,6 +101,12 @@ async function main(): Promise<void> {
 	const { description: defaultLlmDescription } = resolveLlmProvider(process.env);
 	console.log(`Default LLM provider (used by a tenant until they connect their own): ${defaultLlmDescription}`);
 
+	// Keyed by login, not team: starred/pinned enrichment needs the signed-in user's own
+	// GitHub token, which has nothing to do with which team they're currently on — shared
+	// across every tenant's router the same way appConfig/appSlug are (see
+	// TenantSharedConfig), populated by accountRouter on sign-in.
+	const userTokenCache = createUserTokenCache();
+
 	const sharedConfig: TenantSharedConfig = {
 		dataDir: DATA_DIR,
 		appConfig,
@@ -116,6 +115,7 @@ async function main(): Promise<void> {
 		analyzer: new TypeScriptAnalyzer(),
 		isProduction,
 		resolveDefaultLlmProvider: () => resolveLlmProvider(process.env),
+		userTokenCache,
 	};
 
 	// Every team gets its own isolated GitHub App installation, repo selection, PR queue,
@@ -157,7 +157,10 @@ async function main(): Promise<void> {
 
 	// Login-establishing routes: reachable without a session (that's the point). Mounted
 	// before the global `session` middleware below applies to everything else.
-	app.use("/account/github", accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session));
+	app.use(
+		"/account/github",
+		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache),
+	);
 
 	app.use(session);
 	app.use(resolveMembership(teamStore));

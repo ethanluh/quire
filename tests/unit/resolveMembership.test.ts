@@ -25,9 +25,9 @@ describe("resolveMembership", () => {
 		if (dir) await rm(dir, { recursive: true, force: true });
 	});
 
-	// The middleware under test does its work in an unawaited async IIFE, so a call to it
-	// returns before next()/res.status() actually run — wait on whichever fires first
-	// instead of guessing how many microtask/IO ticks it needs.
+	// The middleware under test does its work asynchronously, so a call to it returns
+	// before next()/res.status() actually run — wait on whichever fires first instead of
+	// guessing how many microtask/IO ticks it needs.
 	async function run(res: Response): Promise<{ calledNext: boolean }> {
 		return new Promise((resolve) => {
 			const next = (() => resolve({ calledNext: true })) as unknown as NextFunction;
@@ -102,5 +102,18 @@ describe("resolveMembership", () => {
 		await run(bobRes);
 
 		expect(aliceRes.locals.membership?.teamId).not.toBe(bobRes.locals.membership?.teamId);
+	});
+
+	it("two concurrent first requests for the same brand-new login provision exactly one team", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-resolvemembership-"));
+		store = new TeamStore(dir);
+
+		const [a, b] = [makeRes("dave"), makeRes("dave")];
+		const [resultA, resultB] = await Promise.all([run(a), run(b)]);
+
+		expect(resultA.calledNext && resultB.calledNext).toBe(true);
+		expect(a.locals.membership?.teamId).toBe(b.locals.membership?.teamId);
+		const index = await store.loadMembershipIndex("dave");
+		expect(index?.teamIds).toEqual([a.locals.membership?.teamId]);
 	});
 });

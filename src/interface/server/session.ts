@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { signToken, verifyToken } from "./signedToken.js";
 
 export const SESSION_COOKIE_NAME = "quire_session";
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -9,8 +9,14 @@ export interface SessionPayload {
 	expiresAt: number;
 }
 
-function sign(value: string, secret: string): string {
-	return createHmac("sha256", secret).update(value).digest("base64url");
+function isSessionPayload(value: unknown): value is SessionPayload {
+	if (typeof value !== "object" || value === null) return false;
+	const record = value as Record<string, unknown>;
+	return (
+		typeof record["login"] === "string" &&
+		typeof record["issuedAt"] === "number" &&
+		typeof record["expiresAt"] === "number"
+	);
 }
 
 // Stateless signed token — payload.expiresAt.json base64url'd, then an HMAC signature over
@@ -18,38 +24,11 @@ function sign(value: string, secret: string): string {
 // removal is checked on every request in requireSession, and disconnecting a GitHub
 // installation invalidates API access server-side regardless of any still-valid cookie).
 export function signSession(payload: SessionPayload, secret: string): string {
-	const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-	return `${body}.${sign(body, secret)}`;
+	return signToken(payload, secret);
 }
 
-// Never throws — bad signature, malformed payload, and expiry are all just "no session",
-// giving requireSession one branch to handle instead of a try/catch around parsing.
 export function verifySession(token: string, secret: string): SessionPayload | undefined {
-	const [body, signature] = token.split(".");
-	if (body === undefined || signature === undefined) return undefined;
-
-	const expected = sign(body, secret);
-	const expectedBuf = Buffer.from(expected, "base64url");
-	const actualBuf = Buffer.from(signature, "base64url");
-	if (expectedBuf.length !== actualBuf.length || !timingSafeEqual(expectedBuf, actualBuf)) return undefined;
-
-	try {
-		const parsed: unknown = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-		if (
-			typeof parsed !== "object" ||
-			parsed === null ||
-			typeof (parsed as Record<string, unknown>)["login"] !== "string" ||
-			typeof (parsed as Record<string, unknown>)["issuedAt"] !== "number" ||
-			typeof (parsed as Record<string, unknown>)["expiresAt"] !== "number"
-		) {
-			return undefined;
-		}
-		const payload = parsed as SessionPayload;
-		if (Date.now() >= payload.expiresAt) return undefined;
-		return payload;
-	} catch {
-		return undefined;
-	}
+	return verifyToken(token, secret, isSessionPayload);
 }
 
 export function createSession(login: string, secret: string): string {

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { TeamStore } from "../../../engine/team/teamStore.js";
+import { LastOwnerError, NotAMemberError } from "../../../engine/team/teamStore.js";
 import { createInvite, verifyInvite } from "../invite.js";
 import { validateBody } from "../middleware/validation.js";
 
@@ -49,8 +50,7 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 			const index = await teamStore.loadMembershipIndex(login);
 			const teams = await Promise.all(
 				(index?.teamIds ?? []).map(async (teamId) => {
-					const team = await teamStore.loadTeam(teamId);
-					const membership = await teamStore.getMembership(teamId, login);
+					const [team, membership] = await Promise.all([teamStore.loadTeam(teamId), teamStore.getMembership(teamId, login)]);
 					if (team === undefined || membership === undefined) return undefined;
 					return { teamId, name: team.name, role: membership.role, active: teamId === index?.activeTeamId };
 				}),
@@ -106,12 +106,20 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				return;
 			}
 			const { teamId } = req.body as z.infer<typeof SwitchTeamSchema>;
-			const index = await teamStore.loadMembershipIndex(login);
-			if (index === undefined || !index.teamIds.includes(teamId)) {
-				res.status(403).json({ error: "You are not a member of that team" });
-				return;
+			try {
+				await teamStore.updateMembershipIndex(login, (current) => {
+					if (current === undefined || !current.teamIds.includes(teamId)) {
+						throw new NotAMemberError();
+					}
+					return { teamIds: current.teamIds, activeTeamId: teamId };
+				});
+			} catch (err) {
+				if (err instanceof NotAMemberError) {
+					res.status(403).json({ error: "You are not a member of that team" });
+					return;
+				}
+				throw err;
 			}
-			await teamStore.saveMembershipIndex(login, { teamIds: index.teamIds, activeTeamId: teamId });
 			res.json({ activeTeamId: teamId });
 		} catch (err) {
 			next(err);
@@ -162,9 +170,10 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				});
 			}
 
-			const index = await teamStore.loadMembershipIndex(login);
-			const teamIds = [...new Set([...(index?.teamIds ?? []), payload.teamId])];
-			await teamStore.saveMembershipIndex(login, { teamIds, activeTeamId: payload.teamId });
+			await teamStore.updateMembershipIndex(login, (current) => ({
+				teamIds: [...new Set([...(current?.teamIds ?? []), payload.teamId])],
+				activeTeamId: payload.teamId,
+			}));
 			res.json({ teamId: payload.teamId, name: team.name });
 		} catch (err) {
 			next(err);
@@ -185,20 +194,22 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				return;
 			}
 
-			await teamStore.removeMember(teamId, login);
-			const remainingTeamIds = index.teamIds.filter((id) => id !== teamId);
-
-			if (remainingTeamIds.length === 0) {
-				// Never leave a login with zero teams — auto-provision a fresh personal team,
-				// mirroring resolveMembership's own first-login behavior.
-				const fresh = await teamStore.createTeamForLogin(login, `${login}'s team`);
-				res.json({ activeTeamId: fresh.teamId, name: fresh.name });
-				return;
+			try {
+				await teamStore.removeMember(teamId, login);
+			} catch (err) {
+				if (err instanceof LastOwnerError) {
+					res.status(409).json({ error: "You're the only owner — promote someone else first, or remove the team's other members" });
+					return;
+				}
+				throw err;
 			}
 
-			const activeTeamId = index.activeTeamId === teamId ? (remainingTeamIds[0] ?? index.activeTeamId) : index.activeTeamId;
-			await teamStore.saveMembershipIndex(login, { teamIds: remainingTeamIds, activeTeamId });
-			res.json({ activeTeamId });
+			// Never leave a login with zero teams — releaseLoginFromTeam auto-provisions a
+			// fresh personal team if this was its last one, mirroring resolveActiveMembership's
+			// own first-login behavior. Shared with an owner/admin removing someone else (see
+			// routes in the roles PR) so both go through one "never teamless" guarantee.
+			const updated = await teamStore.releaseLoginFromTeam(login, teamId);
+			res.json({ activeTeamId: updated.activeTeamId });
 		} catch (err) {
 			next(err);
 		}

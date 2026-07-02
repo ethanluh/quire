@@ -6,9 +6,10 @@ import type { GitHubClient } from "../../engine/github/client.js";
 import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { loadInstallation } from "../../engine/github/installation.js";
-import { buildInstallationClient, buildInstallationOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
+import { buildInstallationClient, buildInstallationOctokit, buildUserOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
-import { listInstallationRepositories } from "../../engine/github/repos.js";
+import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../engine/github/repos.js";
+import type { UserTokenCache } from "../../engine/github/userTokenCache.js";
 import { MergeQueue } from "../../engine/queue/mergeQueue.js";
 import { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
 import { PrEffectCache } from "../../engine/cache/prCache.js";
@@ -54,6 +55,10 @@ export interface TenantSharedConfig {
 	analyzer: StaticAnalyzer;
 	isProduction: boolean;
 	resolveDefaultLlmProvider: () => ResolvedLlmProvider;
+	// Keyed by login, not team — a signed-in user's own GitHub OAuth token, used only to
+	// enrich the repo picker with their starred/pinned repos. Shared by every tenant's
+	// router for the same reason appConfig/appSlug are: it isn't per-account data.
+	userTokenCache: UserTokenCache;
 }
 
 // Everything that used to be a single process-wide singleton (accountState, the GitHub
@@ -90,7 +95,7 @@ function sanitizeTeamId(teamId: string): string {
 	return teamId;
 }
 
-async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<TenantContext> {
+async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: TenantRegistry): Promise<TenantContext> {
 	const dir = join(shared.dataDir, "teams", teamId);
 	const installationPath = join(dir, "installation.json");
 	const llmAccountPath = join(dir, "llm-account.json");
@@ -103,16 +108,20 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<T
 	const conflictLogPath = join(dir, "instrumentation/conflict-resolution.ndjson");
 	const auditLogPath = join(dir, "instrumentation/audit.ndjson");
 
-	const installationBinding = await loadInstallation(installationPath);
-	const accountState = createAccountState(installationBinding);
-
 	const decidedStore = new DecidedPrStore(decidedPrsPath);
-	await decidedStore.load();
-
 	const prCache = new PrEffectCache(prCachePath);
-	await prCache.load();
 
-	const auditStore = await loadAuditStore(auditLogPath);
+	// None of these five reads depend on another's result — run them concurrently instead
+	// of one after another on this tenant's cold-start path (this is on the hot path for
+	// resolveTenant's first getOrCreate call for a team, not just process startup).
+	const [installationBinding, auditStore, connectedLlmAccount] = await Promise.all([
+		loadInstallation(installationPath),
+		loadAuditStore(auditLogPath),
+		loadLlmAccount(llmAccountPath),
+		decidedStore.load(),
+		prCache.load(),
+	]);
+	const accountState = createAccountState(installationBinding);
 
 	let initialClient: GitHubClient;
 	if (installationBinding !== undefined) {
@@ -123,7 +132,6 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<T
 	const clientHolder = new GitHubClientHolder(initialClient);
 
 	// Resolved before MergeQueue below, which needs a provider for conflict resolution.
-	const connectedLlmAccount = await loadLlmAccount(llmAccountPath);
 	const llmAccountState = createLlmAccountState(connectedLlmAccount);
 	const { provider: initialLlmProvider } =
 		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : shared.resolveDefaultLlmProvider();
@@ -177,6 +185,9 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig): Promise<T
 			(installationId) => listInstallationRepositories(buildInstallationOctokit(shared.appConfig, installationId)),
 			(installationId) => getInstallationAccount(shared.appConfig, installationId),
 			shared.isProduction,
+			shared.userTokenCache,
+			(repos, accessToken) => enrichWithStarredAndPinned(repos, buildUserOctokit(accessToken)),
+			(installationId) => registry.isInstallationBoundToOtherTeam(installationId, teamId),
 		),
 	);
 	router.use(
@@ -217,7 +228,7 @@ export class TenantRegistry {
 		const alreadyLoading = this.loading.get(key);
 		if (alreadyLoading !== undefined) return alreadyLoading;
 
-		const promise = loadTenant(key, this.shared).then((tenant) => {
+		const promise = loadTenant(key, this.shared, this).then((tenant) => {
 			this.tenants.set(key, tenant);
 			this.loading.delete(key);
 			return tenant;
@@ -239,6 +250,16 @@ export class TenantRegistry {
 			if (tenant.accountState.current?.installationId === installationId) return tenant;
 		}
 		return undefined;
+	}
+
+	// True when some OTHER already-loaded team has this installation bound. Checked by
+	// githubApp.ts's install callback before it binds — without this, two teams could each
+	// bind the same installation and findByInstallationId's scan above would then route
+	// every webhook for it to whichever team happened to load first, silently starving the
+	// other's queue with no error on either side.
+	isInstallationBoundToOtherTeam(installationId: number, exceptTeamId: string): boolean {
+		const owner = this.findByInstallationId(installationId);
+		return owner !== undefined && owner.teamId !== exceptTeamId;
 	}
 
 	// Loads every team that has ever connected anything, so the reconciliation poll and
