@@ -34,7 +34,8 @@ async function fetchStarredRepoNames(octokit: Octokit): Promise<Set<string>> {
 			per_page: 100,
 		});
 		return new Set(starred.map((r) => r.full_name));
-	} catch {
+	} catch (err) {
+		console.warn("Starred-repo lookup failed, defaulting to none:", err);
 		return new Set();
 	}
 }
@@ -43,7 +44,8 @@ async function fetchPinnedRepoNames(octokit: Octokit): Promise<Set<string>> {
 	try {
 		const result = await octokit.graphql<PinnedItemsResponse>(PINNED_REPOS_QUERY);
 		return new Set(result.viewer.pinnedItems.nodes.map((n) => n.nameWithOwner));
-	} catch {
+	} catch (err) {
+		console.warn("Pinned-repo lookup failed, defaulting to none:", err);
 		return new Set();
 	}
 }

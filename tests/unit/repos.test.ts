@@ -162,23 +162,30 @@ describe("listRepositories", () => {
 	});
 
 	it("falls back to an unprioritized list if the starred or pinned lookup fails", async () => {
-		const octokit = makeFakeOctokit(
-			[{ owner: { login: "octocat" }, name: "hello-world", full_name: "octocat/hello-world", private: false, default_branch: "main", archived: false }],
-			{ starredThrows: true, pinnedThrows: true },
-		);
+		const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const octokit = makeFakeOctokit(
+				[{ owner: { login: "octocat" }, name: "hello-world", full_name: "octocat/hello-world", private: false, default_branch: "main", archived: false }],
+				{ starredThrows: true, pinnedThrows: true },
+			);
 
-		const repos = await listRepositories(octokit);
+			const repos = await listRepositories(octokit);
 
-		expect(repos).toEqual([
-			{
-				owner: "octocat",
-				name: "hello-world",
-				fullName: "octocat/hello-world",
-				private: false,
-				defaultBranch: "main",
-				starred: false,
-				pinned: false,
-			},
-		]);
+			expect(repos).toEqual([
+				{
+					owner: "octocat",
+					name: "hello-world",
+					fullName: "octocat/hello-world",
+					private: false,
+					defaultBranch: "main",
+					starred: false,
+					pinned: false,
+				},
+			]);
+			expect(warn).toHaveBeenCalledWith("Starred-repo lookup failed, defaulting to none:", expect.any(Error));
+			expect(warn).toHaveBeenCalledWith("Pinned-repo lookup failed, defaulting to none:", expect.any(Error));
+		} finally {
+			warn.mockRestore();
+		}
 	});
 });

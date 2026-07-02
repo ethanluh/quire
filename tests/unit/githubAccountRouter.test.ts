@@ -353,6 +353,41 @@ describe("githubAccountRouter", () => {
 		expect(listRepos).toHaveBeenCalledTimes(1);
 	});
 
+	it("caches the repo list for a short TTL, refetching only after it expires", async () => {
+		// Must match account.ts's internal REPO_LIST_CACHE_TTL_MS.
+		const REPO_LIST_CACHE_TTL_MS = 30 * 1000;
+		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			{
+				owner: "octocat",
+				name: "hello-world",
+				fullName: "octocat/hello-world",
+				private: false,
+				defaultBranch: "main",
+				starred: false,
+				pinned: false,
+			},
+		];
+		const listRepos = jest.fn(async () => repos);
+		setup(async () => ({ login: "octocat", scopes: [] }), undefined, listRepos);
+		await new Promise((resolve) => server.once("listening", resolve));
+		await call(server, "POST", "/account/github/connect", { token: "ghp_abc" }, ADMIN_HEADERS);
+
+		let now = Date.now();
+		const dateSpy = jest.spyOn(Date, "now").mockImplementation(() => now);
+		try {
+			await call(server, "GET", "/account/github/repos", undefined, ADMIN_HEADERS);
+			await call(server, "GET", "/account/github/repos", undefined, ADMIN_HEADERS);
+			expect(listRepos).toHaveBeenCalledTimes(1);
+
+			now += REPO_LIST_CACHE_TTL_MS + 1;
+			await call(server, "GET", "/account/github/repos", undefined, ADMIN_HEADERS);
+			expect(listRepos).toHaveBeenCalledTimes(2);
+		} finally {
+			dateSpy.mockRestore();
+		}
+	});
+
 	it("selects a repo and persists it, surfacing it on status and /repos", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
 		// Uses initialAccount rather than /connect: connecting for real would swap the
