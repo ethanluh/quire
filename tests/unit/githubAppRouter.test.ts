@@ -18,7 +18,7 @@ import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
-import { CONFLICT_RESOLUTION_WORKFLOW_CONTENT, WORKFLOW_CONTENT } from "../../src/engine/github/repoSetup.js";
+import { WORKFLOW_CONTENT } from "../../src/engine/github/repoSetup.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { InstallationBinding } from "../../src/engine/github/installation.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
@@ -539,8 +539,6 @@ describe("githubAppRouter", () => {
 				"## Declared direction\n\n<!-- declared-direction: ... -->\n",
 			);
 			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-declared-direction.yml", WORKFLOW_CONTENT);
-			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-resolve-conflict.yml", CONFLICT_RESOLUTION_WORKFLOW_CONTENT);
-			client.seedFile("acme-corp", "widgets", "CLAUDE.md", "# CLAUDE.md\n\n## Quire conflict-resolution guidance\n\n...\n");
 			setup(async () => [], client, new StubLlmProvider(), {
 				installationId: 555,
 				accountLogin: "acme-corp",

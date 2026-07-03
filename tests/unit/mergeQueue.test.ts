@@ -4,10 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import { StubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.js";
+import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 import type { Bundle, PullRequest, ReviewCard } from "../../src/engine/types/core.js";
 import type { ConflictTrees, MergeabilityResult, TreeEntry } from "../../src/engine/types/mergeability.js";
 
-const CALLBACK_BASE_URL = "https://quire.example.com/callbacks/action-resolution";
+// Fresh holder per call site — resolution attempts within a test share a queue but each
+// MergeQueue construction below wants its own isolated provider/queue of stub completions.
+function llmHolder(provider: StubLlmProvider = new StubLlmProvider()): LlmProviderHolder {
+	return new LlmProviderHolder(provider);
+}
 
 function makeBundle(id: string, members: ReadonlyArray<PullRequest> = []): Bundle {
 	return {
@@ -88,7 +94,7 @@ describe("MergeQueue.clear", () => {
 	it("empties in-memory entries and persists the empty state to disk", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const statePath = join(dir, "queue.json");
-		const queue = new MergeQueue(statePath, new StubGitHubClient(), CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 
 		await queue.enqueue(makeBundle("bundle-1"));
@@ -112,7 +118,7 @@ describe("MergeQueue.removeQueued", () => {
 	it("removes an entry that is still queued", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const statePath = join(dir, "queue.json");
-		const queue = new MergeQueue(statePath, new StubGitHubClient(), CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 
 		await queue.enqueue(makeBundle("bundle-1"));
@@ -127,7 +133,7 @@ describe("MergeQueue.removeQueued", () => {
 	it("does not remove an entry that has started landing", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const statePath = join(dir, "queue.json");
-		const queue = new MergeQueue(statePath, new StubGitHubClient(), CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 
 		await queue.enqueue(makeBundle("bundle-1"));
@@ -142,7 +148,7 @@ describe("MergeQueue.removeQueued", () => {
 	it("silently no-ops when the bundle is not in the queue", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const statePath = join(dir, "queue.json");
-		const queue = new MergeQueue(statePath, new StubGitHubClient(), CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 
 		await expect(queue.removeQueued("missing-bundle")).resolves.toBeUndefined();
@@ -151,7 +157,7 @@ describe("MergeQueue.removeQueued", () => {
 	it("carries the card through so a later removal can restore it", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const statePath = join(dir, "queue.json");
-		const queue = new MergeQueue(statePath, new StubGitHubClient(), CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 
 		await queue.enqueue(makeBundle("bundle-1"), makeCard("bundle-1"));
@@ -163,7 +169,7 @@ describe("MergeQueue.removeQueued", () => {
 	it("leaves the card undefined when none was provided at enqueue (legacy compatibility)", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const statePath = join(dir, "queue.json");
-		const queue = new MergeQueue(statePath, new StubGitHubClient(), CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 
 		await queue.enqueue(makeBundle("bundle-1"));
@@ -183,7 +189,7 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 	async function setup(): Promise<{ github: StubGitHubClient; queue: MergeQueue }> {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const github = new StubGitHubClient();
-		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 		return { github, queue };
 	}
@@ -199,7 +205,7 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
 	});
 
-	it("updates the branch and lands when behind, without ever dispatching the conflict-resolution Action", async () => {
+	it("updates the branch and lands when behind", async () => {
 		const { github, queue } = await setup();
 		const pr = makePr();
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "behind" }));
@@ -210,10 +216,9 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		expect(landed?.status).toBe("landed");
 		expect(github.updateBranchCalls).toEqual(["org/repo/1"]);
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
-		expect(github.dispatchConflictResolutionCalls).toHaveLength(0);
 	});
 
-	it("resolves non-overlapping edits via diff3 alone and lands, without dispatching", async () => {
+	it("resolves non-overlapping edits via diff3 alone and lands", async () => {
 		const { github, queue } = await setup();
 		const pr = makePr();
 		const base = "line1\nline2\nline3\nline4\nline5";
@@ -230,14 +235,13 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 
 		expect(landed?.status).toBe("landed");
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
-		expect(github.dispatchConflictResolutionCalls).toHaveLength(0);
 		expect(github.commitResolvedFilesCalls).toHaveLength(1);
 		expect(github.commitResolvedFilesCalls[0]?.files).toEqual([
 			{ path: "src/auth.ts", content: "line1-ours\nline2\nline3\nline4\nline5-theirs", mode: "100644" },
 		]);
 	});
 
-	it("dispatches to the conflict-resolution Action and blocks with 'resolving' when diff3 can't auto-merge", async () => {
+	it("marks the bundle as conflicted when diff3 can't auto-merge and the model isn't confident", async () => {
 		const { github, queue } = await setup();
 		const pr = makePr();
 		const base = "line1\nline2";
@@ -250,17 +254,17 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "dirty" }));
 		await queue.enqueue(makeBundle("bundle-1", [pr]));
 
-		const resolving = await queue.dequeueNext();
+		// No completion queued on the stub provider — defaults to "[]", so the hunk gets no
+		// judgment and fails closed to low confidence.
+		const blocked = await queue.dequeueNext();
 
-		expect(resolving?.status).toBe("resolving");
-		expect(resolving?.resolution).toMatchObject({ prId: pr.id, repoOwner: pr.repoOwner, repoName: pr.repoName });
-		expect(resolving?.resolution?.callbackToken).toMatch(/^[0-9a-f]{64}$/);
-		expect(github.dispatchConflictResolutionCalls).toHaveLength(1);
+		expect(blocked?.status).toBe("conflict");
+		expect(blocked?.conflict?.reason).toContain("could not confidently resolve a conflicting hunk");
 		expect(github.mergedPrs).toEqual([]);
 		expect(github.commitResolvedFilesCalls).toHaveLength(0);
 	});
 
-	it("marks the bundle as conflicted, with no dispatch, when blocked by branch protection", async () => {
+	it("marks the bundle as conflicted when blocked by branch protection", async () => {
 		const { github, queue } = await setup();
 		const pr = makePr();
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
@@ -270,11 +274,10 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 
 		expect(blocked?.status).toBe("conflict");
 		expect(blocked?.conflict?.reason).toContain("branch protection");
-		expect(github.dispatchConflictResolutionCalls).toHaveLength(0);
 		expect(github.mergedPrs).toEqual([]);
 	});
 
-	it("marks the bundle as conflicted, with no dispatch, when checks are unstable", async () => {
+	it("marks the bundle as conflicted when checks are unstable", async () => {
 		const { github, queue } = await setup();
 		const pr = makePr();
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unstable" }));
@@ -284,7 +287,6 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 
 		expect(blocked?.status).toBe("conflict");
 		expect(blocked?.conflict?.reason).toContain("status checks");
-		expect(github.dispatchConflictResolutionCalls).toHaveLength(0);
 	});
 
 	it("bails to conflict without attempting a write when the PR head lives in a fork", async () => {
@@ -322,7 +324,7 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		const github = new StubGitHubClient();
 		// Empty poll-delay list: still polls once per entry with a zero-length backoff
 		// schedule, so the test resolves near-instantly instead of waiting on real timers.
-		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"), [0, 0]);
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"), [0, 0]);
 		await queue.load();
 		const pr = makePr();
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unknownPending" }));
@@ -350,7 +352,7 @@ describe("MergeQueue concurrency", () => {
 	it("serializes overlapping dequeueNext calls so each queued bundle is landed exactly once", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const github = new StubGitHubClient();
-		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 
 		const prA = makePr({ id: "pr-a", number: 1 });
@@ -366,66 +368,6 @@ describe("MergeQueue concurrency", () => {
 	});
 });
 
-describe("MergeQueue.markResolutionSucceeded / markResolutionFailed", () => {
-	let dir: string;
-
-	afterEach(async () => {
-		if (dir) await rm(dir, { recursive: true, force: true });
-	});
-
-	async function setupResolving(): Promise<{ github: StubGitHubClient; queue: MergeQueue; pr: PullRequest }> {
-		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
-		const github = new StubGitHubClient();
-		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
-		await queue.load();
-		const pr = makePr();
-		const base = "line1\nline2";
-		github.setBlobContent("base-sha", base);
-		github.setBlobContent("ours-sha", "line1-ours\nline2");
-		github.setBlobContent("theirs-sha", "line1-theirs\nline2");
-		github.setConflictTrees(pr.repoOwner, pr.repoName, pr.number, makeConflictTrees("src/auth.ts", "base-sha", "ours-sha", "theirs-sha"));
-		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "dirty" }));
-		await queue.enqueue(makeBundle("bundle-1", [pr]));
-		await queue.dequeueNext(); // dispatches, leaves the entry "resolving"
-		return { github, queue, pr };
-	}
-
-	it("returns undefined for a bundle that isn't resolving", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
-		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
-		await queue.load();
-		await queue.enqueue(makeBundle("bundle-1"));
-
-		await expect(queue.markResolutionSucceeded("bundle-1")).resolves.toBeUndefined();
-		await expect(queue.markResolutionFailed("bundle-1", "pr-1", "any reason")).resolves.toBeUndefined();
-	});
-
-	it("requeues on success, clearing the resolution, so dequeueNext can land it", async () => {
-		const { github, queue, pr } = await setupResolving();
-
-		// The Action pushed a resolving commit directly to the branch — mergeability now clean.
-		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
-		const requeued = await queue.markResolutionSucceeded("bundle-1");
-
-		expect(requeued?.status).toBe("queued");
-		expect(requeued?.resolution).toBeUndefined();
-
-		const landed = await queue.dequeueNext();
-		expect(landed?.status).toBe("landed");
-		expect(github.mergedPrs).toEqual(["org/repo/1"]);
-	});
-
-	it("moves to conflict on failure, clearing the resolution and surfacing the reason", async () => {
-		const { queue, pr } = await setupResolving();
-
-		const failed = await queue.markResolutionFailed("bundle-1", pr.id, "model declined to resolve confidently");
-
-		expect(failed?.status).toBe("conflict");
-		expect(failed?.resolution).toBeUndefined();
-		expect(failed?.conflict).toMatchObject({ prId: pr.id, reason: "model declined to resolve confidently" });
-	});
-});
-
 describe("MergeQueue.retryConflict", () => {
 	let dir: string;
 
@@ -435,7 +377,7 @@ describe("MergeQueue.retryConflict", () => {
 
 	it("returns undefined when the bundle isn't in a conflict state", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
-		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 		await queue.enqueue(makeBundle("bundle-1"));
 
@@ -445,7 +387,7 @@ describe("MergeQueue.retryConflict", () => {
 	it("clears the conflict and requeues, so a later dequeueNext can land it", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const github = new StubGitHubClient();
-		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 		const pr = makePr();
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
@@ -463,34 +405,6 @@ describe("MergeQueue.retryConflict", () => {
 		expect(landed?.status).toBe("landed");
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
 	});
-
-	it("also accepts a bundle still \"resolving\", clearing the resolution and logging the manual override", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
-		const github = new StubGitHubClient();
-		const conflictLogPath = join(dir, "conflict.ndjson");
-		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, conflictLogPath);
-		await queue.load();
-		const pr = makePr();
-		github.setBlobContent("base-sha", "line1\nline2");
-		github.setBlobContent("ours-sha", "line1-ours\nline2");
-		github.setBlobContent("theirs-sha", "line1-theirs\nline2");
-		github.setConflictTrees(pr.repoOwner, pr.repoName, pr.number, makeConflictTrees("src/auth.ts", "base-sha", "ours-sha", "theirs-sha"));
-		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "dirty" }));
-		await queue.enqueue(makeBundle("bundle-1", [pr]));
-		const resolving = await queue.dequeueNext();
-		expect(resolving?.status).toBe("resolving");
-
-		const retried = await queue.retryConflict("bundle-1");
-		expect(retried?.status).toBe("queued");
-		expect(retried?.resolution).toBeUndefined();
-
-		const logged = (await readFile(conflictLogPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-		expect(logged.at(-1)).toMatchObject({
-			prId: pr.id,
-			outcome: "unresolved",
-			reason: "manually retried before the conflict-resolution Action reported back",
-		});
-	});
 });
 
 describe("MergeQueue.refreshQueuedBranches", () => {
@@ -503,7 +417,7 @@ describe("MergeQueue.refreshQueuedBranches", () => {
 	it("fast-forwards a queued PR that has fallen behind main", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const github = new StubGitHubClient();
-		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 		const pr = makePr();
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "behind" }));
@@ -517,7 +431,7 @@ describe("MergeQueue.refreshQueuedBranches", () => {
 	it("leaves already-mergeable, forked, and merged PRs alone", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const github = new StubGitHubClient();
-		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 		const clean = makePr({ id: "pr-clean", number: 1 });
 		const forkedBehind = makePr({ id: "pr-forked", number: 2, repoName: "repo2" });
@@ -532,10 +446,10 @@ describe("MergeQueue.refreshQueuedBranches", () => {
 		expect(github.updateBranchCalls).toEqual([]);
 	});
 
-	it("does not touch PRs in bundles that aren't queued (already landing/resolving/conflict)", async () => {
+	it("does not touch PRs in bundles that aren't queued (already landing/conflict)", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const github = new StubGitHubClient();
-		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 		const pr = makePr();
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
@@ -553,7 +467,7 @@ describe("MergeQueue.refreshQueuedBranches", () => {
 	it("keeps going past a PR whose refresh throws, so one failure doesn't block the rest", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const github = new StubGitHubClient();
-		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 		const failing = makePr({ id: "pr-failing", number: 1 });
 		const succeeding = makePr({ id: "pr-succeeding", number: 2, repoName: "repo2" });

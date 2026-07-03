@@ -18,11 +18,6 @@ import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { InstallationBinding } from "../../src/engine/github/installation.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
-import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
-import type { Bundle, PullRequest } from "../../src/engine/types/core.js";
-import type { ConflictTrees, MergeabilityResult, TreeEntry } from "../../src/engine/types/mergeability.js";
-
-const CALLBACK_BASE_URL = "https://quire.example.com/callbacks/action-resolution";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -62,63 +57,6 @@ function pullRequestEventPayload(owner: string, repo: string, action: string, pr
 	};
 }
 
-function workflowRunEventPayload(owner: string, repo: string, runId: number, status: string, conclusion: string | null): unknown {
-	return {
-		action: status,
-		repository: { owner: { login: owner }, name: repo },
-		workflow_run: { id: runId, status, conclusion },
-	};
-}
-
-function makeConflictPr(overrides: Partial<PullRequest> = {}): PullRequest {
-	return {
-		id: "pr-1",
-		repoOwner: "octocat",
-		repoName: "hello-world",
-		number: 1,
-		headSha: "head-sha",
-		declaredDirection: "add passwordless auth",
-		diff: { raw: "", hunks: [] },
-		filesTouched: ["src/auth.ts"],
-		symbolsTouched: [],
-		testNamesChanged: [],
-		ciStatus: "success",
-		...overrides,
-	};
-}
-
-function makeBundle(id: string, members: ReadonlyArray<PullRequest>): Bundle {
-	return { id, direction: "add passwordless auth", effectSummary: "adds OTP-based login", members };
-}
-
-function makeMergeability(overrides: Partial<MergeabilityResult> = {}): MergeabilityResult {
-	return {
-		state: "dirty",
-		isFork: false,
-		merged: false,
-		headBranch: "feature",
-		headSha: "head-sha",
-		baseBranch: "main",
-		baseSha: "base-tip-sha",
-		...overrides,
-	};
-}
-
-function blob(sha: string, mode = "100644"): TreeEntry {
-	return { type: "blob", mode, sha };
-}
-
-function conflictTrees(): ConflictTrees {
-	return {
-		mergeBaseSha: "merge-base-sha",
-		baseSha: "base-tip-sha",
-		headSha: "head-sha",
-		mergeBaseTree: new Map([["src/auth.ts", blob("base-sha")]]),
-		baseTree: new Map([["src/auth.ts", blob("theirs-sha")]]),
-		headTree: new Map([["src/auth.ts", blob("ours-sha")]]),
-	};
-}
-
 describe("webhookRouter", () => {
 	let dir: string;
 	let server: Server;
@@ -128,7 +66,7 @@ describe("webhookRouter", () => {
 		if (dir) await rm(dir, { recursive: true, force: true });
 	});
 
-	async function setup(client: StubGitHubClient = new StubGitHubClient(), provider = new StubLlmProvider()): Promise<{ refreshDeps: RefreshDeps; queue: MergeQueue }> {
+	async function setup(client: StubGitHubClient = new StubGitHubClient(), provider = new StubLlmProvider()): Promise<{ refreshDeps: RefreshDeps }> {
 		const refreshDeps: RefreshDeps = {
 			accountState: createAccountState(ACCOUNT),
 			accountPath: join(dir, "installation.json"),
@@ -145,13 +83,11 @@ describe("webhookRouter", () => {
 				prCache: new PrEffectCache(),
 			},
 		};
-		const queue = new MergeQueue(join(dir, "queue.json"), client, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
-		await queue.load();
 		const app = express();
 		app.use(express.raw({ type: "application/json" }));
-		app.use(webhookRouter(refreshDeps, queue, join(dir, "conflict.ndjson")));
+		app.use(webhookRouter(refreshDeps));
 		server = app.listen(0);
-		return { refreshDeps, queue };
+		return { refreshDeps };
 	}
 
 	async function post(payload: unknown, event: string): Promise<{ status: number; body: unknown }> {
@@ -243,88 +179,13 @@ describe("webhookRouter", () => {
 		expect(refreshDeps.state.bundles.size).toBe(1);
 	});
 
-	describe("workflow_run events", () => {
-		// Dispatches a real conflict through the queue so the entry ends up "resolving" with a
-		// genuine workflowRunId, mirroring how MergeQueue.dequeueNext() actually produces one.
-		async function setupResolving(queue: MergeQueue, client: StubGitHubClient, workflowRunId: number): Promise<PullRequest> {
-			const pr = makeConflictPr();
-			client.setBlobContent("base-sha", "line1\nline2");
-			client.setBlobContent("ours-sha", "line1-ours\nline2");
-			client.setBlobContent("theirs-sha", "line1-theirs\nline2");
-			client.setConflictTrees(pr.repoOwner, pr.repoName, pr.number, conflictTrees());
-			client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability());
-			client.dispatchConflictResolutionResult = { workflowRunId };
-			await queue.enqueue(makeBundle("bundle-1", [pr]));
-			const resolving = await queue.dequeueNext();
-			expect(resolving?.status).toBe("resolving");
-			return pr;
-		}
+	it("ignores non-pull_request events even when they look like a GitHub payload", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		await setup();
 
-		it("ignores a completed workflow_run with a successful conclusion", async () => {
-			dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
-			const client = new StubGitHubClient();
-			const { queue } = await setup(client);
-			await setupResolving(queue, client, 555);
+		const { status, body } = await post({ action: "completed" }, "workflow_run");
 
-			const { status, body } = await post(workflowRunEventPayload("octocat", "hello-world", 555, "completed", "success"), "workflow_run");
-
-			expect(status).toBe(200);
-			expect(body).toEqual({ ignored: true });
-			expect((await queue.getEntry("bundle-1"))?.status).toBe("resolving");
-		});
-
-		it("ignores a workflow_run that hasn't completed yet", async () => {
-			dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
-			const client = new StubGitHubClient();
-			const { queue } = await setup(client);
-			await setupResolving(queue, client, 555);
-
-			const { status, body } = await post(workflowRunEventPayload("octocat", "hello-world", 555, "in_progress", null), "workflow_run");
-
-			expect(status).toBe(200);
-			expect(body).toEqual({ ignored: true });
-			expect((await queue.getEntry("bundle-1"))?.status).toBe("resolving");
-		});
-
-		it("ignores a workflow_run for a repo that isn't currently selected", async () => {
-			dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
-			const client = new StubGitHubClient();
-			const { queue } = await setup(client);
-			await setupResolving(queue, client, 555);
-
-			const { status, body } = await post(workflowRunEventPayload("octocat", "other-repo", 555, "completed", "failure"), "workflow_run");
-
-			expect(status).toBe(200);
-			expect(body).toEqual({ ignored: true });
-			expect((await queue.getEntry("bundle-1"))?.status).toBe("resolving");
-		});
-
-		it("ignores a completed workflow_run whose run id doesn't match any resolving entry", async () => {
-			dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
-			const client = new StubGitHubClient();
-			const { queue } = await setup(client);
-			await setupResolving(queue, client, 555);
-
-			const { status, body } = await post(workflowRunEventPayload("octocat", "hello-world", 999, "completed", "failure"), "workflow_run");
-
-			expect(status).toBe(200);
-			expect(body).toEqual({ ignored: true });
-			expect((await queue.getEntry("bundle-1"))?.status).toBe("resolving");
-		});
-
-		it("marks the matching resolving entry as conflict when the workflow run concludes without success", async () => {
-			dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
-			const client = new StubGitHubClient();
-			const { queue } = await setup(client);
-			const pr = await setupResolving(queue, client, 555);
-
-			const { status, body } = await post(workflowRunEventPayload("octocat", "hello-world", 555, "completed", "failure"), "workflow_run");
-
-			expect(status).toBe(200);
-			expect(body).toEqual({ acknowledged: true });
-			const entry = await queue.getEntry("bundle-1");
-			expect(entry?.status).toBe("conflict");
-			expect(entry?.conflict).toMatchObject({ prId: pr.id, reason: expect.stringContaining("failure") });
-		});
+		expect(status).toBe(200);
+		expect(body).toEqual({ ignored: true });
 	});
 });

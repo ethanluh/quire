@@ -172,13 +172,11 @@
   .status-queued   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .status-landing  { background: var(--color-flagged-wash); color: var(--color-flagged); }
   .status-landed   { background: var(--color-accept-wash); color: var(--color-accept); }
-  .status-resolving { background: var(--color-flagged-wash); color: var(--color-flagged); }
 
   .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
   .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
   .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
-  .pr-status-resolving { background: var(--color-flagged-wash); color: var(--color-flagged); }
 </style>
 </head>
 <body>
@@ -442,7 +440,6 @@ function prMergeStatusBadge(pr, mergeStatus) {
   if (mergeStatus.revertedPrIds.includes(pr.id)) status = 'reverted';
   else if (mergeStatus.mergedPrIds.includes(pr.id)) status = 'merged';
   else if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) status = 'conflict';
-  else if (mergeStatus.resolution && mergeStatus.resolution.prId === pr.id) status = 'resolving';
   return `<span class="badge pr-status-${status}">Merge: ${escapeHtml(status)}</span>`;
 }
 
@@ -465,29 +462,6 @@ function prMemberListHtml(members, drift, mergeStatus) {
   }).join('') + '</div>';
 }
 
-// Ticked by the setInterval below rather than recomputed on every render, so an open detail
-// modal keeps counting up without the caller having to re-fetch or re-render anything.
-function elapsedSince(iso) {
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
-  const mins = Math.floor(seconds / 60);
-  return mins > 0 ? `${mins}m ${seconds % 60}s` : `${seconds}s`;
-}
-
-function resolutionHtml(resolution, bundleId) {
-  if (!resolution) return '';
-  const runLink = resolution.workflowRunId
-    ? ` &middot; <a href="https://github.com/${escapeHtml(resolution.repoOwner)}/${escapeHtml(resolution.repoName)}/actions/runs/${resolution.workflowRunId}" target="_blank" rel="noopener">View run</a>`
-    : '';
-  const retryBtn = bundleId
-    ? `<button class="btn btn-reject" onclick="retryResolving('${escapeHtml(bundleId)}')">Retry now</button>`
-    : '';
-  return `<div class="residual">
-      Awaiting conflict-resolution Action in ${escapeHtml(resolution.repoOwner)}/${escapeHtml(resolution.repoName)}
-      &mdash; dispatched <span class="resolution-elapsed" data-dispatched-at="${escapeHtml(resolution.dispatchedAt)}">${elapsedSince(resolution.dispatchedAt)}</span> ago${runLink}
-      ${retryBtn}
-    </div>`;
-}
-
 function detailBodyHtml(detail, opts) {
   opts = opts || {};
   return `
@@ -503,7 +477,6 @@ function detailBodyHtml(detail, opts) {
       <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(opts.queueMeta.status)}</span>
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
-    ${resolutionHtml(opts.resolution, opts.bundleId)}
     <h4>Member PRs</h4>
     ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
   `;
@@ -536,30 +509,10 @@ function showQueueDetail(bundleId) {
     { direction: entry.bundle.direction, effectSummary: entry.bundle.effectSummary, members: entry.bundle.members },
     {
       queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt },
-      resolution: entry.resolution,
       bundleId,
-      mergeStatus: { mergedPrIds: entry.mergedPrIds, revertedPrIds: entry.revertedPrIds, conflict: entry.conflict, resolution: entry.resolution },
+      mergeStatus: { mergedPrIds: entry.mergedPrIds, revertedPrIds: entry.revertedPrIds, conflict: entry.conflict },
     },
   ));
-}
-
-// Detail modal is opened once and left static otherwise — this is what makes the elapsed-time
-// text in resolutionHtml() actually count up while a "resolving" bundle's modal stays open.
-setInterval(() => {
-  document.querySelectorAll('.resolution-elapsed').forEach((el) => {
-    el.textContent = elapsedSince(el.dataset.dispatchedAt);
-  });
-}, 1000);
-
-async function retryResolving(bundleId) {
-  if (!confirm('Give up waiting on the conflict-resolution Action and requeue this bundle now?')) return;
-  const result = await api('POST', `/queue/${bundleId}/retry`, undefined);
-  if (result.error) {
-    alert('Could not retry: ' + result.error);
-    return;
-  }
-  closeDetailModal();
-  loadQueue();
 }
 
 document.getElementById('btn-detail-modal-close').addEventListener('click', closeDetailModal);
@@ -664,7 +617,7 @@ document.getElementById('btn-process-all').addEventListener('click', async () =>
 
   const btn = document.getElementById('btn-process-all');
   btn.disabled = true;
-  let landed = 0, conflicts = 0, resolving = 0, processed = 0;
+  let landed = 0, conflicts = 0, processed = 0;
 
   // dequeueNext() always moves an entry out of "queued"/"landing" on each call, so this
   // is bounded by the queue size at the start — cap defensively in case that ever changes.
@@ -679,13 +632,12 @@ document.getElementById('btn-process-all').addEventListener('click', async () =>
     processed++;
     if (result.status === 'landed') landed++;
     else if (result.status === 'conflict') conflicts++;
-    else if (result.status === 'resolving') resolving++;
     await loadQueue();
   }
 
   btn.textContent = 'Process all';
   btn.disabled = false;
-  alert(`Processed ${processed}: ${landed} landed, ${conflicts} conflict(s), ${resolving} resolving.`);
+  alert(`Processed ${processed}: ${landed} landed, ${conflicts} conflict(s).`);
 });
 
 const clearAllBtn = document.getElementById('btn-clear-all');
@@ -1063,8 +1015,8 @@ function startPolling() {
 }
 
 // Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
-// a webhook, reconciliation pass, or conflict-resolution callback changes state, so the active
-// pane updates immediately instead of waiting for the next poll tick. The interval above stays
+// a webhook or reconciliation pass changes state, so the active pane updates immediately
+// instead of waiting for the next poll tick. The interval above stays
 // running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
 // server's own reconciliation timer is a fallback for a missed webhook delivery.
 function startLiveUpdates() {
