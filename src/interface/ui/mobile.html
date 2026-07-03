@@ -161,7 +161,10 @@
   .account-status { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); font-size: var(--text-sm); }
   .account-status .login { font-weight: var(--weight-medium); color: var(--color-text-primary); }
 
-  .repo-panel { margin-top: var(--space-6); }
+  #installations-list, #team-members-list { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-3); }
+  #installations-list:empty, #team-members-list:empty { display: none; }
+
+  .repo-panel { margin-top: var(--space-6); padding-top: var(--space-6); border-top: 1px solid var(--color-border); }
   .repo-panel h3 {
     font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--color-text-muted);
     text-transform: uppercase; letter-spacing: var(--tracking-wider); margin: 0 0 var(--space-3);
@@ -192,6 +195,7 @@
      connect/disconnect buttons; without this override it also stretches each repo
      row's "Select" button to fill the row, the bug this fixes. */
   .repo-entry .btn { width: auto; margin-top: 0; padding: var(--space-2) var(--space-5); flex: 0 0 auto; }
+  .repo-entry select { width: auto; margin-bottom: 0; flex: 0 0 auto; }
 
   .empty { color: var(--color-text-faint); font-size: var(--text-base); padding: var(--space-10) 0; text-align: center; }
 
@@ -1319,13 +1323,15 @@ function isOwner() { return myRole === 'owner'; }
 function memberRowHtml(m) {
   const badge = `<span class="badge badge-neutral">${escapeHtml(m.role)}</span>`;
   if (!canManageMembers() || (m.role === 'owner' && !isOwner())) {
-    return `<div>${escapeHtml(m.login)} — ${badge}</div>`;
+    return `<div class="repo-entry"><span class="repo-name">${escapeHtml(m.login)}</span>${badge}</div>`;
   }
   const roleOptions = ['owner', 'admin', 'member']
     .filter((r) => r !== 'owner' || isOwner())
     .map((r) => `<option value="${r}" ${r === m.role ? 'selected' : ''}>${r}</option>`)
     .join('');
-  return `<div>${escapeHtml(m.login)} — ${badge}
+  return `<div class="repo-entry">
+    <span class="repo-name">${escapeHtml(m.login)}</span>
+    ${badge}
     <select onchange="setMemberRole('${escapeHtml(m.login)}', this.value)">${roleOptions}</select>
     <button class="btn btn-reject" onclick="removeMember('${escapeHtml(m.login)}')">Remove</button>
   </div>`;

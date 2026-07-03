@@ -77,7 +77,7 @@
   }
 
   .account-panel p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
-  .account-connect-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .account-connect-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
   .account-panel input, .account-panel select,
   .modal-backdrop input, .modal-backdrop select {
     width: 100%;
@@ -113,14 +113,36 @@
   }
   .account-status .login { font-weight: var(--weight-medium); color: var(--color-text-primary); }
 
-  .repo-panel { margin-top: var(--space-6); }
-  .repo-panel h3 {
+  #installations-list, #team-members-list, #connectable-installations {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+  #installations-list:empty, #team-members-list:empty { display: none; }
+
+  /* Shared "titled sub-section" divider — separates a distinct concern (repo
+     picker, team settings) from the account controls above it within the same
+     panel, the same way top-level settings sections used to divide before the
+     sidebar-nav rebuild moved each into its own nav item. */
+  .repo-panel, .subsection {
+    margin-top: var(--space-6);
+    padding-top: var(--space-6);
+    border-top: 1px solid var(--color-border);
+  }
+  .repo-panel h3, .subsection h3 {
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
     color: var(--color-text-muted);
     text-transform: uppercase;
     letter-spacing: var(--tracking-wider);
     margin: 0 0 var(--space-3);
+  }
+  .repo-entry select {
+    width: auto;
+    max-width: none;
+    margin-bottom: 0;
+    flex: 0 0 auto;
   }
   .automation-status { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
   .auto-merge-toggle {
@@ -336,19 +358,23 @@
           <p>Teammates on the same team share this GitHub connection, repo, LLM key, and merge queue.</p>
           <div class="account-status" id="team-status">Checking team&hellip;</div>
           <div id="team-members-list"></div>
-          <div class="account-connect-actions">
-            <select id="team-switcher"></select>
+
+          <div class="subsection">
+            <h3>Team settings</h3>
+            <div class="account-connect-actions">
+              <select id="team-switcher"></select>
+            </div>
+            <div class="account-connect-actions">
+              <input type="text" id="team-name-input" placeholder="Team name">
+              <button class="btn btn-defer" id="btn-team-rename">Save name</button>
+            </div>
+            <div class="account-connect-actions">
+              <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
+              <button class="btn btn-defer" id="btn-team-create">Create new team</button>
+              <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
+            </div>
+            <div id="team-result" class="result-msg" style="display:none"></div>
           </div>
-          <div class="account-connect-actions">
-            <input type="text" id="team-name-input" placeholder="Team name">
-            <button class="btn btn-defer" id="btn-team-rename">Save name</button>
-          </div>
-          <div class="account-connect-actions">
-            <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
-            <button class="btn btn-defer" id="btn-team-create">Create new team</button>
-            <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
-          </div>
-          <div id="team-result" class="result-msg" style="display:none"></div>
         </div>
 
         <div class="settings-panel account-panel" data-section="github">
@@ -1023,11 +1049,11 @@ async function loadConnectableInstallations() {
   const installations = result.installations || [];
   if (installations.length) {
     el.innerHTML = '<p>Already installed — connect without leaving this page:</p>' + installations.map(connectableInstallationHtml).join('');
-    el.style.display = 'block';
+    el.style.display = 'flex';
   } else if (result.needsReconnect) {
     el.innerHTML = `<div class="result-msg">Reconnect GitHub to check for installations you already have access to.
       <button class="btn btn-defer" id="btn-check-installations-reconnect">Reconnect GitHub</button></div>`;
-    el.style.display = 'block';
+    el.style.display = 'flex';
     document.getElementById('btn-check-installations-reconnect').addEventListener('click', () => {
       startOAuth(document.getElementById('btn-check-installations-reconnect'), document.getElementById('account-result'));
     });
@@ -1255,13 +1281,15 @@ function isOwner() { return myRole === 'owner'; }
 function memberRowHtml(m) {
   const badge = `<span class="badge badge-neutral">${escapeHtml(m.role)}</span>`;
   if (!canManageMembers() || (m.role === 'owner' && !isOwner())) {
-    return `<div>${escapeHtml(m.login)} — ${badge}</div>`;
+    return `<div class="repo-entry"><span class="repo-name">${escapeHtml(m.login)}</span>${badge}</div>`;
   }
   const roleOptions = ['owner', 'admin', 'member']
     .filter((r) => r !== 'owner' || isOwner())
     .map((r) => `<option value="${r}" ${r === m.role ? 'selected' : ''}>${r}</option>`)
     .join('');
-  return `<div>${escapeHtml(m.login)} — ${badge}
+  return `<div class="repo-entry">
+    <span class="repo-name">${escapeHtml(m.login)}</span>
+    ${badge}
     <select onchange="setMemberRole('${escapeHtml(m.login)}', this.value)">${roleOptions}</select>
     <button class="btn btn-reject" onclick="removeMember('${escapeHtml(m.login)}')">Remove</button>
   </div>`;

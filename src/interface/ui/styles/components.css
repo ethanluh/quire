@@ -192,6 +192,15 @@ body {
 	margin: 0 0 var(--space-3);
 }
 
+/* Modals without an .account-panel wrapper (sign-in, LLM-connect) would
+   otherwise fall back to the browser's default <p> margin instead of the
+   token scale everywhere else uses. */
+.modal-backdrop .card > p {
+	font-size: var(--text-sm);
+	color: var(--color-text-muted);
+	margin: 0 0 var(--space-3);
+}
+
 .modal-actions {
 	display: flex;
 	gap: var(--space-2);
