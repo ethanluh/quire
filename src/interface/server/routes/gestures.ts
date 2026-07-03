@@ -64,6 +64,13 @@ export function gesturesRouter(
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action);
 					postCardToMembers(github, action, bundle, card);
+					// autoMergeOnAccept is itself owner-gated (POST /account/github/settings requires
+					// requireRole("owner")) — turning it on IS the authorization decision for every
+					// accept that follows to drain the queue, deliberately, regardless of which member
+					// performs the accept. This route itself stays open to every member on purpose
+					// (INV-5: an unaccepted bundle never merges), and dequeueNext only ever processes
+					// bundles someone has already accepted, whether that's this one or another already
+					// waiting in the shared queue.
 					if (accountState.current?.autoMergeOnAccept === true) {
 						// Don't block the response on the full merge (GitHub mergeability polling can
 						// take many seconds) — the bundle must appear in the merge queue immediately.

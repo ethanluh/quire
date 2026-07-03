@@ -55,111 +55,140 @@ describe("TenantRegistry", () => {
 		return new TenantRegistry(shared);
 	}
 
-	it("gives two different logins fully independent contexts", async () => {
+	it("gives two different teams fully independent contexts", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 		const registry = makeRegistry();
 
-		const alice = await registry.getOrCreate("alice");
-		const bob = await registry.getOrCreate("bob");
+		const alpha = await registry.getOrCreate("alpha");
+		const bravo = await registry.getOrCreate("bravo");
 
-		expect(alice).not.toBe(bob);
-		expect(alice.accountState).not.toBe(bob.accountState);
-		expect(alice.clientHolder).not.toBe(bob.clientHolder);
-		expect(alice.state).not.toBe(bob.state);
-		expect(alice.queue).not.toBe(bob.queue);
+		expect(alpha).not.toBe(bravo);
+		expect(alpha.accountState).not.toBe(bravo.accountState);
+		expect(alpha.clientHolder).not.toBe(bravo.clientHolder);
+		expect(alpha.state).not.toBe(bravo.state);
+		expect(alpha.queue).not.toBe(bravo.queue);
 	});
 
-	it("returns the same cached context on repeated getOrCreate calls for one login", async () => {
+	it("returns the same cached context on repeated getOrCreate calls for one team", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 		const registry = makeRegistry();
 
-		const first = await registry.getOrCreate("alice");
-		const second = await registry.getOrCreate("alice");
+		const first = await registry.getOrCreate("alpha");
+		const second = await registry.getOrCreate("alpha");
 
 		expect(first).toBe(second);
 	});
 
-	it("binding an installation for one tenant never touches another tenant's state or files", async () => {
+	it("binding an installation for one team never touches another team's state or files", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 		const registry = makeRegistry();
 
-		const alice = await registry.getOrCreate("alice");
-		const bob = await registry.getOrCreate("bob");
+		const alpha = await registry.getOrCreate("alpha");
+		const bravo = await registry.getOrCreate("bravo");
 
-		alice.accountState.current = accountStateWith(binding({ installationId: 111, accountLogin: "alice-org" }));
+		alpha.accountState.current = accountStateWith(binding({ installationId: 111, accountLogin: "alpha-org" }));
 
-		expect(bob.accountState.current.installations).toEqual([]);
+		expect(bravo.accountState.current.installations).toEqual([]);
 
 		// The in-memory mutation above never went through a route handler's saveInstallation
-		// call, so neither tenant's file exists yet — this just confirms bob's directory was
-		// never touched by alice's mutation.
-		expect(existsSync(join(dir, "users", "alice", "installation.json"))).toBe(false);
-		expect(existsSync(join(dir, "users", "bob", "installation.json"))).toBe(false);
+		// call, so neither team's file exists yet — this just confirms bravo's directory was
+		// never touched by alpha's mutation.
+		expect(existsSync(join(dir, "teams", "alpha", "installation.json"))).toBe(false);
+		expect(existsSync(join(dir, "teams", "bravo", "installation.json"))).toBe(false);
 	});
 
-	it("loads each tenant's own persisted installation.json from its own directory", async () => {
+	it("loads each team's own persisted installation.json from its own directory", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 		const registry = makeRegistry();
 
-		// Simulate a prior process having bound an installation for alice by writing
-		// straight to disk, then verify a fresh registry only loads it for alice.
+		// Simulate a prior process having bound an installation for alpha by writing
+		// straight to disk, then verify a fresh registry only loads it for alpha.
 		const { writeJsonFileAtomic } = await import("../../src/engine/jsonFile.js");
-		await writeJsonFileAtomic(join(dir, "users", "alice", "installation.json"), accountStateWith(binding({ installationId: 222 })));
+		await writeJsonFileAtomic(join(dir, "teams", "alpha", "installation.json"), accountStateWith(binding({ installationId: 222 })));
 
-		const alice = await registry.getOrCreate("alice");
-		const bob = await registry.getOrCreate("bob");
+		const alpha = await registry.getOrCreate("alpha");
+		const bravo = await registry.getOrCreate("bravo");
 
-		expect(alice.accountState.current.installations.map((i) => i.installationId)).toEqual([222]);
-		expect(bob.accountState.current.installations).toEqual([]);
+		expect(alpha.accountState.current.installations.map((i) => i.installationId)).toEqual([222]);
+		expect(bravo.accountState.current.installations).toEqual([]);
 	});
 
 	it("one tenant can bind several installations, all showing up under that same tenant", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 		const registry = makeRegistry();
 
-		const alice = await registry.getOrCreate("alice");
-		alice.accountState.current = accountStateWith(
-			binding({ installationId: 111, accountLogin: "alice-personal" }),
-			binding({ installationId: 222, accountLogin: "alice-org", accountType: "Organization" }),
+		const alpha = await registry.getOrCreate("alpha");
+		alpha.accountState.current = accountStateWith(
+			binding({ installationId: 111, accountLogin: "alpha-personal" }),
+			binding({ installationId: 222, accountLogin: "alpha-org", accountType: "Organization" }),
 		);
 
-		expect(alice.accountState.current.installations.map((i) => i.installationId)).toEqual([111, 222]);
-		expect(registry.findByInstallationId(111)?.login).toBe("alice");
-		expect(registry.findByInstallationId(222)?.login).toBe("alice");
+		expect(alpha.accountState.current.installations.map((i) => i.installationId)).toEqual([111, 222]);
+		expect(registry.findByInstallationId(111)?.teamId).toBe("alpha");
+		expect(registry.findByInstallationId(222)?.teamId).toBe("alpha");
 	});
 
-	it("findByInstallationId routes to the tenant that owns that installation, not any other", async () => {
+	it("findByInstallationId routes to the team that owns that installation, not any other", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 		const registry = makeRegistry();
 
-		const alice = await registry.getOrCreate("alice");
-		const bob = await registry.getOrCreate("bob");
-		alice.accountState.current = accountStateWith(binding({ installationId: 111 }));
-		bob.accountState.current = accountStateWith(binding({ installationId: 222 }));
+		const alpha = await registry.getOrCreate("alpha");
+		const bravo = await registry.getOrCreate("bravo");
+		alpha.accountState.current = accountStateWith(binding({ installationId: 111 }));
+		bravo.accountState.current = accountStateWith(binding({ installationId: 222 }));
 
-		expect(registry.findByInstallationId(111)?.login).toBe("alice");
-		expect(registry.findByInstallationId(222)?.login).toBe("bob");
+		expect(registry.findByInstallationId(111)?.teamId).toBe("alpha");
+		expect(registry.findByInstallationId(222)?.teamId).toBe("bravo");
 		expect(registry.findByInstallationId(999)).toBeUndefined();
 	});
 
-	it("hydrateExisting loads every tenant directory already on disk without a prior request", async () => {
+	it("hydrateExisting loads every team directory already on disk without a prior request", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 		const { writeJsonFileAtomic } = await import("../../src/engine/jsonFile.js");
-		await writeJsonFileAtomic(join(dir, "users", "alice", "installation.json"), accountStateWith(binding({ installationId: 333 })));
-		await writeJsonFileAtomic(join(dir, "users", "bob", "installation.json"), accountStateWith(binding({ installationId: 444 })));
+		await writeJsonFileAtomic(join(dir, "teams", "alpha", "installation.json"), accountStateWith(binding({ installationId: 333 })));
+		await writeJsonFileAtomic(join(dir, "teams", "bravo", "installation.json"), accountStateWith(binding({ installationId: 444 })));
 
 		const registry = makeRegistry();
 		await registry.hydrateExisting();
 
-		expect(registry.all().map((t) => t.login).sort()).toEqual(["alice", "bob"]);
-		expect(registry.findByInstallationId(333)?.login).toBe("alice");
-		expect(registry.findByInstallationId(444)?.login).toBe("bob");
+		expect(registry.all().map((t) => t.teamId).sort()).toEqual(["alpha", "bravo"]);
+		expect(registry.findByInstallationId(333)?.teamId).toBe("alpha");
+		expect(registry.findByInstallationId(444)?.teamId).toBe("bravo");
 	});
 
-	it("rejects a login that doesn't look like a real GitHub username before touching the filesystem", async () => {
+	it("rejects a team id that doesn't look like one this process minted before touching the filesystem", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 		const registry = makeRegistry();
 
 		await expect(registry.getOrCreate("../../etc/passwd")).rejects.toThrow();
+	});
+
+	describe("isInstallationBoundToOtherTeam", () => {
+		it("is false when no team has the installation bound", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+			const registry = makeRegistry();
+			await registry.getOrCreate("alpha");
+
+			expect(registry.isInstallationBoundToOtherTeam(555, "alpha")).toBe(false);
+		});
+
+		it("is false when the exempted team itself holds the installation", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+			const registry = makeRegistry();
+			const alpha = await registry.getOrCreate("alpha");
+			alpha.accountState.current = accountStateWith(binding({ installationId: 555 }));
+
+			expect(registry.isInstallationBoundToOtherTeam(555, "alpha")).toBe(false);
+		});
+
+		it("is true when a different team already holds the installation", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+			const registry = makeRegistry();
+			const alpha = await registry.getOrCreate("alpha");
+			await registry.getOrCreate("bravo");
+			alpha.accountState.current = accountStateWith(binding({ installationId: 555 }));
+
+			expect(registry.isInstallationBoundToOtherTeam(555, "bravo")).toBe(true);
+		});
 	});
 });

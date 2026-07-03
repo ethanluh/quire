@@ -127,7 +127,7 @@ describe("webhookRouter", () => {
 		};
 		const app = express();
 		app.use(express.raw({ type: "application/json" }));
-		app.use(webhookRouter((installationId) => (installationId === BINDING.installationId ? refreshDeps : undefined)));
+		app.use(webhookRouter((installationId) => (installationId === BINDING.installationId ? { refreshDeps } : undefined)));
 		server = app.listen(0);
 		return { refreshDeps, queue };
 	}

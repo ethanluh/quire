@@ -2,6 +2,13 @@ import { Router } from "express";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 
+// The slice of a TenantContext (see tenant.ts) a webhook delivery needs once resolved by
+// installation id. Kept as a narrow structural type here rather than importing
+// TenantContext directly so this route stays agnostic of how a tenant is actually built.
+export interface WebhookTenant {
+	refreshDeps: RefreshDeps;
+}
+
 export interface WebhookConfig {
 	publicUrl: string;
 	secret: string;
@@ -52,10 +59,10 @@ function parsePullRequestEvent(body: unknown): PullRequestEvent | undefined {
 // that middleware's comment) and a raw-body parser (see index.ts wiring). Not registered at
 // all unless a webhook secret is configured.
 //
-// findRefreshDeps resolves the tenant that owns the delivery's installation — a single
-// GitHub App receives every tenant's webhook deliveries on this one endpoint, so there is
-// no longer one shared RefreshDeps to fall back on (see TenantRegistry.findByInstallationId).
-export function webhookRouter(findRefreshDeps: (installationId: number) => RefreshDeps | undefined): Router {
+// findTenant resolves the tenant that owns the delivery's installation — a single GitHub
+// App receives every tenant's webhook deliveries on this one endpoint, so there is no
+// longer one shared RefreshDeps to fall back on (see TenantRegistry.findByInstallationId).
+export function webhookRouter(findTenant: (installationId: number) => WebhookTenant | undefined): Router {
 	const router = Router();
 
 	router.post("/", (req, res) => {
@@ -78,7 +85,8 @@ export function webhookRouter(findRefreshDeps: (installationId: number) => Refre
 		}
 
 		const parsed = parsePullRequestEvent(payload);
-		const refreshDeps = parsed?.installationId !== undefined ? findRefreshDeps(parsed.installationId) : undefined;
+		const tenant = parsed?.installationId !== undefined ? findTenant(parsed.installationId) : undefined;
+		const refreshDeps = tenant?.refreshDeps;
 		const selected = refreshDeps?.accountState.current.selectedRepo;
 		if (
 			parsed === undefined ||

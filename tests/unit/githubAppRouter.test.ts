@@ -3,9 +3,11 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
+import type { Request, Response, NextFunction } from "express";
 import { request as httpRequest } from "node:http";
 import type { Server } from "node:http";
 import { githubAppRouter } from "../../src/interface/server/routes/githubApp.js";
+import type { TeamRole } from "../../src/engine/types/team.js";
 import type { RepoSummary } from "../../src/engine/github/repos.js";
 import { GitHubClientHolder } from "../../src/engine/github/clientHolder.js";
 import type { GitHubClient } from "../../src/engine/github/client.js";
@@ -146,6 +148,7 @@ describe("githubAppRouter", () => {
 			accountLogin: "acme-corp",
 			accountType: "Organization",
 		}),
+		role: TeamRole = "owner",
 		// Selecting a repo repoints clientHolder to whatever buildClient returns for that
 		// installation — defaults to always handing back the same fixture-configured
 		// StubGitHubClient regardless of installationId, since a real buildInstallationClient
@@ -161,6 +164,7 @@ describe("githubAppRouter", () => {
 			repos,
 		) => repos,
 		listInstallationsForUser: (accessToken: string) => Promise<ReadonlyArray<AccessibleInstallation>> = async () => [],
+		isInstallationBoundToAnotherTeam: ((installationId: number) => boolean) | undefined = undefined,
 	): { accountPath: string; state: ServerState; refreshDeps: RefreshDeps; userTokenCache: UserTokenCache } {
 		const accountPath = join(dir, "installation.json");
 		const holder = new GitHubClientHolder(client);
@@ -187,6 +191,10 @@ describe("githubAppRouter", () => {
 		};
 		const app = express();
 		app.use(express.json());
+		app.use((_req: Request, res: Response, next: NextFunction) => {
+			res.locals.membership = { teamId: "test-team", role };
+			next();
+		});
 		if (loginForRequests !== undefined) {
 			app.use((_req, res, next) => {
 				res.locals.login = loginForRequests;
@@ -205,6 +213,7 @@ describe("githubAppRouter", () => {
 				userTokenCache,
 				enrichWithUserToken,
 				listInstallationsForUser,
+				isInstallationBoundToAnotherTeam,
 			),
 		);
 		app.use(errorHandler);
@@ -377,6 +386,36 @@ const { accountPath } = setup(async () => []);
 		expect(persisted.installations[0]?.["accountLogin"]).toBe("acme-corp-renamed");
 	});
 
+	it("refuses to bind an installation another team already has bound", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const { accountPath } = setup(
+			async () => [],
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			undefined,
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
+			undefined,
+			undefined,
+			async (repos) => repos,
+			undefined,
+			() => true,
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+		const start = await call(server, "POST", "/account/github/install/start");
+		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
+
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/install/callback?installation_id=555&state=${state}`,
+			cookiePair(start.setCookie),
+		);
+
+		expect(status).toBe(302);
+		expect(location).toBe("/?account=error&reason=this+GitHub+installation+is+already+connected+to+a+different+Quire+team");
+		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+	});
+
 	it("derives accountType from the real installation instead of hardcoding it", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, async () => ({
@@ -545,6 +584,7 @@ const { accountPath } = setup(async () => []);
 			new StubLlmProvider(),
 			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
 			undefined,
 			"octocat",
 			enrichWithUserToken,
@@ -574,6 +614,7 @@ const { accountPath } = setup(async () => []);
 			new StubLlmProvider(),
 			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
 			undefined,
 			"octocat",
 			enrichWithUserToken,
@@ -599,6 +640,7 @@ const { accountPath } = setup(async () => []);
 			new StubLlmProvider(),
 			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
 			undefined,
 			"octocat",
 		);
@@ -622,6 +664,7 @@ const { accountPath } = setup(async () => []);
 			new StubLlmProvider(),
 			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
 			undefined,
 			"octocat",
 		);
@@ -728,6 +771,7 @@ const { accountPath } = setup(async () => []);
 				],
 			},
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			undefined,
 			(installationId) => (installationId === 777 ? failingClient : workingClient),
 		);
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -847,6 +891,22 @@ const { accountPath } = setup(async () => []);
 
 			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
 			expect(persisted["autoMergeOnAccept"]).toBe(true);
+		});
+
+		it.each<TeamRole>(["admin", "member"])("rejects %s with 403 — this toggle changes team-wide merge policy", async (role) => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+				async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+				role,
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true });
+			expect(status).toBe(403);
 		});
 
 		it("returns 400 when no installation is bound", async () => {
@@ -1015,7 +1075,7 @@ const { accountPath } = setup(async () => []);
 	describe("GET /available-installations", () => {
 		it("reports needsReconnect when no user token is cached for the requester", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, undefined, undefined, "octocat");
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, undefined, undefined, undefined, "octocat");
 			await new Promise((resolve) => server.once("listening", resolve));
 
 			const { status, body } = await call(server, "GET", "/account/github/available-installations");
@@ -1033,6 +1093,7 @@ const { accountPath } = setup(async () => []);
 				async () => [],
 				new StubGitHubClient(),
 				new StubLlmProvider(),
+				undefined,
 				undefined,
 				undefined,
 				undefined,
@@ -1060,6 +1121,7 @@ const { accountPath } = setup(async () => []);
 				new StubGitHubClient(),
 				new StubLlmProvider(),
 				{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+				undefined,
 				undefined,
 				undefined,
 				"octocat",
