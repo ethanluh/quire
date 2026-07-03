@@ -185,7 +185,7 @@ describe("githubAppRouter", () => {
 		const { status, body } = await call(server, "GET", "/account/github/status");
 
 		expect(status).toBe(200);
-		expect(body).toEqual({ connected: false, autoMergeOnAccept: false });
+		expect(body).toEqual({ connected: false, autoMergeOnAccept: false, flagConflictsForFleet: false });
 	});
 
 	it("mints an installUrl pointing at the app's install page with a state param", async () => {
@@ -612,10 +612,13 @@ describe("githubAppRouter", () => {
 			});
 			await new Promise((resolve) => server.once("listening", resolve));
 
-			const { status, body } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true });
+			const { status, body } = await call(server, "POST", "/account/github/settings", {
+				autoMergeOnAccept: true,
+				flagConflictsForFleet: false,
+			});
 
 			expect(status).toBe(200);
-			expect(body).toEqual({ autoMergeOnAccept: true });
+			expect(body).toEqual({ autoMergeOnAccept: true, flagConflictsForFleet: false });
 
 			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
 			expect(persisted["autoMergeOnAccept"]).toBe(true);
@@ -626,7 +629,10 @@ describe("githubAppRouter", () => {
 			setup();
 			await new Promise((resolve) => server.once("listening", resolve));
 
-			const { status } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true });
+			const { status } = await call(server, "POST", "/account/github/settings", {
+				autoMergeOnAccept: true,
+				flagConflictsForFleet: false,
+			});
 
 			expect(status).toBe(400);
 		});
@@ -668,6 +674,7 @@ describe("githubAppRouter", () => {
 			connected: false,
 			selectedRepo: { owner: "acme-corp", name: "widgets" },
 			autoMergeOnAccept: true,
+			flagConflictsForFleet: false,
 		});
 	});
 

@@ -52,6 +52,9 @@ export interface GitHubClient {
 		action: GestureAction,
 		card: ReviewCard,
 	): Promise<void>;
+	// General-purpose plain-body comment, e.g. flagging an unresolved merge conflict for the
+	// user's own agent fleet to pick up (see mergeQueue.ts's shouldFlagForFleet).
+	postComment(owner: string, repo: string, prNumber: number, body: string): Promise<void>;
 	// undefined on a 404 — "no such file", not an error condition callers need to catch.
 	getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined>;
 	getDefaultBranch(owner: string, repo: string): Promise<string>;

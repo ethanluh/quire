@@ -273,6 +273,10 @@
           <input type="checkbox" id="chk-auto-merge">
           Automatically merge accepted bundles (skips the manual "Process next" step)
         </label>
+        <label class="auto-merge-toggle">
+          <input type="checkbox" id="chk-flag-conflicts-for-fleet">
+          Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
+        </label>
         <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
         <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
       </div>
@@ -908,6 +912,7 @@ async function loadAccount() {
     accountDisconnectBtn.style.display = 'block';
     repoPanel.style.display = 'block';
     document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
+    document.getElementById('chk-flag-conflicts-for-fleet').checked = status.flagConflictsForFleet ?? false;
     loadRepos(status.selectedRepo);
   } else {
     statusEl.textContent = status.selectedRepo
@@ -920,13 +925,28 @@ async function loadAccount() {
   }
 }
 
-document.getElementById('chk-auto-merge').addEventListener('change', async (e) => {
-  e.target.disabled = true;
+async function updateAccountSetting(key, value) {
+  const checkbox = key === 'autoMergeOnAccept'
+    ? document.getElementById('chk-auto-merge')
+    : document.getElementById('chk-flag-conflicts-for-fleet');
+  checkbox.disabled = true;
   try {
-    await api('POST', '/account/github/settings', { autoMergeOnAccept: e.target.checked });
+    await api('POST', '/account/github/settings', {
+      autoMergeOnAccept: document.getElementById('chk-auto-merge').checked,
+      flagConflictsForFleet: document.getElementById('chk-flag-conflicts-for-fleet').checked,
+      [key]: value,
+    });
   } finally {
-    e.target.disabled = false;
+    checkbox.disabled = false;
   }
+}
+
+document.getElementById('chk-auto-merge').addEventListener('change', (e) => {
+  updateAccountSetting('autoMergeOnAccept', e.target.checked);
+});
+
+document.getElementById('chk-flag-conflicts-for-fleet').addEventListener('change', (e) => {
+  updateAccountSetting('flagConflictsForFleet', e.target.checked);
 });
 
 installBtn.addEventListener('click', async () => {

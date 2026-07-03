@@ -11,7 +11,7 @@ const MERGEABLE_STATES: ReadonlyArray<MergeabilityState> = ["clean", "hasHooks",
 
 // Bounded backoff for GitHub's async mergeable_state computation — both the initial read
 // and the re-check after updateBranch()/commitResolvedFiles() poll on this same schedule.
-const DEFAULT_MERGEABILITY_POLL_DELAYS_MS: ReadonlyArray<number> = [1000, 2000, 4000, 4000, 4000];
+export const DEFAULT_MERGEABILITY_POLL_DELAYS_MS: ReadonlyArray<number> = [1000, 2000, 4000, 4000, 4000];
 
 type MergeableCheck = { ok: true; alreadyMerged?: boolean } | { ok: false; reason: string };
 
@@ -27,6 +27,10 @@ export class MergeQueue {
 		private readonly llmProviderHolder: LlmProviderHolder,
 		private readonly conflictLogPath: string,
 		private readonly mergeabilityPollDelaysMs: ReadonlyArray<number> = DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
+		// Live, swappable, same shape as llmProviderHolder — read at the moment a resolution
+		// fails rather than captured once at construction, so a mid-run settings change takes
+		// effect on the very next failure.
+		private readonly shouldFlagForFleet: () => boolean = () => false,
 	) {}
 
 	async load(): Promise<void> {
@@ -183,7 +187,17 @@ export class MergeQueue {
 			result.status === "resolved" ? "resolved" : "unresolved",
 			result.status === "failed" ? result.reason : undefined,
 		);
-		if (result.status === "failed") return { ok: false, reason: result.reason };
+		if (result.status === "failed") {
+			if (this.shouldFlagForFleet()) {
+				await this.github.postComment(
+					pr.repoOwner,
+					pr.repoName,
+					pr.number,
+					`Quire could not automatically resolve this PR's merge conflict:\n\n${result.reason}`,
+				);
+			}
+			return { ok: false, reason: result.reason };
+		}
 
 		// Give GitHub a moment to recompute mergeable_state after the new commit rather
 		// than immediately racing its own async recomputation with a merge attempt.

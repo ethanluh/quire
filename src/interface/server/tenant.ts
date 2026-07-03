@@ -12,7 +12,7 @@ import type { GitHubAppConfig } from "../../engine/github/installationClient.js"
 import { listInstallationRepositories } from "../../engine/github/repos.js";
 import type { RepoSummary } from "../../engine/github/repos.js";
 import type { UserTokenCache } from "../../engine/github/userTokenCache.js";
-import { MergeQueue } from "../../engine/queue/mergeQueue.js";
+import { MergeQueue, DEFAULT_MERGEABILITY_POLL_DELAYS_MS } from "../../engine/queue/mergeQueue.js";
 import { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
 import { PrEffectCache } from "../../engine/cache/prCache.js";
 import { AuditStore, loadAuditStore } from "../../engine/gate/auditStore.js";
@@ -142,7 +142,14 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : shared.resolveDefaultLlmProvider();
 	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
 
-	const queue = new MergeQueue(queuePath, clientHolder, llmProviderHolder, conflictLogPath);
+	const queue = new MergeQueue(
+		queuePath,
+		clientHolder,
+		llmProviderHolder,
+		conflictLogPath,
+		DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
+		() => accountState.current?.flagConflictsForFleet === true,
+	);
 	await queue.load();
 
 	const instrumentationSink = createNdjsonInstrumentationSink({ gateLogPath, driftScreenLogPath });
