@@ -43,7 +43,6 @@ Quire authenticates against GitHub as a GitHub App, not a personal access token.
    - **Pull requests**: Read & write (reading PRs/diffs; write is needed to merge a landed bundle, close a rejected PR, and mark a draft ready for review before merging)
    - **Contents**: Read & write (reading diffs; write is needed to create the merge commit and the revert commit)
    - **Issues**: Read & write (Quire posts a review-card comment on every gesture — accept, defer, or reject — via the Issues API, which PR comments go through)
-   - **Actions**: Read & write (dispatches each target repo's conflict-resolution workflow when a bundled PR has a merge conflict diff3 can't resolve on its own, and reads back the run it created)
    - **Metadata**: Read-only (mandatory default, selected automatically)
 
    If you upgrade an already-installed App's permissions later, GitHub requires the installation to accept the new permission set before write calls will succeed — for a personal install that's a one-click prompt on the app's page or in your notifications; for an org install, an org owner must approve it.
@@ -58,14 +57,11 @@ Quire authenticates against GitHub as a GitHub App, not a personal access token.
    - **Webhook secret** — set your own value under "Webhook" → `GITHUB_APP_WEBHOOK_SECRET`.
 6. Fill in the resulting values in your `.env` (copied from `.env.example`), then from the running app's Settings (gear icon in the header) click "Install GitHub App" to bind an installation — this is what's persisted (per team, under `data/teams/<teamId>/installation.json`) and used for API access, distinct from signing in. Every team gets its own installation, repo selection, and PR queue, fully isolated from every other team; teammates on the same team share all of it.
 
-## Conflict-resolution workflow
+## Conflict resolution
 
-The first time you select a repo, Quire opens a one-time setup PR (`src/engine/github/repoSetup.ts`) adding the declared-direction convention *and* a `.github/workflows/quire-resolve-conflict.yml` workflow that runs `anthropics/claude-code-action` to resolve a merge conflict Quire's own diff3 pass couldn't. Two things Quire can't do for you:
+When a bundled PR has a merge conflict, Quire resolves it in-process rather than dispatching anywhere: it fetches the three merge trees via the GitHub API, runs a real three-way merge (`node-diff3`), and for any file diff3 can't fully resolve, extracts the specific conflicting hunks (`src/engine/queue/conflictHunks.ts`). Hunks where both sides agree modulo whitespace resolve for free; the rest go through one batched call to Quire's own configured LLM account (`src/engine/queue/semanticHunkResolver.ts`) — the same account effect-list extraction already uses, so there's no separate key to provision for this. Any hunk the model isn't confident about fails the whole attempt, and the bundle surfaces as `"conflict"` in the merge queue (per INV-6) for a human to resolve manually or retry.
 
-- **Merge that setup PR before relying on it.** `workflow_dispatch` only works against a workflow file already on the repo's default branch — until the setup PR merges, a dirty PR that needs the Action will fail immediately with a "merge Quire's setup PR first" reason instead of hanging.
-- **Add an `ANTHROPIC_API_KEY` repo secret** (Settings → Secrets and variables → Actions, on the target repo) for `claude-code-action` to run. Quire has no API access to provision repo secrets and shouldn't — a missing key just fails the run visibly, surfaced as the conflict's reason.
-
-Quire learns the outcome primarily via a callback the workflow POSTs back to `/callbacks/action-resolution/:bundleId/resolution` (needs `QUIRE_PUBLIC_URL` configured, same constraint as the GitHub webhook above), authenticated by a random per-dispatch token rather than a shared secret — no extra secret to provision for this part. A periodic poll (`QUIRE_RESOLUTION_POLL_INTERVAL_MINUTES`, `QUIRE_RESOLUTION_TIMEOUT_MINUTES`) is the fallback if that callback never arrives.
+A separate periodic pass (`QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES`, default 5) fast-forwards queued PRs that have merely fallen "behind" main — a free GitHub merge, no LLM involved — before it's their turn to actually land. Without it, a bundle stuck behind several others landing ahead of it only gets checked once `dequeueNext()` finally reaches it, by which point "behind" may have drifted into a real conflict that needs the Action above.
 
 ## Docs
 

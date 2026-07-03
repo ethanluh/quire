@@ -2,9 +2,11 @@ import express from "express";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
-import { InstallationRevokedError } from "../../engine/github/installationClient.js";
+import { InstallationRevokedError, buildUserOctokit } from "../../engine/github/installationClient.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
 import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
+import { enrichWithStarredAndPinned } from "../../engine/github/repos.js";
+import type { RepoSummary } from "../../engine/github/repos.js";
 import { resolveLlmProvider } from "./resolveLlmProvider.js";
 import { resolveSessionSecret } from "./sessionSecret.js";
 import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken } from "../../engine/github/oauth.js";
@@ -24,8 +26,6 @@ import { migrateLegacyData } from "./migrateLegacyData.js";
 import { TeamStore } from "../../engine/team/teamStore.js";
 import type { WebhookConfig } from "./routes/webhook.js";
 import { webhookRouter } from "./routes/webhook.js";
-import { actionCallbackRouter } from "./routes/actionCallback.js";
-import { pollPendingResolutions } from "./resolutionPoll.js";
 import { verifyGithubSignature } from "./middleware/webhookSignature.js";
 import { errorHandler } from "./middleware/errors.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
@@ -41,10 +41,8 @@ const DATA_DIR = process.env.QUIRE_DATA_DIR ?? join(process.cwd(), "data");
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const RECONCILE_INTERVAL_MS =
 	parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "20", 10) * 60 * 1000;
-const RESOLUTION_POLL_INTERVAL_MS =
-	parseInt(process.env["QUIRE_RESOLUTION_POLL_INTERVAL_MINUTES"] ?? "2", 10) * 60 * 1000;
-const RESOLUTION_TIMEOUT_MS =
-	parseInt(process.env["QUIRE_RESOLUTION_TIMEOUT_MINUTES"] ?? "20", 10) * 60 * 1000;
+const QUEUE_REFRESH_INTERVAL_MS =
+	parseInt(process.env["QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES"] ?? "5", 10) * 60 * 1000;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -113,6 +111,8 @@ async function main(): Promise<void> {
 	// across every tenant's router the same way appConfig/appSlug are (see
 	// TenantSharedConfig), populated by accountRouter on sign-in.
 	const userTokenCache = createUserTokenCache();
+	const enrichWithUserToken = (repos: ReadonlyArray<RepoSummary>, accessToken: string) =>
+		enrichWithStarredAndPinned(repos, buildUserOctokit(accessToken));
 
 	const sharedConfig: TenantSharedConfig = {
 		dataDir: DATA_DIR,
@@ -123,10 +123,7 @@ async function main(): Promise<void> {
 		isProduction,
 		resolveDefaultLlmProvider: () => resolveLlmProvider(process.env),
 		userTokenCache,
-		// Each team's MergeQueue needs its own callback URL for the conflict-resolution
-		// Action to POST back to (see tenant.ts) — same QUIRE_PUBLIC_URL constraint as the
-		// GitHub webhook above applies per team, not just once globally.
-		publicUrl,
+		enrichWithUserToken,
 	};
 
 	// Every team gets its own isolated GitHub App installation, repo selection, PR queue,
@@ -144,15 +141,17 @@ async function main(): Promise<void> {
 	// so it must be parsed (and mounted) before the global express.json() below would
 	// otherwise consume the body as parsed JSON. Its own signature check is the trust
 	// boundary here, independent of session auth (GitHub's delivery carries no cookie).
-	// One App, one webhook endpoint, many tenants' installations — each delivery (both
-	// pull_request and workflow_run events) is routed to its owning tenant by the
-	// installation id it carries (see webhookRouter).
+	// One App, one webhook endpoint, many tenants' installations — each delivery is routed
+	// to its owning tenant by the installation id it carries (see webhookRouter).
 	if (webhookConfig !== undefined) {
 		app.use(
 			"/webhooks/github",
 			express.raw({ type: "application/json" }),
 			verifyGithubSignature(webhookConfig.secret),
-			webhookRouter((installationId) => registry.findByInstallationId(installationId)),
+			webhookRouter((installationId) => {
+				const tenant = registry.findByInstallationId(installationId);
+				return tenant !== undefined ? { refreshDeps: tenant.refreshDeps } : undefined;
+			}),
 		);
 		console.log("GitHub webhook receiver: enabled at /webhooks/github");
 	} else {
@@ -173,13 +172,6 @@ async function main(): Promise<void> {
 		"/account/github",
 		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache),
 	);
-
-	// A third carve-out alongside the two OAuth routes above and the HMAC-verified GitHub
-	// webhook: called by a GitHub Actions runner, not a logged-in user, so it authenticates
-	// via a per-dispatch capability token instead of a session cookie (see routes/
-	// actionCallback.ts). The bundleId in the callback URL doesn't carry a team, so the
-	// lookup scans every loaded tenant's queue for it (see TenantRegistry.findByBundleId).
-	app.use("/callbacks/action-resolution", actionCallbackRouter((bundleId) => registry.findByBundleId(bundleId)));
 
 	app.use(session);
 
@@ -236,20 +228,19 @@ async function main(): Promise<void> {
 	}, RECONCILE_INTERVAL_MS);
 	reconcileTimer.unref();
 
-	// Fallback for the conflict-resolution callback (see routes/actionCallback.ts): if the
-	// Action's callback never arrives (network blip, the workflow's final step itself
-	// failing), a "resolving" entry would otherwise wait forever. This only checks elapsed
-	// time, not the Action run's actual status — the callback remains the primary signal.
-	// Iterates every loaded tenant, same as the reconcile timer above — each team's queue
-	// times out on its own schedule, independent of every other team's.
-	const resolutionPollTimer = setInterval(() => {
+	// Keeps queued PRs from drifting far behind main while they wait their turn — a bundle
+	// stuck behind several others that land ahead of it would otherwise only get checked (and
+	// fast-forwarded) once dequeueNext() finally reaches it, by which point "behind" may have
+	// calcified into a real "dirty" conflict needing the in-process hunk resolver instead of a
+	// free merge. Iterates every known tenant's own queue, same as the reconcile timer above.
+	const queueRefreshTimer = setInterval(() => {
 		for (const tenant of registry.all()) {
-			pollPendingResolutions(tenant.queue, RESOLUTION_TIMEOUT_MS, tenant.conflictLogPath).catch((err: unknown) => {
-				console.error(`Resolution poll failed for ${tenant.teamId}:`, err);
+			tenant.queue.refreshQueuedBranches().catch((err: unknown) => {
+				console.error(`Queue branch refresh failed for ${tenant.teamId}:`, err);
 			});
 		}
-	}, RESOLUTION_POLL_INTERVAL_MS);
-	resolutionPollTimer.unref();
+	}, QUEUE_REFRESH_INTERVAL_MS);
+	queueRefreshTimer.unref();
 
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);

@@ -1,13 +1,5 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
-import type {
-	ConflictResolutionDispatchParams,
-	ConflictResolutionDispatchResult,
-	FoundOrCreatedPullRequest,
-	GitHubClient,
-	ListOpenPullRequestsResult,
-	RawPRPayload,
-	RepoFile,
-} from "./client.js";
+import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
 import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 
 // MergeQueue is constructed once at startup holding a reference to a GitHubClient.
@@ -54,6 +46,10 @@ export class GitHubClientHolder implements GitHubClient {
 		card: ReviewCard,
 	): Promise<void> {
 		return this.current.postReviewCardComment(owner, repo, prNumber, action, card);
+	}
+
+	postComment(owner: string, repo: string, prNumber: number, body: string): Promise<void> {
+		return this.current.postComment(owner, repo, prNumber, body);
 	}
 
 	getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined> {
@@ -107,13 +103,5 @@ export class GitHubClientHolder implements GitHubClient {
 		files: ReadonlyArray<ResolvedFile>,
 	): Promise<void> {
 		return this.current.commitResolvedFiles(owner, repo, prNumber, baseTipSha, files);
-	}
-
-	dispatchConflictResolution(
-		owner: string,
-		repo: string,
-		params: ConflictResolutionDispatchParams,
-	): Promise<ConflictResolutionDispatchResult> {
-		return this.current.dispatchConflictResolution(owner, repo, params);
 	}
 }

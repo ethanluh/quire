@@ -483,31 +483,6 @@ describe("OctokitGitHubClient", () => {
 		});
 	});
 
-	describe("dispatchConflictResolution", () => {
-		it("dispatches against the base branch, not the PR's head branch", async () => {
-			const { octokit, createWorkflowDispatch, listWorkflowRuns } = makeFakeOctokit({
-				workflowRuns: [{ id: 555, created_at: new Date(0).toISOString() }],
-			});
-			const client = new OctokitGitHubClient(octokit);
-			await client.dispatchConflictResolution("org", "repo", {
-				prNumber: 62,
-				headBranch: "claude/audit-overturn-tracking",
-				baseBranch: "main",
-				declaredDirection: "add overturn tracking",
-				callbackUrl: "https://quire.example/callbacks/action-resolution/bundle-1/resolution",
-				callbackToken: "token123",
-			});
-
-			// The head branch predates Quire's setup PR for plenty of real PRs, so its own
-			// copy of the workflow file may not declare workflow_dispatch at all — GitHub
-			// 422s in that case. The base branch is where the setup PR actually committed it.
-			expect(createWorkflowDispatch).toHaveBeenCalledWith(
-				expect.objectContaining({ ref: "main", inputs: expect.objectContaining({ head_branch: "claude/audit-overturn-tracking" }) }),
-			);
-			expect(listWorkflowRuns).toHaveBeenCalledWith(expect.objectContaining({ branch: "main" }));
-		});
-	});
-
 	describe("findOrCreatePullRequest", () => {
 		it("returns the existing open PR without creating a new one", async () => {
 			const { octokit, pullsCreate } = makeFakeOctokit({

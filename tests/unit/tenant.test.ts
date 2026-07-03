@@ -43,7 +43,7 @@ describe("TenantRegistry", () => {
 			isProduction: false,
 			resolveDefaultLlmProvider: () => ({ provider: new StubLlmProvider(), description: "stub" }),
 			userTokenCache: createUserTokenCache(),
-			publicUrl: undefined,
+			enrichWithUserToken: async (repos) => repos,
 		};
 		return new TenantRegistry(shared);
 	}

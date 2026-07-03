@@ -8,6 +8,10 @@ import type { SelectedRepo } from "./installation.js";
 export interface StoredPreferences {
 	selectedRepo?: SelectedRepo;
 	autoMergeOnAccept?: boolean;
+	// Opt-in: post an unresolved merge conflict's detail as a plain PR comment so an external
+	// agent fleet watching the repo's PRs can pick it up, instead of only recording it as the
+	// bundle's conflict.reason for a human to see inside Quire.
+	flagConflictsForFleet?: boolean;
 }
 
 function isStoredPreferences(value: unknown): value is StoredPreferences {

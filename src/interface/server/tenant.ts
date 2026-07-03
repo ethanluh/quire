@@ -10,8 +10,9 @@ import { loadPreferences, savePreferences } from "../../engine/github/preference
 import { buildInstallationClient, buildInstallationOctokit, buildUserOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
 import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../engine/github/repos.js";
+import type { RepoSummary } from "../../engine/github/repos.js";
 import type { UserTokenCache } from "../../engine/github/userTokenCache.js";
-import { MergeQueue } from "../../engine/queue/mergeQueue.js";
+import { MergeQueue, DEFAULT_MERGEABILITY_POLL_DELAYS_MS } from "../../engine/queue/mergeQueue.js";
 import { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
 import { PrEffectCache } from "../../engine/cache/prCache.js";
 import { AuditStore, loadAuditStore } from "../../engine/gate/auditStore.js";
@@ -56,13 +57,11 @@ export interface TenantSharedConfig {
 	analyzer: StaticAnalyzer;
 	isProduction: boolean;
 	resolveDefaultLlmProvider: () => ResolvedLlmProvider;
-	// Keyed by login, not team — a signed-in user's own GitHub OAuth token, used only to
-	// enrich the repo picker with their starred/pinned repos. Shared by every tenant's
-	// router for the same reason appConfig/appSlug are: it isn't per-account data.
+	// Keyed by login internally (see userTokenCache.ts), so — unlike everything else in
+	// TenantContext — this and its enrichment callback are safe to share across tenants:
+	// every caller only ever looks up the current request's own signed-in login.
 	userTokenCache: UserTokenCache;
-	// Undefined when QUIRE_PUBLIC_URL isn't configured — each team's MergeQueue derives its
-	// own callback URL from this (see loadTenant), same constraint as the GitHub webhook.
-	publicUrl: string | undefined;
+	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>;
 }
 
 // Everything that used to be a single process-wide singleton (accountState, the GitHub
@@ -85,8 +84,8 @@ export interface TenantContext {
 	prCache: PrEffectCache;
 	auditStore: AuditStore;
 	refreshDeps: RefreshDeps;
-	// Exposed so index.ts's resolution-poll timer and webhookRouter's workflow_run handling
-	// can log to the right team's instrumentation file instead of a single global one.
+	// Exposed so index.ts's per-tenant timers and webhookRouter can log to the right
+	// team's instrumentation file instead of a single global one.
 	conflictLogPath: string;
 	// Every route mounted behind a session, composed once per tenant from the exact same
 	// router factories index.ts used to call once at startup — building N independent
@@ -151,11 +150,14 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : shared.resolveDefaultLlmProvider();
 	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
 
-	// The conflict-resolution Action's callback needs a real reachable URL — same constraint
-	// as the GitHub webhook. Without QUIRE_PUBLIC_URL, dispatching a conflict fails fast
-	// instead of waiting on a callback that could never arrive.
-	const callbackBaseUrl = shared.publicUrl !== undefined ? `${shared.publicUrl}/callbacks/action-resolution` : undefined;
-	const queue = new MergeQueue(queuePath, clientHolder, callbackBaseUrl, conflictLogPath);
+	const queue = new MergeQueue(
+		queuePath,
+		clientHolder,
+		llmProviderHolder,
+		conflictLogPath,
+		DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
+		() => accountState.current?.flagConflictsForFleet === true,
+	);
 	await queue.load();
 
 	const instrumentationSink = createNdjsonInstrumentationSink({ gateLogPath, driftScreenLogPath });
@@ -270,17 +272,6 @@ export class TenantRegistry {
 			if (tenant.accountState.current?.installationId === installationId) return tenant;
 		}
 		return undefined;
-	}
-
-	// The conflict-resolution Action's callback (routes/actionCallback.ts) and its webhook
-	// workflow_run fallback both only carry a bundleId, not a teamId — a bundleId is unique
-	// across every team's queue (see mergeQueue.ts's id generation), so scanning every
-	// loaded tenant's queue for it is the only way to find who owns it.
-	async findByBundleId(bundleId: string): Promise<TenantContext | undefined> {
-		const matches = await Promise.all(
-			[...this.tenants.values()].map(async (tenant) => ((await tenant.queue.getEntry(bundleId)) !== undefined ? tenant : undefined)),
-		);
-		return matches.find((tenant): tenant is TenantContext => tenant !== undefined);
 	}
 
 	// True when some OTHER already-loaded team has this installation bound. Checked by

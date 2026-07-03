@@ -109,6 +109,9 @@ body {
 	font-size: var(--text-sm);
 	color: var(--color-text-secondary);
 	font-style: italic;
+	/* A conflict reason can now span multiple lines (hunk content, base/ours/theirs) —
+	   preserve them instead of collapsing to one run-on line. */
+	white-space: pre-wrap;
 }
 
 /* Gesture buttons — outlined; fill only on interaction. */

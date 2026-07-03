@@ -20,7 +20,7 @@ import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
-import { CONFLICT_RESOLUTION_WORKFLOW_CONTENT, WORKFLOW_CONTENT } from "../../src/engine/github/repoSetup.js";
+import { WORKFLOW_CONTENT } from "../../src/engine/github/repoSetup.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { InstallationBinding } from "../../src/engine/github/installation.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
@@ -194,7 +194,7 @@ describe("githubAppRouter", () => {
 		const { status, body } = await call(server, "GET", "/account/github/status");
 
 		expect(status).toBe(200);
-		expect(body).toEqual({ connected: false, autoMergeOnAccept: false });
+		expect(body).toEqual({ connected: false, autoMergeOnAccept: false, flagConflictsForFleet: false });
 	});
 
 	it("mints an installUrl pointing at the app's install page with a state param", async () => {
@@ -501,6 +501,50 @@ describe("githubAppRouter", () => {
 		expect(body["repos"]).toEqual(repos);
 	});
 
+	it("reports sortingAvailable: false when no user token is cached (e.g. right after a redeploy)", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main", starred: false, pinned: false },
+		];
+		setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"octocat",
+		);
+		// Deliberately not calling userTokenCache.set — no cached token for "octocat".
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(body["sortingAvailable"]).toBe(false);
+	});
+
+	it("reports sortingAvailable: true when a user token is cached for the requester", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main", starred: false, pinned: false },
+		];
+		const { userTokenCache } = setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"octocat",
+		);
+		userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(body["sortingAvailable"]).toBe(true);
+	});
+
 	it("returns 400 for /repos when no installation is bound", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		setup();
@@ -578,8 +622,6 @@ describe("githubAppRouter", () => {
 				"## Declared direction\n\n<!-- declared-direction: ... -->\n",
 			);
 			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-declared-direction.yml", WORKFLOW_CONTENT);
-			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-resolve-conflict.yml", CONFLICT_RESOLUTION_WORKFLOW_CONTENT);
-			client.seedFile("acme-corp", "widgets", "CLAUDE.md", "# CLAUDE.md\n\n## Quire conflict-resolution guidance\n\n...\n");
 			setup(async () => [], client, new StubLlmProvider(), {
 				installationId: 555,
 				accountLogin: "acme-corp",
@@ -653,10 +695,13 @@ describe("githubAppRouter", () => {
 			});
 			await new Promise((resolve) => server.once("listening", resolve));
 
-			const { status, body } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true });
+			const { status, body } = await call(server, "POST", "/account/github/settings", {
+				autoMergeOnAccept: true,
+				flagConflictsForFleet: false,
+			});
 
 			expect(status).toBe(200);
-			expect(body).toEqual({ autoMergeOnAccept: true });
+			expect(body).toEqual({ autoMergeOnAccept: true, flagConflictsForFleet: false });
 
 			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
 			expect(persisted["autoMergeOnAccept"]).toBe(true);
@@ -683,7 +728,10 @@ describe("githubAppRouter", () => {
 			setup();
 			await new Promise((resolve) => server.once("listening", resolve));
 
-			const { status } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true });
+			const { status } = await call(server, "POST", "/account/github/settings", {
+				autoMergeOnAccept: true,
+				flagConflictsForFleet: false,
+			});
 
 			expect(status).toBe(400);
 		});
@@ -725,6 +773,7 @@ describe("githubAppRouter", () => {
 			connected: false,
 			selectedRepo: { owner: "acme-corp", name: "widgets" },
 			autoMergeOnAccept: true,
+			flagConflictsForFleet: false,
 		});
 	});
 

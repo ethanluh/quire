@@ -21,6 +21,7 @@ const SelectRepoSchema = z.object({
 
 const SettingsSchema = z.object({
 	autoMergeOnAccept: z.boolean(),
+	flagConflictsForFleet: z.boolean(),
 });
 
 const INSTALL_STATE_COOKIE_NAME = "quire_install_state";
@@ -65,6 +66,7 @@ export function githubAppRouter(
 				connected: false,
 				selectedRepo: accountState.preferences.selectedRepo,
 				autoMergeOnAccept: accountState.preferences.autoMergeOnAccept ?? false,
+				flagConflictsForFleet: accountState.preferences.flagConflictsForFleet ?? false,
 			});
 			return;
 		}
@@ -75,6 +77,7 @@ export function githubAppRouter(
 			boundAt: binding.boundAt,
 			selectedRepo: binding.selectedRepo,
 			autoMergeOnAccept: binding.autoMergeOnAccept ?? false,
+			flagConflictsForFleet: binding.flagConflictsForFleet ?? false,
 		});
 	});
 
@@ -87,13 +90,13 @@ export function githubAppRouter(
 				res.status(400).json({ error: "Install the GitHub App first" });
 				return;
 			}
-			const { autoMergeOnAccept } = req.body as z.infer<typeof SettingsSchema>;
-			const updated: InstallationBinding = { ...current, autoMergeOnAccept };
+			const { autoMergeOnAccept, flagConflictsForFleet } = req.body as z.infer<typeof SettingsSchema>;
+			const updated: InstallationBinding = { ...current, autoMergeOnAccept, flagConflictsForFleet };
 			accountState.current = updated;
 			await saveInstallation(accountPath, updated);
-			accountState.preferences = { ...accountState.preferences, autoMergeOnAccept };
+			accountState.preferences = { ...accountState.preferences, autoMergeOnAccept, flagConflictsForFleet };
 			await savePreferences(preferencesPath, accountState.preferences);
-			res.json({ autoMergeOnAccept });
+			res.json({ autoMergeOnAccept, flagConflictsForFleet });
 		} catch (err) {
 			next(err);
 		}
@@ -161,6 +164,9 @@ export function githubAppRouter(
 				...(accountState.preferences.autoMergeOnAccept !== undefined
 					? { autoMergeOnAccept: accountState.preferences.autoMergeOnAccept }
 					: {}),
+				...(accountState.preferences.flagConflictsForFleet !== undefined
+					? { flagConflictsForFleet: accountState.preferences.flagConflictsForFleet }
+					: {}),
 			};
 			accountState.current = binding;
 			clientHolder.setClient(buildInstallationClient(appConfig, installationId));
@@ -196,7 +202,7 @@ export function githubAppRouter(
 			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
 			const responseRepos = userToken !== undefined ? await enrichWithUserToken(repos, userToken) : repos;
 
-			res.json({ repos: responseRepos, selected: binding.selectedRepo });
+			res.json({ repos: responseRepos, selected: binding.selectedRepo, sortingAvailable: userToken !== undefined });
 		} catch (err) {
 			next(err);
 		}

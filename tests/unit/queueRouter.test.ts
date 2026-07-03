@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { queueRouter } from "../../src/interface/server/routes/queue.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import { StubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.js";
+import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { createServerState } from "../../src/interface/server/state.js";
 import type { Bundle, ReviewCard } from "../../src/engine/types/core.js";
@@ -69,7 +71,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 
 	beforeEach(async () => {
 		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
-		queue = new MergeQueue(join(dataDir, "queue.json"), new StubGitHubClient(), "https://quire.example.com/callbacks/action-resolution", join(dataDir, "conflict.ndjson"));
+		queue = new MergeQueue(join(dataDir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dataDir, "conflict.ndjson"));
 		await queue.load();
 		state = createServerState();
 		decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
@@ -148,7 +150,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 				bundle.members[0]!.number,
 				{ state: "blocked", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
 			);
-			const localQueue = new MergeQueue(join(dataDir, "queue2.json"), github, "https://quire.example.com/callbacks/action-resolution", join(dataDir, "conflict.ndjson"));
+			const localQueue = new MergeQueue(join(dataDir, "queue2.json"), github, new LlmProviderHolder(new StubLlmProvider()), join(dataDir, "conflict.ndjson"));
 			await localQueue.load();
 			await localQueue.enqueue(bundle);
 
@@ -173,7 +175,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 	});
 
 	describe("POST /:bundleId/retry", () => {
-		it("returns 400 when the bundle isn't in a conflict state", async () => {
+		it("returns 400 when the bundle isn't in a conflict or aborted state", async () => {
 			await queue.enqueue(makeBundle("bundle-1"));
 
 			const res = await fetch(`${baseUrl}/queue/bundle-1/retry`, { method: "POST" });
@@ -190,7 +192,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 				bundle.members[0]!.number,
 				{ state: "blocked", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
 			);
-			const localQueue = new MergeQueue(join(dataDir, "queue3.json"), github, "https://quire.example.com/callbacks/action-resolution", join(dataDir, "conflict.ndjson"));
+			const localQueue = new MergeQueue(join(dataDir, "queue3.json"), github, new LlmProviderHolder(new StubLlmProvider()), join(dataDir, "conflict.ndjson"));
 			await localQueue.load();
 			await localQueue.enqueue(bundle);
 			await localQueue.dequeueNext();
@@ -212,6 +214,86 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const entry = await localQueue.getEntry("bundle-1");
 			expect(entry?.status).toBe("queued");
 			expect(entry?.conflict).toBeUndefined();
+
+			await new Promise<void>((resolve) => localServer.close(() => resolve()));
+		});
+
+		it("requeues an aborted bundle", async () => {
+			const github = new StubGitHubClient();
+			const bundle = makeBundle("bundle-1");
+			github.setMergeability(
+				bundle.members[0]!.repoOwner,
+				bundle.members[0]!.repoName,
+				bundle.members[0]!.number,
+				{ state: "blocked", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
+			);
+			const localQueue = new MergeQueue(join(dataDir, "queue5.json"), github, new LlmProviderHolder(new StubLlmProvider()), join(dataDir, "conflict.ndjson"));
+			await localQueue.load();
+			await localQueue.enqueue(bundle);
+			await localQueue.dequeueNext();
+			await localQueue.abort("bundle-1");
+
+			const localApp = express();
+			localApp.use(express.json());
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore));
+			const localServer = await new Promise<Server>((resolve) => {
+				const s = localApp.listen(0, () => resolve(s));
+			});
+			const address = localServer.address();
+			if (address === null || typeof address === "string") throw new Error("expected AddressInfo");
+
+			const res = await fetch(`http://127.0.0.1:${address.port}/queue/bundle-1/retry`, { method: "POST" });
+			expect(res.status).toBe(200);
+			expect(await res.json()).toEqual({ status: "queued", bundleId: "bundle-1" });
+
+			const entry = await localQueue.getEntry("bundle-1");
+			expect(entry?.status).toBe("queued");
+			expect(entry?.abortedAt).toBeUndefined();
+
+			await new Promise<void>((resolve) => localServer.close(() => resolve()));
+		});
+	});
+
+	describe("POST /:bundleId/abort", () => {
+		it("returns 400 when the bundle isn't in an abortable state", async () => {
+			await queue.enqueue(makeBundle("bundle-1"));
+
+			const res = await fetch(`${baseUrl}/queue/bundle-1/abort`, { method: "POST" });
+
+			expect(res.status).toBe(400);
+		});
+
+		it("aborts a conflicted bundle without restoring its card to the review queue", async () => {
+			const github = new StubGitHubClient();
+			const bundle = makeBundle("bundle-1");
+			github.setMergeability(
+				bundle.members[0]!.repoOwner,
+				bundle.members[0]!.repoName,
+				bundle.members[0]!.number,
+				{ state: "blocked", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
+			);
+			const localQueue = new MergeQueue(join(dataDir, "queue4.json"), github, new LlmProviderHolder(new StubLlmProvider()), join(dataDir, "conflict.ndjson"));
+			await localQueue.load();
+			await localQueue.enqueue(bundle, makeCard("bundle-1"));
+			await localQueue.dequeueNext();
+
+			const localApp = express();
+			localApp.use(express.json());
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore));
+			const localServer = await new Promise<Server>((resolve) => {
+				const s = localApp.listen(0, () => resolve(s));
+			});
+			const address = localServer.address();
+			if (address === null || typeof address === "string") throw new Error("expected AddressInfo");
+
+			const res = await fetch(`http://127.0.0.1:${address.port}/queue/bundle-1/abort`, { method: "POST" });
+			expect(res.status).toBe(200);
+			expect(await res.json()).toEqual({ status: "aborted", bundleId: "bundle-1" });
+
+			const entry = await localQueue.getEntry("bundle-1");
+			expect(entry?.status).toBe("aborted");
+			expect(entry?.conflict).toBeUndefined();
+			expect(state.cards.has("bundle-1")).toBe(false);
 
 			await new Promise<void>((resolve) => localServer.close(() => resolve()));
 		});

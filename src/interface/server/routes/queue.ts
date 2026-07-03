@@ -1,28 +1,15 @@
 import { Router } from "express";
 import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
-import type { MergeQueueEntry } from "../../../engine/types/queue.js";
 import type { ServerState } from "../state.js";
 import { requireRole } from "../middleware/requireRole.js";
-
-type RedactedMergeQueueEntry = Omit<MergeQueueEntry, "resolution"> & {
-	resolution?: Omit<NonNullable<MergeQueueEntry["resolution"]>, "callbackToken">;
-};
-
-// callbackToken is a bearer capability for the Action's callback — it must never reach a
-// client, so every entry serialized to a response goes through this first.
-function redactEntry(entry: MergeQueueEntry): RedactedMergeQueueEntry {
-	if (entry.resolution === undefined) return entry;
-	const { callbackToken: _callbackToken, ...rest } = entry.resolution;
-	return { ...entry, resolution: rest };
-}
 
 export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore: DecidedPrStore): Router {
 	const router = Router();
 
 	router.get("/", async (_req, res, next) => {
 		try {
-			res.json((await queue.listEntries()).map(redactEntry));
+			res.json(await queue.listEntries());
 		} catch (err) {
 			next(err);
 		}
@@ -50,19 +37,35 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 	});
 
 	// A bundle stuck in "conflict" (automated resolution didn't apply or couldn't confidently
-	// resolve it — see INV-6) goes back to "queued" so the next /process pass tries again,
-	// whether the human fixed it manually on GitHub or just wants another attempt. Also accepts
-	// "resolving", so a human watching the dispatched Action's run isn't stuck waiting out the
-	// poll timeout before they can retry.
+	// resolve it — see INV-6) or "aborted" (a human gave up on it earlier) goes back to
+	// "queued" so the next /process pass tries again.
 	router.post("/:bundleId/retry", requireRole("owner"), async (req, res, next) => {
 		try {
 			const bundleId = req.params["bundleId"] ?? "";
-			const retried = await queue.retryConflict(bundleId);
+			const retried = await queue.reattempt(bundleId);
 			if (retried === undefined) {
-				res.status(400).json({ error: `Bundle ${bundleId} is not in a conflict or resolving state` });
+				res.status(400).json({ error: `Bundle ${bundleId} is not in a conflict or aborted state` });
 				return;
 			}
 			res.json({ status: "queued", bundleId });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// A bundle stuck mid-landing (possibly with some members already merged) or blocked on
+	// conflict — the human is giving up on it rather than continuing to retry. Does not
+	// revert mergedPrIds (see MergeQueue.abort); a separate DELETE /:bundleId/prs/:prId call
+	// handles that per PR.
+	router.post("/:bundleId/abort", requireRole("owner"), async (req, res, next) => {
+		try {
+			const bundleId = req.params["bundleId"] ?? "";
+			const aborted = await queue.abort(bundleId);
+			if (aborted === undefined) {
+				res.status(400).json({ error: `Bundle ${bundleId} is not in an abortable state` });
+				return;
+			}
+			res.json({ status: "aborted", bundleId });
 		} catch (err) {
 			next(err);
 		}
