@@ -28,9 +28,14 @@ jobs:
     # Confirmed against a live run (28638454529): with no permission-mode/max-turns set, Claude
     # burned 25 turns and hit 8 tool-permission denials working around the interactive-style
     # default, took 8m27s, and still left conflict markers behind. This job's checkout is
-    # disposable and single-purpose (contents: write only), so bypassPermissions is safe here;
-    # max-turns bounds the cost/time of a PR it genuinely can't resolve.
-    timeout-minutes: 15
+    # disposable and single-purpose (contents: write only), so bypassPermissions is safe here.
+    # A follow-up run (28639881277) confirmed bypassPermissions eliminated the denials (0, down
+    # from 8) but hit an initial max-turns of 15 anyway: it was a genuine semantic conflict (two
+    # branches independently reshaping the same constructor), and cross-referencing HEAD vs.
+    # MERGE_HEAD across five files ate all 15 turns before a single edit landed. Sized up to give
+    # that kind of investigation-then-edit conflict room to actually finish, while still bounding
+    # the worst case well below GitHub's 6-hour default.
+    timeout-minutes: 25
     permissions:
       contents: write
       # claude-code-action authenticates via GitHub's OIDC provider, which requires this
@@ -59,7 +64,7 @@ jobs:
           allowed_bots: ${{ github.actor }}
           claude_args: |
             --permission-mode bypassPermissions
-            --max-turns 15
+            --max-turns 40
           show_full_output: true
           prompt: |
             Resolve every remaining git merge conflict in this working tree (files still
@@ -70,8 +75,13 @@ jobs:
             confidently resolve a conflict, write the reason to a file named
             .quire-unresolved at the repo root instead of guessing.
 
+      # if: always() so a Claude-step failure (e.g. hitting --max-turns) still gets an accurate
+      # reason reported back to Quire instead of the generic fallback message in the report
+      # step below — and so a lucky finish on the very last turn still gets picked up and
+      # committed rather than discarded.
       - name: Verify no conflict markers remain
         id: verify
+        if: always()
         run: |
           if [ -f .quire-unresolved ]; then
             echo "resolved=false" >> "$GITHUB_OUTPUT"
