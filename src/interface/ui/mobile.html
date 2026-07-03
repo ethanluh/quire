@@ -114,6 +114,8 @@
     padding-right: var(--space-8);
   }
   .account-panel .btn, .settings-section .btn { margin-top: var(--space-3); width: 100%; text-align: center; }
+  .settings-btn-row { margin-top: var(--space-3); }
+  .settings-btn-row .btn { width: auto; margin-top: 0; }
   .account-panel + .account-panel { margin-top: var(--space-6); }
   .account-status { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); font-size: var(--text-sm); }
   .account-status .login { font-weight: var(--weight-medium); color: var(--color-text-primary); }
@@ -161,12 +163,12 @@
   nav.tabbar .tab.active { color: var(--color-brand); border-top-color: var(--color-brand); }
 
   .tab-badge {
-    position: absolute; top: -4px; right: -8px;
-    min-width: 16px; height: 16px; padding: 0 4px;
+    position: absolute; top: -6px; right: -10px;
+    min-width: 20px; height: 20px; padding: 0 5px;
     border-radius: var(--radius-pill);
     background: var(--color-brand); color: #fff;
-    font-size: 10px; font-weight: var(--weight-semibold);
-    line-height: 16px; text-align: center;
+    font-size: 12px; font-weight: var(--weight-semibold);
+    line-height: 20px; text-align: center;
   }
 
   #toast {
@@ -183,7 +185,7 @@
   <h1>Quire</h1>
   <span class="subtitle">Mobile triage</span>
   <span class="subtitle" id="signed-in-as" style="display:none"></span>
-  <button class="btn btn-defer btn-settings" id="btn-settings" title="Settings" style="display:none">&#9881;</button>
+  <button class="btn btn-defer btn-settings" id="btn-settings" title="Settings" style="display:none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
 </header>
 
 <div class="modal-backdrop" id="signin-gate" style="display:none">
@@ -206,9 +208,6 @@
       <span>accept <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span>
     </div>
     <div class="tap-gestures">
-      <button class="btn btn-reject" id="btn-tap-reject">Reject</button>
-      <button class="btn btn-defer" id="btn-tap-defer">Defer</button>
-      <button class="btn btn-accept" id="btn-tap-accept">Accept</button>
       <button class="btn" id="btn-tap-details">Details</button>
     </div>
   </div>
@@ -236,8 +235,10 @@
 
     <div class="settings-section">
       <h4>Preferences</h4>
-      <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
-      <a class="btn btn-defer" id="link-desktop" href="index.html?desktop=1">Desktop view</a>
+      <div class="settings-btn-row">
+        <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+        <a class="btn btn-defer" id="link-desktop" href="index.html?desktop=1">Desktop view</a>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -701,19 +702,6 @@ function commit(el, card, action, flyTransform) {
   });
 }
 
-function tapGesture(action) {
-  if (!reviewCards.length || gestureInFlight || !topCardEl) return;
-  const card = reviewCards[0];
-  const el = topCardEl;
-  const flyTransform = action === 'accept' ? 'translate(900px, 0) rotate(20deg)'
-    : action === 'reject' ? 'translate(-900px, 0) rotate(-20deg)'
-    : 'translate(0, 600px) rotate(0deg)';
-  commit(el, card, action, flyTransform);
-}
-
-document.getElementById('btn-tap-accept').addEventListener('click', () => tapGesture('accept'));
-document.getElementById('btn-tap-defer').addEventListener('click', () => tapGesture('defer'));
-document.getElementById('btn-tap-reject').addEventListener('click', () => tapGesture('reject'));
 document.getElementById('btn-tap-details').addEventListener('click', () => {
   if (reviewCards.length) showBundleDetail(reviewCards[0].bundleId);
 });
