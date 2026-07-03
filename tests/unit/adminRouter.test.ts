@@ -126,7 +126,7 @@ describe("adminRouter POST /reset", () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-admin-"));
 		const state = createServerState();
 		const auditStore = new AuditStore();
-		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new StubLlmProvider(), join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson"));
 		await queue.load();
 		const decidedStore = new DecidedPrStore(join(dir, "decided-prs.json"));
 
