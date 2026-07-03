@@ -1,7 +1,17 @@
 import type { Octokit } from "@octokit/rest";
+import { RequestError } from "@octokit/request-error";
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import { formatReviewCardComment } from "../review/comment.js";
-import type { GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
+import type {
+	FoundOrCreatedPullRequest,
+	GitHubClient,
+	ListOpenPullRequestsResult,
+	RawPRPayload,
+	RepoFile,
+} from "./client.js";
+import { BinaryFileError } from "./client.js";
+import type { ConflictTrees, MergeabilityResult, MergeabilityState, ResolvedFile, TreeEntry } from "../types/mergeability.js";
+import { NotFastForwardError } from "../types/mergeability.js";
 
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
 // declares direction in an HTML comment so it renders invisibly in the PR body.
@@ -72,6 +82,60 @@ async function mapWithConcurrency<T, R>(
 	return results;
 }
 
+function isNotFoundError(err: unknown): boolean {
+	return typeof err === "object" && err !== null && "status" in err && (err as { status: unknown }).status === 404;
+}
+
+// Thrown when the GitHub App's installation has read-only access but the call needs
+// write (merge/close/revert/comment) — surfaces as a raw, unhelpful 403 from GitHub
+// otherwise ("Resource not accessible by integration"). See README's "GitHub App setup".
+export class InsufficientGitHubPermissionError extends Error {}
+
+function isInsufficientPermission(err: unknown): boolean {
+	return err instanceof RequestError
+		&& err.status === 403
+		&& /Resource not accessible by integration/i.test(err.message);
+}
+
+async function withPermissionHint<T>(action: string, fn: () => Promise<T>): Promise<T> {
+	try {
+		return await fn();
+	} catch (err) {
+		if (isInsufficientPermission(err)) {
+			throw new InsufficientGitHubPermissionError(
+				`GitHub App is missing the permission needed to ${action}. See README.md's "GitHub App setup" section for the required permissions, then re-approve the installation.`,
+			);
+		}
+		throw err;
+	}
+}
+
+// GitHub's `mergeable_state` is an untyped string in Octokit's own schema (it has grown
+// new values before) — map it once, here, to the closed union the rest of the codebase
+// works with. Anything not explicitly recognized falls into "unrecognized", the same
+// fail-closed bucket as "blocked": not something conflict resolution should ever attempt.
+function normalizeMergeableState(draft: boolean, mergeableState: string): MergeabilityState {
+	if (draft) return "draft";
+	switch (mergeableState) {
+		case "clean":
+			return "clean";
+		case "has_hooks":
+			return "hasHooks";
+		case "behind":
+			return "behind";
+		case "dirty":
+			return "dirty";
+		case "blocked":
+			return "blocked";
+		case "unstable":
+			return "unstable";
+		case "unknown":
+			return "unknownPending";
+		default:
+			return "unrecognized";
+	}
+}
+
 function extractDeclaredDirection(body: string | null, owner: string, repo: string, prNumber: number): string {
 	const match = body !== null ? DECLARED_DIRECTION_MARKER.exec(body) : null;
 	const direction = match?.[1]?.trim();
@@ -117,23 +181,29 @@ export class OctokitGitHubClient implements GitHubClient {
 	}
 
 	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
-		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-		if (pr.draft === true) {
-			await this.octokit.graphql(MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION, { pullRequestId: pr.node_id });
-		}
-		await this.octokit.rest.pulls.merge({ owner, repo, pull_number: prNumber });
+		await withPermissionHint("merge a pull request", async () => {
+			const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+			if (pr.draft === true) {
+				await this.octokit.graphql(MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION, { pullRequestId: pr.node_id });
+			}
+			await this.octokit.rest.pulls.merge({ owner, repo, pull_number: prNumber });
+		});
 	}
 
 	async closePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
-		await this.octokit.rest.pulls.update({ owner, repo, pull_number: prNumber, state: "closed" });
+		await withPermissionHint("close a pull request", () =>
+			this.octokit.rest.pulls.update({ owner, repo, pull_number: prNumber, state: "closed" }),
+		);
 	}
 
 	async revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string> {
-		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-		const result = await this.octokit.graphql<RevertPullRequestResponse>(REVERT_PULL_REQUEST_MUTATION, {
-			pullRequestId: pr.node_id,
+		return withPermissionHint("revert a pull request", async () => {
+			const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+			const result = await this.octokit.graphql<RevertPullRequestResponse>(REVERT_PULL_REQUEST_MUTATION, {
+				pullRequestId: pr.node_id,
+			});
+			return result.revertPullRequest.pullRequest.url;
 		});
-		return result.revertPullRequest.pullRequest.url;
 	}
 
 	async postReviewCardComment(
@@ -143,12 +213,249 @@ export class OctokitGitHubClient implements GitHubClient {
 		action: GestureAction,
 		card: ReviewCard,
 	): Promise<void> {
-		await this.octokit.rest.issues.createComment({
+		await withPermissionHint("post a review card comment", () =>
+			this.octokit.rest.issues.createComment({
+				owner,
+				repo,
+				issue_number: prNumber,
+				body: formatReviewCardComment(action, card),
+			}),
+		);
+	}
+
+	async getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined> {
+		return this.getFileContentAtRef(owner, repo, path, undefined);
+	}
+
+	async getDefaultBranch(owner: string, repo: string): Promise<string> {
+		const { data } = await this.octokit.rest.repos.get({ owner, repo });
+		return data.default_branch;
+	}
+
+	async commitFileToBranch(
+		owner: string,
+		repo: string,
+		branch: string,
+		path: string,
+		content: string,
+		message: string,
+	): Promise<void> {
+		await withPermissionHint("create or update a file in a repo", async () => {
+			const branchRef = `heads/${branch}`;
+			try {
+				await this.octokit.rest.git.getRef({ owner, repo, ref: branchRef });
+			} catch (err) {
+				if (!isNotFoundError(err)) throw err;
+				const defaultBranch = await this.getDefaultBranch(owner, repo);
+				const { data: defaultRef } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
+				await this.octokit.rest.git.createRef({ owner, repo, ref: `refs/${branchRef}`, sha: defaultRef.object.sha });
+			}
+
+			const existing = await this.getFileContentAtRef(owner, repo, path, branch);
+			await this.octokit.rest.repos.createOrUpdateFileContents({
+				owner,
+				repo,
+				path,
+				message,
+				content: Buffer.from(content, "utf8").toString("base64"),
+				branch,
+				...(existing !== undefined ? { sha: existing.sha } : {}),
+			});
+		});
+	}
+
+	async findOrCreatePullRequest(
+		owner: string,
+		repo: string,
+		params: { head: string; base: string; title: string; body: string },
+	): Promise<FoundOrCreatedPullRequest> {
+		return withPermissionHint("open a pull request", async () => {
+			const { data: openPrs } = await this.octokit.rest.pulls.list({
+				owner,
+				repo,
+				state: "open",
+				head: `${owner}:${params.head}`,
+			});
+			const found = openPrs[0];
+			if (found !== undefined) {
+				return { number: found.number, url: found.html_url, created: false };
+			}
+
+			const { data: created } = await this.octokit.rest.pulls.create({
+				owner,
+				repo,
+				head: params.head,
+				base: params.base,
+				title: params.title,
+				body: params.body,
+			});
+			return { number: created.number, url: created.html_url, created: true };
+		});
+	}
+
+	private async getFileContentAtRef(
+		owner: string,
+		repo: string,
+		path: string,
+		ref: string | undefined,
+	): Promise<RepoFile | undefined> {
+		try {
+			const { data } = await this.octokit.rest.repos.getContent({ owner, repo, path, ...(ref !== undefined ? { ref } : {}) });
+			if (Array.isArray(data) || data.type !== "file") {
+				throw new Error(`${owner}/${repo}: ${path} is not a file`);
+			}
+			return { content: Buffer.from(data.content, "base64").toString("utf8"), sha: data.sha };
+		} catch (err) {
+			if (isNotFoundError(err)) return undefined;
+			throw err;
+		}
+	}
+
+	async getMergeability(owner: string, repo: string, prNumber: number): Promise<MergeabilityResult> {
+		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+		// Repos are nullable in GitHub's schema (deleted fork) — either a null head repo or
+		// one with a different id than the base means resolution can't write to it.
+		const isFork = pr.head.repo === null || pr.base.repo === null || pr.head.repo.id !== pr.base.repo.id;
+		// pr.base.sha is a cached pointer GitHub only refreshes when the PR itself is
+		// synchronized (e.g. a push to head) — it silently lags behind the base branch's
+		// real tip when other PRs land on it in the meantime. Read the live tip instead.
+		const baseSha = await this.getBranchTipSha(owner, repo, pr.base.ref);
+		return {
+			state: normalizeMergeableState(pr.draft === true, pr.mergeable_state ?? "unknown"),
+			isFork,
+			merged: pr.merged === true,
+			headBranch: pr.head.ref,
+			headSha: pr.head.sha,
+			baseBranch: pr.base.ref,
+			baseSha,
+		};
+	}
+
+	async updateBranch(owner: string, repo: string, prNumber: number): Promise<void> {
+		await this.octokit.rest.pulls.updateBranch({ owner, repo, pull_number: prNumber });
+	}
+
+	async getConflictTrees(owner: string, repo: string, prNumber: number): Promise<ConflictTrees> {
+		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+		// See getMergeability's comment above — pr.base.sha can lag behind the base
+		// branch's real tip, which would make this diff against a stale "theirs".
+		const baseSha = await this.getBranchTipSha(owner, repo, pr.base.ref);
+		const headSha = pr.head.sha;
+
+		const { data: comparison } = await this.octokit.rest.repos.compareCommitsWithBasehead({
 			owner,
 			repo,
-			issue_number: prNumber,
-			body: formatReviewCardComment(action, card),
+			basehead: `${baseSha}...${headSha}`,
 		});
+		const mergeBaseSha = comparison.merge_base_commit.sha;
+
+		const [mergeBaseTree, baseTree, headTree] = await Promise.all([
+			this.getFlatTree(owner, repo, mergeBaseSha),
+			this.getFlatTree(owner, repo, baseSha),
+			this.getFlatTree(owner, repo, headSha),
+		]);
+
+		return { mergeBaseSha, baseSha, headSha, mergeBaseTree, baseTree, headTree };
+	}
+
+	async getBlobContent(owner: string, repo: string, sha: string): Promise<string> {
+		const { data } = await this.octokit.rest.git.getBlob({ owner, repo, file_sha: sha });
+		if (data.encoding !== "base64") {
+			throw new BinaryFileError(`Blob ${sha} in ${owner}/${repo} had unexpected encoding "${data.encoding}"`);
+		}
+		const buffer = Buffer.from(data.content, "base64");
+		// A null byte anywhere is the same heuristic git itself uses to flag a file binary —
+		// text files never legitimately contain one.
+		if (buffer.includes(0)) {
+			throw new BinaryFileError(`Blob ${sha} in ${owner}/${repo} is binary`);
+		}
+		return buffer.toString("utf-8");
+	}
+
+	async commitResolvedFiles(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		baseTipSha: string,
+		files: ReadonlyArray<ResolvedFile>,
+	): Promise<void> {
+		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+		const headSha = pr.head.sha;
+		const headBranch = pr.head.ref;
+
+		const { data: headCommit } = await this.octokit.rest.git.getCommit({ owner, repo, commit_sha: headSha });
+
+		const blobs = await Promise.all(
+			files.map(async (file) => {
+				const { data: blob } = await this.octokit.rest.git.createBlob({
+					owner,
+					repo,
+					content: file.content,
+					encoding: "utf-8",
+				});
+				return { path: file.path, mode: file.mode, sha: blob.sha };
+			}),
+		);
+
+		// base_tree inherits every untouched path from the head commit's tree — only the
+		// resolved files' entries are replaced, nothing else is dropped.
+		const { data: newTree } = await this.octokit.rest.git.createTree({
+			owner,
+			repo,
+			base_tree: headCommit.tree.sha,
+			tree: blobs.map((b) => ({
+				path: b.path,
+				mode: b.mode as "100644" | "100755",
+				type: "blob",
+				sha: b.sha,
+			})),
+		});
+
+		// Two parents — the PR's current head and the base branch's current tip — is exactly
+		// the commit shape a local `git merge <base> && git push` would produce.
+		const { data: newCommit } = await this.octokit.rest.git.createCommit({
+			owner,
+			repo,
+			message: "Resolve merge conflict via automated resolution",
+			tree: newTree.sha,
+			parents: [headSha, baseTipSha],
+		});
+
+		try {
+			// A merge commit built on top of the current head is a fast-forward from the
+			// branch's own perspective, so force:false should succeed unless someone pushed
+			// to the PR branch after headSha was read above.
+			await this.octokit.rest.git.updateRef({
+				owner,
+				repo,
+				ref: `heads/${headBranch}`,
+				sha: newCommit.sha,
+				force: false,
+			});
+		} catch (err) {
+			if (err instanceof RequestError && (err.status === 422 || err.status === 409)) {
+				throw new NotFastForwardError(`${owner}/${repo} branch ${headBranch} moved during conflict resolution`);
+			}
+			throw err;
+		}
+	}
+
+	private async getBranchTipSha(owner: string, repo: string, branch: string): Promise<string> {
+		const { data } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+		return data.object.sha;
+	}
+
+	private async getFlatTree(owner: string, repo: string, treeSha: string): Promise<ReadonlyMap<string, TreeEntry>> {
+		const { data } = await this.octokit.rest.git.getTree({ owner, repo, tree_sha: treeSha, recursive: "true" });
+		const map = new Map<string, TreeEntry>();
+		for (const entry of data.tree) {
+			// Subdirectory "tree" entries are skipped — recursive:true already flattens to
+			// full file paths, so only "blob" (file) and "commit" (submodule) entries matter.
+			if (entry.type !== "blob" && entry.type !== "commit") continue;
+			if (entry.path === undefined || entry.sha === undefined || entry.mode === undefined) continue;
+			map.set(entry.path, { type: entry.type, mode: entry.mode, sha: entry.sha });
+		}
+		return map;
 	}
 
 	private async toRawPRPayload(owner: string, repo: string, pr: PullRequestRef): Promise<RawPRPayload> {

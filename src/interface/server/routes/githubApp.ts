@@ -7,6 +7,8 @@ import { isInstallationRevoked } from "../../../engine/github/installationClient
 import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import type { GitHubClient } from "../../../engine/github/client.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
+import { setUpDeclaredDirectionConvention } from "../../../engine/github/repoSetup.js";
+import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
 import { settleWithConcurrency } from "../../../engine/util/concurrency.js";
 import { activeInstallation } from "../accountState.js";
 import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
@@ -18,6 +20,11 @@ const SelectRepoSchema = z.object({
 	owner: z.string().min(1),
 	name: z.string().min(1),
 	installationId: z.number().int().positive(),
+});
+
+const RepoIdentifierSchema = z.object({
+	owner: z.string().min(1),
+	name: z.string().min(1),
 });
 
 const SettingsSchema = z.object({
@@ -43,6 +50,8 @@ export function githubAppRouter(
 	listInstallationRepos: (installationId: number, accountLogin: string) => Promise<ReadonlyArray<RepoSummary>>,
 	getInstallationAccount: (installationId: number) => Promise<InstallationAccount>,
 	secureCookies: boolean,
+	userTokenCache: UserTokenCache,
+	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>,
 ): Router {
 	const router = Router();
 	const { accountState, accountPath, clientHolder } = refreshDeps;
@@ -198,7 +207,17 @@ export function githubAppRouter(
 				else failedAccounts.push(installation.accountLogin);
 			});
 
-			res.json({ repos, selected: selectedRepo, failedAccounts });
+			// Starred/pinned status is a per-request enrichment, not part of the cached
+			// per-installation repos payload — it needs the signed-in user's own token (an
+			// installation client has no "viewer"), and degrades to the plain merged list,
+			// unsorted, when there's no cached token (never signed in this process, or it
+			// expired). Applied once over the merged, concatenated list from every
+			// installation, after the multi-installation fan-out above.
+			const login = res.locals.login;
+			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
+			const responseRepos = userToken !== undefined ? await enrichWithUserToken(repos, userToken) : repos;
+
+			res.json({ repos: responseRepos, selected: selectedRepo, failedAccounts });
 		} catch (err) {
 			next(err);
 		}
@@ -245,6 +264,20 @@ export function githubAppRouter(
 			await saveInstallation(accountPath, updated);
 
 			res.json({ selected: updated.selectedRepo, ...summary });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	router.post("/repos/setup", validateBody(RepoIdentifierSchema), async (req, res, next) => {
+		try {
+			if (accountState.current.installations.length === 0) {
+				res.status(400).json({ error: "Install the GitHub App first" });
+				return;
+			}
+			const { owner, name } = req.body as z.infer<typeof RepoIdentifierSchema>;
+			const result = await setUpDeclaredDirectionConvention(clientHolder, owner, name);
+			res.json(result);
 		} catch (err) {
 			next(err);
 		}

@@ -3,6 +3,10 @@ import type { InstallationAccountState, InstallationBinding } from "../../engine
 // Lifts the installation state out of githubApp.ts's private closure so the webhook route
 // and reconciliation poll — both constructed in index.ts, outside that router — can read
 // the live state (bound installations, selected repo) without a second source of truth.
+//
+// selectedRepo/autoMergeOnAccept live on the always-present InstallationAccountState
+// itself (never undefined, only `installations` can be empty), so they already survive
+// individual installation disconnects/reconnects without a separate preferences store.
 export interface AccountState {
 	current: InstallationAccountState;
 }

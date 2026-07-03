@@ -10,11 +10,12 @@ import type { GitHubClient } from "../../engine/github/client.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { loadInstallation } from "../../engine/github/installation.js";
-import { buildInstallationClient, buildInstallationOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
+import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
+import { buildInstallationClient, buildInstallationOctokit, buildUserOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
 import { InstallationRevokedError } from "../../engine/github/installationClient.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
-import { listInstallationRepositories } from "../../engine/github/repos.js";
+import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../engine/github/repos.js";
 import { resolveLlmProvider, buildLlmProviderFromAccount } from "./resolveLlmProvider.js";
 import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.js";
 import { loadAccount as loadLlmAccount } from "../../engine/llm/account.js";
@@ -34,6 +35,7 @@ import { bundlesRouter } from "./routes/bundles.js";
 import { gesturesRouter } from "./routes/gestures.js";
 import { queueRouter } from "./routes/queue.js";
 import { shelfRouter } from "./routes/shelf.js";
+import { eventsRouter } from "./routes/events.js";
 import { auditRouter } from "./routes/audit.js";
 import { adminRouter } from "./routes/admin.js";
 import { accountRouter } from "./routes/account.js";
@@ -59,6 +61,7 @@ const PR_CACHE_PATH = join(DATA_DIR, "pr-cache.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
 const GATE_LOG_PATH = join(DATA_DIR, "instrumentation/gate-decisions.ndjson");
 const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjson");
+const CONFLICT_LOG_PATH = join(DATA_DIR, "instrumentation/conflict-resolution.ndjson");
 const AUDIT_LOG_PATH = join(DATA_DIR, "instrumentation/audit.ndjson");
 const INSTALLATION_PATH = join(DATA_DIR, "installation.json");
 const LLM_ACCOUNT_PATH = join(DATA_DIR, "llm-account.json");
@@ -66,6 +69,8 @@ const LLM_ACCOUNT_PATH = join(DATA_DIR, "llm-account.json");
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const RECONCILE_INTERVAL_MS =
 	parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "20", 10) * 60 * 1000;
+const QUEUE_REFRESH_INTERVAL_MS =
+	parseInt(process.env["QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES"] ?? "5", 10) * 60 * 1000;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -135,6 +140,7 @@ async function main(): Promise<void> {
 	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
 	const installationAccountState = await loadInstallation(INSTALLATION_PATH);
 	const accountState = createAccountState(installationAccountState);
+	const userTokenCache = createUserTokenCache();
 
 	const decidedStore = new DecidedPrStore(DECIDED_PRS_PATH);
 	await decidedStore.load();
@@ -152,16 +158,19 @@ async function main(): Promise<void> {
 		console.log(`GitHub client: stub (${accountState.current.installations.length} installation(s) bound, none backing a selected repo)`);
 	}
 	const github = new GitHubClientHolder(initialClient);
-	const queue = new MergeQueue(QUEUE_PATH, github);
-	await queue.load();
 
 	// An LLM account connected through the UI takes priority over env-based resolution.
+	// Resolved before MergeQueue below, which needs a provider for conflict resolution.
 	const connectedLlmAccount = await loadLlmAccount(LLM_ACCOUNT_PATH);
 	const llmAccountState = createLlmAccountState(connectedLlmAccount);
 	const { provider: initialLlmProvider, description } =
 		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : resolveLlmProvider(process.env);
 	console.log(`LLM provider: ${description}`);
 	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
+
+	const queue = new MergeQueue(QUEUE_PATH, github, llmProviderHolder, CONFLICT_LOG_PATH);
+	await queue.load();
+
 	const analyzer = new TypeScriptAnalyzer();
 	const state = createServerState();
 	const instrumentationSink = createNdjsonInstrumentationSink({
@@ -213,7 +222,10 @@ async function main(): Promise<void> {
 
 	// Login-establishing routes: reachable without a session (that's the point). Mounted
 	// before the global `session` middleware below applies to everything else.
-	app.use("/account/github", accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session));
+	app.use(
+		"/account/github",
+		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache),
+	);
 
 	app.use(session);
 
@@ -227,6 +239,8 @@ async function main(): Promise<void> {
 				listInstallationRepositories(buildInstallationOctokit(appConfig, installationId), installationId, accountLogin),
 			(installationId) => getInstallationAccount(appConfig, installationId),
 			isProduction,
+			userTokenCache,
+			(repos, accessToken) => enrichWithStarredAndPinned(repos, buildUserOctokit(accessToken)),
 		),
 	);
 	app.use("/prs", prsRouter(state, pipelineDeps, queue));
@@ -234,10 +248,17 @@ async function main(): Promise<void> {
 	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github, decidedStore, accountState));
 	app.use("/queue", queueRouter(queue, state, decidedStore));
 	app.use("/shelf", shelfRouter(state, decidedStore));
+	app.use("/events", eventsRouter());
 	app.use("/audit", auditRouter(auditStore));
 	app.use(
 		"/admin",
-		adminRouter(state, auditStore, queue, [DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH], decidedStore),
+		adminRouter(
+			state,
+			auditStore,
+			queue,
+			[DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH, CONFLICT_LOG_PATH],
+			decidedStore,
+		),
 	);
 	app.use(
 		"/account/llm",
@@ -271,6 +292,18 @@ async function main(): Promise<void> {
 		});
 	}, RECONCILE_INTERVAL_MS);
 	reconcileTimer.unref();
+
+	// Keeps queued PRs from drifting far behind main while they wait their turn — a bundle
+	// stuck behind several others that land ahead of it would otherwise only get checked (and
+	// fast-forwarded) once dequeueNext() finally reaches it, by which point "behind" may have
+	// calcified into a real "dirty" conflict needing the in-process hunk resolver instead of a
+	// free merge.
+	const queueRefreshTimer = setInterval(() => {
+		queue.refreshQueuedBranches().catch((err: unknown) => {
+			console.error("Queue branch refresh failed:", err);
+		});
+	}, QUEUE_REFRESH_INTERVAL_MS);
+	queueRefreshTimer.unref();
 
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);

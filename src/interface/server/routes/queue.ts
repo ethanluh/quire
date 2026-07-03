@@ -20,8 +20,27 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 			if (entry === undefined) {
 				res.json({ status: "empty" });
 			} else {
-				res.json({ status: "landed", bundleId: entry.bundleId });
+				// entry.status reflects the real outcome — "landed" or, since a member PR
+				// couldn't be made mergeable, "conflict" (with entry.conflict disclosing why).
+				res.json({ status: entry.status, bundleId: entry.bundleId, ...(entry.conflict !== undefined ? { conflict: entry.conflict } : {}) });
 			}
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// A bundle stuck in "conflict" (automated resolution didn't apply or couldn't confidently
+	// resolve it — see INV-6) goes back to "queued" so the next /process pass tries again,
+	// whether the human fixed it manually on GitHub or just wants another attempt.
+	router.post("/:bundleId/retry", async (req, res, next) => {
+		try {
+			const bundleId = req.params["bundleId"] ?? "";
+			const retried = await queue.retryConflict(bundleId);
+			if (retried === undefined) {
+				res.status(400).json({ error: `Bundle ${bundleId} is not in a conflict state` });
+				return;
+			}
+			res.json({ status: "queued", bundleId });
 		} catch (err) {
 			next(err);
 		}

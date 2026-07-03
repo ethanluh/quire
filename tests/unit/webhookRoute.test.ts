@@ -65,7 +65,7 @@ describe("webhookRouter", () => {
 		if (dir) await rm(dir, { recursive: true, force: true });
 	});
 
-	function setup(client: StubGitHubClient = new StubGitHubClient(), provider = new StubLlmProvider()): RefreshDeps {
+	async function setup(client: StubGitHubClient = new StubGitHubClient(), provider = new StubLlmProvider()): Promise<{ refreshDeps: RefreshDeps }> {
 		const refreshDeps: RefreshDeps = {
 			accountState: createAccountState({
 				installations: [BINDING],
@@ -88,7 +88,7 @@ describe("webhookRouter", () => {
 		app.use(express.raw({ type: "application/json" }));
 		app.use(webhookRouter(refreshDeps));
 		server = app.listen(0);
-		return refreshDeps;
+		return { refreshDeps };
 	}
 
 	async function post(payload: unknown, event: string): Promise<{ status: number; body: unknown }> {
@@ -104,7 +104,7 @@ describe("webhookRouter", () => {
 
 	it("acknowledges ping events without triggering a refresh", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
-		setup();
+		await setup();
 
 		const { status, body } = await post({ zen: "hello" }, "ping");
 
@@ -114,7 +114,7 @@ describe("webhookRouter", () => {
 
 	it("ignores non-pull_request events", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
-		setup();
+		await setup();
 
 		const { status, body } = await post({}, "push");
 
@@ -126,7 +126,7 @@ describe("webhookRouter", () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
 		const client = new StubGitHubClient();
 		client.addFixture("octocat", "other-repo", makePrFixture({ repo: "other-repo" }));
-		setup(client);
+		await setup(client);
 
 		const { status, body } = await post(pullRequestEventPayload("octocat", "other-repo", "opened"), "pull_request");
 
@@ -136,7 +136,7 @@ describe("webhookRouter", () => {
 
 	it("ignores a pull_request action that isn't a trigger action", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
-		setup();
+		await setup();
 
 		const { status, body } = await post(pullRequestEventPayload("octocat", "hello-world", "labeled"), "pull_request");
 
@@ -151,7 +151,7 @@ describe("webhookRouter", () => {
 		const provider = new StubLlmProvider();
 		provider.queueCompletion('["adds OTP login"]');
 		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
-		const refreshDeps = setup(client, provider);
+		const { refreshDeps } = await setup(client, provider);
 
 		const { status, body } = await post(pullRequestEventPayload("octocat", "hello-world", "opened"), "pull_request");
 
@@ -169,7 +169,7 @@ describe("webhookRouter", () => {
 		const provider = new StubLlmProvider();
 		provider.queueCompletion('["adds OTP login"]');
 		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
-		const refreshDeps = setup(client, provider);
+		const { refreshDeps } = await setup(client, provider);
 		await refreshDeps.decidedStore.markDecided(["123"], "reject");
 
 		const { status } = await post(pullRequestEventPayload("octocat", "hello-world", "synchronize", 123), "pull_request");
@@ -178,5 +178,15 @@ describe("webhookRouter", () => {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(refreshDeps.decidedStore.isDecided("123")).toBe(false);
 		expect(refreshDeps.state.bundles.size).toBe(1);
+	});
+
+	it("ignores non-pull_request events even when they look like a GitHub payload", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		await setup();
+
+		const { status, body } = await post({ action: "completed" }, "workflow_run");
+
+		expect(status).toBe(200);
+		expect(body).toEqual({ ignored: true });
 	});
 });

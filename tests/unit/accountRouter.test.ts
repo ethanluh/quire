@@ -12,6 +12,8 @@ import { OAuthExchangeError } from "../../src/engine/github/oauth.js";
 import type { OAuthConfig, OAuthDeps } from "../../src/engine/github/oauth.js";
 import { SESSION_COOKIE_NAME, verifySession } from "../../src/interface/server/session.js";
 import { errorHandler } from "../../src/interface/server/middleware/errors.js";
+import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
+import type { UserTokenCache } from "../../src/engine/github/userTokenCache.js";
 
 const SECRET = "test-secret";
 
@@ -87,6 +89,8 @@ describe("accountRouter (login-only)", () => {
 		if (server) await new Promise((resolve) => server.close(resolve));
 	});
 
+	let userTokenCache: UserTokenCache;
+
 	function setup(
 		verifyIdentity: (token: string) => Promise<VerifiedTokenIdentity>,
 		allowedLogins: string | undefined,
@@ -94,9 +98,10 @@ describe("accountRouter (login-only)", () => {
 	): void {
 		const allowlist = createAllowlist(allowedLogins);
 		const session = requireSession(SECRET, allowlist, false);
+		userTokenCache = createUserTokenCache();
 		const app = express();
 		app.use(express.json());
-		app.use("/account/github", accountRouter(oauthDeps, verifyIdentity, allowlist, SECRET, false, session));
+		app.use("/account/github", accountRouter(oauthDeps, verifyIdentity, allowlist, SECRET, false, session, userTokenCache));
 		app.use(errorHandler);
 		server = app.listen(0);
 	}
@@ -188,6 +193,16 @@ describe("accountRouter (login-only)", () => {
 		expect(verifySession(cookieValue ?? "", SECRET)?.login).toBe("octocat");
 	});
 
+	it("caches the OAuth access token in-memory, keyed by login, on a successful sign-in", async () => {
+		setup(async () => ({ login: "octocat", scopes: [] }), "octocat", makeOAuthDeps(async () => ({ accessToken: "oauth-access-token" })));
+		await new Promise((resolve) => server.once("listening", resolve));
+		const { state, cookie } = await startOAuth();
+
+		await callRedirect(server, `/account/github/oauth/callback?code=good-code&state=${state}`, cookie);
+
+		expect(userTokenCache.get("octocat")).toBe("oauth-access-token");
+	});
+
 	it("rejects a login not on the allowlist, without setting a session cookie", async () => {
 		setup(async () => ({ login: "octocat", scopes: [] }), "someone-else");
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -202,6 +217,7 @@ describe("accountRouter (login-only)", () => {
 		expect(status).toBe(302);
 		expect(location).toContain("account=error");
 		expect(findCookie(setCookies, SESSION_COOKIE_NAME)).toBeUndefined();
+		expect(userTokenCache.get("octocat")).toBeUndefined();
 	});
 
 	it("rejects a callback whose state doesn't match the pending one", async () => {
@@ -301,5 +317,22 @@ describe("accountRouter (login-only)", () => {
 
 		expect(status).toBe(200);
 		expect(setCookie).toContain(`${SESSION_COOKIE_NAME}=;`);
+	});
+
+	it("POST /logout clears the cached user token for the signed-in login", async () => {
+		setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
+		await new Promise((resolve) => server.once("listening", resolve));
+		const { state, cookie } = await startOAuth();
+		const { setCookies } = await callRedirect(
+			server,
+			`/account/github/oauth/callback?code=good&state=${state}`,
+			cookie,
+		);
+		const sessionCookieValue = findCookie(setCookies, SESSION_COOKIE_NAME) ?? "";
+		expect(userTokenCache.get("octocat")).toBeDefined();
+
+		await call(server, "POST", "/account/github/logout", sessionCookieValue.split(";")[0]);
+
+		expect(userTokenCache.get("octocat")).toBeUndefined();
 	});
 });

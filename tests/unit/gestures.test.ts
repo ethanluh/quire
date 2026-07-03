@@ -10,6 +10,8 @@ import { gesturesRouter } from "../../src/interface/server/routes/gestures.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import { StubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.js";
+import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 import { createAccountState } from "../../src/interface/server/accountState.js";
 import type { AccountState } from "../../src/interface/server/accountState.js";
 import type { InstallationAccountState } from "../../src/engine/github/installation.js";
@@ -73,6 +75,7 @@ function makeCard(bundleId: string): ReviewCard {
 		drift: { status: "clean" },
 		residualDisclosure: "behavioral confirm not run",
 		inputsHash: "hash-1",
+		memberCount: 1,
 	};
 }
 
@@ -90,7 +93,7 @@ describe("gesturesRouter — review queue removal", () => {
 		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
 		state = createServerState();
 		github = new StubGitHubClient();
-		queue = new MergeQueue(join(dataDir, "queue.json"), github);
+		queue = new MergeQueue(join(dataDir, "queue.json"), github, new LlmProviderHolder(new StubLlmProvider()), join(dataDir, "conflict.ndjson"));
 		await queue.load();
 		decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
 		await decidedStore.load();
@@ -257,7 +260,7 @@ describe("gesturesRouter — review card comment posting failures", () => {
 		state.cards.set("b-1", makeCard("b-1"));
 
 		const github = new RejectingGitHubClient();
-		const queue = new MergeQueue(join(dataDir, "queue.json"), github);
+		const queue = new MergeQueue(join(dataDir, "queue.json"), github, new LlmProviderHolder(new StubLlmProvider()), join(dataDir, "conflict.ndjson"));
 		await queue.load();
 		const decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
 		await decidedStore.load();
@@ -320,7 +323,7 @@ describe("gesturesRouter — reject GitHub close failures", () => {
 		state.cards.set("b-1", makeCard("b-1"));
 
 		const github = new CloseFailingGitHubClient();
-		const queue = new MergeQueue(join(dataDir, "queue.json"), github);
+		const queue = new MergeQueue(join(dataDir, "queue.json"), github, new LlmProviderHolder(new StubLlmProvider()), join(dataDir, "conflict.ndjson"));
 		await queue.load();
 		const decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
 		await decidedStore.load();
