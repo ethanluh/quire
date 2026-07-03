@@ -26,7 +26,6 @@ import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 import type { PipelineDeps } from "../../src/interface/server/ingestIntoQueue.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
 import type { InstallationAccount } from "../../src/engine/github/installationClient.js";
-import { RequestError } from "@octokit/request-error";
 import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
 import type { UserTokenCache } from "../../src/engine/github/userTokenCache.js";
 
@@ -111,6 +110,19 @@ async function callRedirect(server: Server, path: string, cookie?: string): Prom
 function cookiePair(setCookie: string | undefined): string {
 	if (setCookie === undefined) throw new Error("expected a Set-Cookie header");
 	return setCookie.split(";")[0] ?? "";
+}
+
+// Deliberately not `@octokit/request-error`'s `RequestError`: in production, this error comes
+// from a different, transitively-pinned copy of that package than any import here could resolve
+// to, so `instanceof` can never be relied on. This fake only replicates the `name`/`status`
+// shape the real error actually has, matching the duck-typed check `isInstallationRevoked` uses.
+class FakeHttpError extends Error {
+	readonly status: number;
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = "HttpError";
+		this.status = status;
+	}
 }
 
 describe("githubAppRouter", () => {
@@ -369,9 +381,7 @@ const { accountPath } = setup(async () => []);
 
 	it("redirects gracefully when the installation was revoked before the callback completes", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const revokedError = new RequestError("Not Found", 404, {
-			request: { method: "GET", url: "https://api.github.com/app/installations/555", headers: {}, body: undefined },
-		});
+		const revokedError = new FakeHttpError("Not Found", 404);
 		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, async () => {
 			throw revokedError;
 		});
