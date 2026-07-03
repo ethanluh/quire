@@ -50,6 +50,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Dispatched via Quire's own GitHub App installation token, so the triggering actor
+          # is always whatever bot dispatched this run — never hardcode a specific app slug
+          # here, since every Quire installation registers its own app under its own name.
+          allowed_bots: ${{ github.actor }}
           prompt: |
             Resolve every remaining git merge conflict in this working tree (files still
             containing <<<<<<<, =======, >>>>>>> markers). This PR's declared direction is:
