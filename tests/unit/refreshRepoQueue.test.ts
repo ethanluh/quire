@@ -2,7 +2,6 @@ import { describe, it, expect, afterEach } from "@jest/globals";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RequestError } from "@octokit/request-error";
 import { refreshRepoQueue, enqueueRefresh, InstallationRevokedError, AccountChangedError } from "../../src/interface/server/refreshRepoQueue.js";
 import type { RefreshDeps } from "../../src/interface/server/refreshRepoQueue.js";
 import { onStateChanged } from "../../src/interface/server/changeEvents.js";
@@ -18,6 +17,8 @@ import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { InstallationBinding } from "../../src/engine/github/installation.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
+import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -66,9 +67,22 @@ class BlockingGitHubClient extends StubGitHubClient {
 	}
 }
 
+// Deliberately not `@octokit/request-error`'s `RequestError`: in production, this error comes
+// from a different, transitively-pinned copy of that package than any import here could resolve
+// to, so `instanceof` can never be relied on. This fake only replicates the `name`/`status`
+// shape the real error actually has, matching the duck-typed check `isInstallationRevoked` uses.
+class FakeHttpError extends Error {
+	readonly status: number;
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = "HttpError";
+		this.status = status;
+	}
+}
+
 class RevokedGitHubClient extends StubGitHubClient {
 	override async listOpenPullRequests(): Promise<never> {
-		throw new RequestError("Not Found", 404, { request: { method: "GET", url: "", headers: {} } });
+		throw new FakeHttpError("Not Found", 404);
 	}
 }
 
@@ -103,6 +117,7 @@ describe("refreshRepoQueue", () => {
 				auditStore: new AuditStore(),
 				prCache: new PrEffectCache(),
 			},
+			queue: new MergeQueue(join(dir, "queue.json"), client, new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
 		};
 	}
 
@@ -244,6 +259,7 @@ describe("enqueueRefresh", () => {
 				auditStore: new AuditStore(),
 				prCache: new PrEffectCache(),
 			},
+			queue: new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
 		};
 
 		const first = enqueueRefresh("octocat", "hello-world", deps);
@@ -277,6 +293,7 @@ describe("enqueueRefresh", () => {
 				auditStore: new AuditStore(),
 				prCache: new PrEffectCache(),
 			},
+			queue: new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
 		};
 		let notifyCount = 0;
 		const unsubscribe = onStateChanged(() => { notifyCount += 1; });

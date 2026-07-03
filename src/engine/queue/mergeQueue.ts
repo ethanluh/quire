@@ -2,10 +2,14 @@ import type { Bundle, PullRequest, ReviewCard } from "../types/core.js";
 import type { GitHubClient } from "../github/client.js";
 import type { LlmProviderHolder } from "../drift/effectList/providerHolder.js";
 import type { MergeabilityResult, MergeabilityState } from "../types/mergeability.js";
-import type { MergeQueueEntry, QueueState } from "../types/queue.js";
+import type { FileInvestigation, MergeQueueEntry, MergeQueueEntryStatus, QueueState } from "../types/queue.js";
 import { loadState, saveState } from "./persistence.js";
 import { resolveMergeConflict } from "./conflictResolution.js";
+import type { ConflictHunkEscalation } from "./conflictResolution.js";
 import { logConflictResolution } from "../instrumentation/logger.js";
+import { pollInvestigationSession, startInvestigationSession } from "./deepConflictInvestigation.js";
+import type { DeepResolverAgentRef } from "./deepConflictInvestigation.js";
+import type { ManagedAgentsClient } from "./managedAgentsClient.js";
 
 const MERGEABLE_STATES: ReadonlyArray<MergeabilityState> = ["clean", "hasHooks", "draft"];
 
@@ -13,7 +17,21 @@ const MERGEABLE_STATES: ReadonlyArray<MergeabilityState> = ["clean", "hasHooks",
 // and the re-check after updateBranch()/commitResolvedFiles() poll on this same schedule.
 export const DEFAULT_MERGEABILITY_POLL_DELAYS_MS: ReadonlyArray<number> = [1000, 2000, 4000, 4000, 4000];
 
-type MergeableCheck = { ok: true; alreadyMerged?: boolean } | { ok: false; reason: string };
+type MergeableCheck =
+	| { ok: true; alreadyMerged?: boolean }
+	| { ok: false; reason: string; investigating?: { path: string; sessionId: string } };
+
+// Live, swappable dependencies for the opt-in Managed-Agents deep-investigation tier — same
+// "getter bag" shape as shouldFlagForFleet, gathered into one object because this tier needs
+// several collaborators together (an availability check, a client, agent bootstrap, and a
+// token minter) rather than one boolean.
+export interface DeepInvestigationDeps {
+	shouldEnable: () => boolean;
+	// undefined when no Anthropic account is connected — the tier has nothing to run against.
+	getClient: () => ManagedAgentsClient | undefined;
+	ensureAgent: (client: ManagedAgentsClient) => Promise<DeepResolverAgentRef>;
+	mintRepoToken: (owner: string, repo: string) => Promise<string>;
+}
 
 export class MergeQueue {
 	private state: QueueState = { entries: [] };
@@ -31,6 +49,7 @@ export class MergeQueue {
 		// fails rather than captured once at construction, so a mid-run settings change takes
 		// effect on the very next failure.
 		private readonly shouldFlagForFleet: () => boolean = () => false,
+		private readonly deepInvestigation?: DeepInvestigationDeps,
 	) {}
 
 	async load(): Promise<void> {
@@ -103,10 +122,21 @@ export class MergeQueue {
 
 			const check = await this.ensureMergeable(entry.bundleId, pr);
 			if (!check.ok) {
+				const investigation: FileInvestigation | undefined =
+					check.investigating !== undefined
+						? {
+								path: check.investigating.path,
+								prId: pr.id,
+								sessionId: check.investigating.sessionId,
+								status: "running",
+								startedAt: new Date().toISOString(),
+							}
+						: undefined;
 				const blocked: MergeQueueEntry = {
 					...entry,
-					status: "conflict",
+					status: investigation !== undefined ? "investigating" : "conflict",
 					conflict: { prId: pr.id, reason: check.reason, detectedAt: new Date().toISOString() },
+					...(investigation !== undefined ? { investigations: [...(entry.investigations ?? []), investigation] } : {}),
 				};
 				await this.setEntry(blocked.bundleId, blocked);
 				return blocked;
@@ -188,6 +218,13 @@ export class MergeQueue {
 			result.status === "failed" ? result.reason : undefined,
 		);
 		if (result.status === "failed") {
+			// Both escalation avenues are independent opt-ins (see the plan this implements) —
+			// a user can have either, both, or neither enabled, so they run unconditionally of
+			// each other rather than one short-circuiting the other.
+			let investigating: { path: string; sessionId: string } | undefined;
+			if (result.escalation !== undefined) {
+				investigating = await this.tryStartInvestigation(pr, result.escalation);
+			}
 			if (this.shouldFlagForFleet()) {
 				await this.github.postComment(
 					pr.repoOwner,
@@ -196,7 +233,7 @@ export class MergeQueue {
 					`Quire could not automatically resolve this PR's merge conflict:\n\n${result.reason}`,
 				);
 			}
-			return { ok: false, reason: result.reason };
+			return { ok: false, reason: result.reason, ...(investigating !== undefined ? { investigating } : {}) };
 		}
 
 		// Give GitHub a moment to recompute mergeable_state after the new commit rather
@@ -207,6 +244,29 @@ export class MergeQueue {
 			ok: false,
 			reason: `still not mergeable after resolving (${after.state}) — base branch likely moved again`,
 		};
+	}
+
+	// Best-effort: any failure here (no Anthropic account connected, a transient API error
+	// minting the repo token or starting the session) just falls back to the plain "conflict"
+	// path — the fast resolver's failure reason is never lost, this only ever adds an
+	// additional avenue for a human to eventually clear it.
+	private async tryStartInvestigation(
+		pr: PullRequest,
+		escalation: ConflictHunkEscalation,
+	): Promise<{ path: string; sessionId: string } | undefined> {
+		const deps = this.deepInvestigation;
+		if (deps === undefined || !deps.shouldEnable()) return undefined;
+		const client = deps.getClient();
+		if (client === undefined) return undefined;
+		try {
+			const agentRef = await deps.ensureAgent(client);
+			const repoToken = await deps.mintRepoToken(pr.repoOwner, pr.repoName);
+			const { sessionId } = await startInvestigationSession(client, agentRef, pr, escalation, repoToken);
+			return { path: escalation.path, sessionId };
+		} catch (err) {
+			console.error(`Deep conflict investigation failed to start for ${pr.repoOwner}/${pr.repoName}#${pr.number}:`, err);
+			return undefined;
+		}
 	}
 
 	private async pollMergeability(pr: PullRequest): Promise<MergeabilityResult> {
@@ -266,9 +326,28 @@ export class MergeQueue {
 	private async reattemptLocked(bundleId: string): Promise<MergeQueueEntry | undefined> {
 		const entry = this.state.entries.find((e) => e.bundleId === bundleId && (e.status === "conflict" || e.status === "aborted"));
 		if (entry === undefined) return undefined;
+		return this.clearToQueued(entry);
+	}
+
+	// Same "conflict" → "queued" transition as reattempt(), but looked up by the PR a
+	// conflict was recorded against rather than by bundle id — the caller (a GitHub webhook
+	// on new commits) only knows which PR just changed, not which bundle it belongs to.
+	// Deliberately excludes "aborted": that status is an explicit human give-up, which a
+	// stray push shouldn't silently override the way a fresh conflict-clearing commit does.
+	async reattemptForPr(prId: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.reattemptForPrLocked(prId));
+	}
+
+	private async reattemptForPrLocked(prId: string): Promise<MergeQueueEntry | undefined> {
+		const entry = this.state.entries.find((e) => e.status === "conflict" && e.conflict?.prId === prId);
+		if (entry === undefined) return undefined;
+		return this.clearToQueued(entry);
+	}
+
+	private async clearToQueued(entry: MergeQueueEntry): Promise<MergeQueueEntry> {
 		const { conflict: _conflict, abortedAt: _abortedAt, ...rest } = entry;
 		const retried: MergeQueueEntry = { ...rest, status: "queued" };
-		await this.setEntry(bundleId, retried);
+		await this.setEntry(entry.bundleId, retried);
 		return retried;
 	}
 
@@ -327,5 +406,103 @@ export class MergeQueue {
 				}
 			}
 		}
+	}
+
+	// Periodic check (meant to be wired into a setInterval, like refreshQueuedBranches) for
+	// bundles with an in-flight investigation session. Goes through withLock, unlike
+	// refreshQueuedBranches, because — unlike that read-only pass — this one mutates
+	// `this.state` (recording decision packets, flipping status back to "conflict").
+	async pollInvestigations(): Promise<void> {
+		return this.withLock(() => this.pollInvestigationsLocked());
+	}
+
+	private async pollInvestigationsLocked(): Promise<void> {
+		const client = this.deepInvestigation?.getClient();
+		if (client === undefined) return;
+
+		const investigating = this.state.entries.filter((e) => e.status === "investigating");
+		for (const entry of investigating) {
+			const investigations = entry.investigations ?? [];
+			let changed = false;
+			const updated = await Promise.all(
+				investigations.map(async (inv): Promise<FileInvestigation> => {
+					if (inv.status !== "running") return inv;
+					let result;
+					try {
+						result = await pollInvestigationSession(client, inv.sessionId);
+					} catch (err) {
+						console.error(`Polling investigation session ${inv.sessionId} failed:`, err);
+						return inv;
+					}
+					if (!result.done) return inv;
+					changed = true;
+					if (result.packet !== undefined) {
+						return { ...inv, status: "awaitingReview", decisionPacket: result.packet };
+					}
+					return { ...inv, status: "failed", failureReason: result.reason };
+				}),
+			);
+			if (!changed) continue;
+			// Every investigation for this entry has a terminal outcome now (or already did) —
+			// fall back to "conflict" so the entry re-enters the normal disclosure/retry path,
+			// carrying the decision packets for a human to accept/reject.
+			const stillRunning = updated.some((inv) => inv.status === "running");
+			const nextStatus: MergeQueueEntryStatus = stillRunning ? "investigating" : "conflict";
+			await this.setEntry(entry.bundleId, { ...entry, status: nextStatus, investigations: updated });
+		}
+	}
+
+	// Applies a decision packet's proposed resolution through the existing
+	// commitResolvedFiles/ResolvedFile pipeline (Quire re-applies the text itself rather than
+	// trusting a write the agent made) and requeues the bundle so the next dequeueNext() picks
+	// up the merge from there. Only valid on a "conflict" entry with a matching
+	// "awaitingReview" investigation — mirrors reattempt()'s status guard.
+	async acceptInvestigation(bundleId: string, path: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.acceptInvestigationLocked(bundleId, path));
+	}
+
+	private async acceptInvestigationLocked(bundleId: string, path: string): Promise<MergeQueueEntry | undefined> {
+		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "conflict");
+		if (entry === undefined) return undefined;
+		const investigations = entry.investigations ?? [];
+		const investigation = investigations.find((i) => i.path === path && i.status === "awaitingReview");
+		if (investigation === undefined || investigation.decisionPacket === undefined) return undefined;
+		const pr = entry.bundle.members.find((m) => m.id === investigation.prId);
+		if (pr === undefined) throw new Error(`PR ${investigation.prId} not found in bundle ${bundleId}`);
+
+		const mergeability = await this.github.getMergeability(pr.repoOwner, pr.repoName, pr.number);
+		// Mode is not tracked on FileInvestigation (a decision packet only carries file
+		// content) — "100644" (non-executable text) covers every case this tier targets, since
+		// escalation only ever fires on a text-hunk merge conflict, never a mode conflict.
+		await this.github.commitResolvedFiles(pr.repoOwner, pr.repoName, pr.number, mergeability.baseSha, [
+			{ path: investigation.path, content: investigation.decisionPacket.proposedResolution, mode: "100644" },
+		]);
+
+		const updatedInvestigations = investigations.map((i) => (i === investigation ? { ...i, status: "accepted" as const } : i));
+		const { conflict: _conflict, ...rest } = entry;
+		const requeued: MergeQueueEntry = { ...rest, status: "queued", investigations: updatedInvestigations };
+		await this.setEntry(bundleId, requeued);
+		return requeued;
+	}
+
+	// Leaves the bundle exactly as "conflict" — clearing the packet is enough for it to stop
+	// being offered for review; the underlying conflict is untouched and still needs either a
+	// manual fix or another retry.
+	async rejectInvestigation(bundleId: string, path: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.rejectInvestigationLocked(bundleId, path));
+	}
+
+	private async rejectInvestigationLocked(bundleId: string, path: string): Promise<MergeQueueEntry | undefined> {
+		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "conflict");
+		if (entry === undefined) return undefined;
+		const investigations = entry.investigations ?? [];
+		const investigation = investigations.find((i) => i.path === path && i.status === "awaitingReview");
+		if (investigation === undefined) return undefined;
+		const updated: MergeQueueEntry = {
+			...entry,
+			investigations: investigations.map((i) => (i === investigation ? { ...i, status: "rejected" as const } : i)),
+		};
+		await this.setEntry(bundleId, updated);
+		return updated;
 	}
 }

@@ -1,7 +1,6 @@
 import { Octokit } from "@octokit/rest";
 import { createAppAuth } from "@octokit/auth-app";
-import { RequestError } from "@octokit/request-error";
-import { OctokitGitHubClient } from "./octokitClient.js";
+import { OctokitGitHubClient, isHttpError } from "./octokitClient.js";
 
 export interface GitHubAppConfig {
 	appId: string;
@@ -16,7 +15,7 @@ export interface GitHubAppConfig {
 export class InstallationRevokedError extends Error {}
 
 export function isInstallationRevoked(err: unknown): boolean {
-	return err instanceof RequestError && (err.status === 401 || err.status === 404);
+	return isHttpError(err) && (err.status === 401 || err.status === 404);
 }
 
 export function buildInstallationOctokit(config: GitHubAppConfig, installationId: number): Octokit {
@@ -24,6 +23,23 @@ export function buildInstallationOctokit(config: GitHubAppConfig, installationId
 		authStrategy: createAppAuth,
 		auth: { appId: config.appId, privateKey: config.privateKey, installationId },
 	});
+}
+
+// Mints a raw token scoped to a single repo, read-only — used only for mounting a repo
+// read-only into a Managed Agents session (see deepConflictInvestigation.ts), which needs a
+// bare token string rather than a pre-configured Octokit instance. `createAppAuth` is called
+// directly here (not via Octokit's authStrategy, which never exposes the raw token) with
+// narrow `repositoryNames`/`permissions` so the minted token can't reach any other repo or
+// write anything, even though the parent installation's own grant may be broader.
+export async function mintScopedRepoToken(config: GitHubAppConfig, installationId: number, repoName: string): Promise<string> {
+	const auth = createAppAuth({ appId: config.appId, privateKey: config.privateKey });
+	const { token } = await auth({
+		type: "installation",
+		installationId,
+		repositoryNames: [repoName],
+		permissions: { contents: "read" },
+	});
+	return token;
 }
 
 // A plain user-authenticated client (the sign-in OAuth token, cached in-memory — see
@@ -69,4 +85,26 @@ export async function getInstallationAccount(
 		accountLogin: accountLogin ?? `installation-${installationId}`,
 		accountType: data.target_type === "User" ? "User" : "Organization",
 	};
+}
+
+export interface AccessibleInstallation extends InstallationAccount {
+	installationId: number;
+}
+
+// Lists installations of *this* App that the signed-in user can already see, using the
+// same cached sign-in token as buildUserOctokit — GitHub scopes the response to the App
+// tied to the token's client id, so no separate appSlug filtering is needed here. This is
+// what lets Settings offer "Connect" instead of funneling an already-installed user
+// through the "Install GitHub App" wizard again.
+export async function listInstallationsForUser(accessToken: string): Promise<ReadonlyArray<AccessibleInstallation>> {
+	const { data } = await buildUserOctokit(accessToken).rest.apps.listInstallationsForAuthenticatedUser();
+	return data.installations.map((installation) => {
+		const account = installation.account;
+		const accountLogin = account !== null && account !== undefined && "login" in account ? account.login : undefined;
+		return {
+			installationId: installation.id,
+			accountLogin: accountLogin ?? `installation-${installation.id}`,
+			accountType: installation.target_type === "User" ? "User" : "Organization",
+		};
+	});
 }

@@ -1,6 +1,31 @@
 import type { Bundle, ReviewCard } from "./core.js";
 
-export type MergeQueueEntryStatus = "queued" | "landing" | "landed" | "reverted" | "conflict" | "aborted";
+export type MergeQueueEntryStatus = "queued" | "landing" | "landed" | "reverted" | "conflict" | "aborted" | "investigating";
+
+// The artifact a Managed Agents deep-investigation session produces for one escalated file —
+// always a proposal for a human to accept/reject, never auto-applied (the fast resolver
+// already couldn't clear this with confidence, so neither can an unreviewed agent output).
+export interface DecisionPacket {
+	rationale: string;
+	evidence: ReadonlyArray<string>;
+	testsRun: ReadonlyArray<string>;
+	testResult: "passed" | "failed" | "unknown";
+	confidence: "high" | "medium" | "low";
+	openQuestion?: string;
+	// Full file content to commit if accepted — Quire applies this itself via the existing
+	// commitResolvedFiles pipeline rather than trusting a write the agent made directly.
+	proposedResolution: string;
+}
+
+export interface FileInvestigation {
+	path: string;
+	prId: string;
+	sessionId: string;
+	status: "running" | "awaitingReview" | "accepted" | "rejected" | "failed";
+	startedAt: string;
+	decisionPacket?: DecisionPacket;
+	failureReason?: string;
+}
 
 export interface MergeQueueEntry {
 	bundleId: string;
@@ -27,6 +52,10 @@ export interface MergeQueueEntry {
 	// so the partial-merge residual stays visible (INV-6) — abort does not revert what already
 	// landed; see revertPr() for that as a separate, explicit action.
 	abortedAt?: string;
+	// Set when a deep-investigation session has been started for one or more escalated files
+	// (status "investigating" while any are still "running", back to "conflict" — carrying
+	// these for the review UI — once every investigation has a terminal outcome).
+	investigations?: ReadonlyArray<FileInvestigation>;
 }
 
 export interface QueueState {

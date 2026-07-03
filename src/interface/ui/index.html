@@ -178,11 +178,25 @@
   /* Reject tier, not flagged: abort is a deliberate human give-up (like the reject
      gesture), not a routine/retryable state the way conflict is. */
   .status-aborted  { background: var(--color-reject-wash); color: var(--color-reject); }
+  /* Flagged tier, like status-landing: an in-flight investigation is a normal waiting
+     state, not a failure — it only becomes "conflict" once there's something to review. */
+  .status-investigating { background: var(--color-flagged-wash); color: var(--color-flagged); }
 
   .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
   .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
   .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
+
+  .decision-packet {
+    margin-top: var(--space-3);
+    padding: var(--space-4);
+    background: var(--color-surface-sunken);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+  .decision-packet h4 { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--color-text-primary); }
+  .decision-packet ul { padding-left: var(--space-4); margin: var(--space-2) 0; font-size: var(--text-sm); }
+  .decision-packet .gestures { margin-top: var(--space-3); }
 
   .audit-list { display: flex; flex-direction: column; gap: var(--space-2); }
   .audit-entry {
@@ -286,6 +300,7 @@
       <div id="installations-list"></div>
       <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
       <div id="account-connect-form">
+        <div id="connectable-installations" style="display:none"></div>
         <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
         <div class="account-connect-actions">
           <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
@@ -303,6 +318,10 @@
         <label class="auto-merge-toggle">
           <input type="checkbox" id="chk-flag-conflicts-for-fleet">
           Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
+        </label>
+        <label class="auto-merge-toggle">
+          <input type="checkbox" id="chk-deep-investigation">
+          Escalate unresolved merge conflicts to a Quire-hosted deep investigation (requires an Anthropic API key connected below)
         </label>
         <div id="sorting-notice" class="result-msg" style="display:none">
           Starred/pinned sorting is unavailable until you reconnect GitHub (this happens after every server redeploy).
@@ -558,6 +577,51 @@ function prMemberListHtml(members, drift, mergeStatus) {
   }).join('') + '</div>';
 }
 
+function investigationsHtml(bundleId, investigations) {
+  if (!investigations || !investigations.length) return '';
+  return investigations.map((inv) => {
+    if (inv.status === 'running') {
+      return `<div class="residual">Deep investigation in progress for <code>${escapeHtml(inv.path)}</code>&hellip;</div>`;
+    }
+    if (inv.status === 'failed') {
+      return `<div class="residual">Deep investigation for <code>${escapeHtml(inv.path)}</code> did not produce a usable result: ${escapeHtml(inv.failureReason || 'unknown error')}</div>`;
+    }
+    if (inv.status !== 'awaitingReview' || !inv.decisionPacket) {
+      return `<div class="residual">Investigation for <code>${escapeHtml(inv.path)}</code>: ${escapeHtml(inv.status)}</div>`;
+    }
+    const p = inv.decisionPacket;
+    return `<div class="decision-packet">
+      <h4>Deep investigation result: ${escapeHtml(inv.path)}</h4>
+      <p>${escapeHtml(p.rationale)}</p>
+      <p><strong>Confidence:</strong> ${escapeHtml(p.confidence)} &middot; <strong>Tests:</strong> ${escapeHtml(p.testResult)}</p>
+      ${(p.evidence || []).length ? `<ul>${p.evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
+      ${(p.testsRun || []).length ? `<p><strong>Ran:</strong> ${p.testsRun.map(escapeHtml).join(', ')}</p>` : ''}
+      ${p.openQuestion ? `<p class="residual">Open question: ${escapeHtml(p.openQuestion)}</p>` : ''}
+      <div class="gestures">
+        <button class="btn btn-accept btn-investigation-accept" data-bundle-id="${escapeHtml(bundleId)}" data-path="${escapeHtml(inv.path)}">Accept</button>
+        <button class="btn btn-reject btn-investigation-reject" data-bundle-id="${escapeHtml(bundleId)}" data-path="${escapeHtml(inv.path)}">Reject</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+detailModalBody.addEventListener('click', async (event) => {
+  const btn = event.target.closest('.btn-investigation-accept, .btn-investigation-reject');
+  if (!btn) return;
+  const bundleId = btn.dataset.bundleId;
+  const path = btn.dataset.path;
+  const action = btn.classList.contains('btn-investigation-accept') ? 'accept' : 'reject';
+  await withPending(btn, action === 'accept' ? 'Accepting…' : 'Rejecting…', async () => {
+    const result = await api('POST', `/queue/${bundleId}/investigation/${action}`, { path });
+    if (result && result.error) {
+      showError(`Could not ${action} investigation — ${result.error}`);
+      return;
+    }
+    closeDetailModal();
+    loadQueue();
+  });
+});
+
 function detailBodyHtml(detail, opts) {
   opts = opts || {};
   return `
@@ -574,6 +638,7 @@ function detailBodyHtml(detail, opts) {
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
     ${opts.mergeStatus && opts.mergeStatus.conflict ? `<div class="residual">Merge conflict detected ${escapeHtml(opts.mergeStatus.conflict.detectedAt)}. Automated resolution did not apply — see the conflicting PR's GitHub link below for details, or retry.</div>` : ''}
+    ${investigationsHtml(opts.bundleId, opts.investigations)}
     <h4>Member PRs</h4>
     ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
   `;
@@ -608,6 +673,7 @@ function showQueueDetail(bundleId) {
       queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt },
       bundleId,
       mergeStatus: { mergedPrIds: entry.mergedPrIds, revertedPrIds: entry.revertedPrIds, conflict: entry.conflict },
+      investigations: entry.investigations,
     },
   ));
 }
@@ -885,6 +951,48 @@ async function disconnectInstallation(installationId) {
   loadAccount();
 }
 
+function connectableInstallationHtml(installation) {
+  return `<div class="repo-entry">
+    <span class="badge badge-neutral">${escapeHtml(installation.accountType)}</span>
+    <span class="repo-name">${escapeHtml(installation.accountLogin)}</span>
+    <button class="btn btn-accept" onclick="connectInstallation(${installation.installationId})">Connect</button>
+  </div>`;
+}
+
+async function connectInstallation(installationId) {
+  const result = await api('POST', '/account/github/connect', { installationId });
+  if (result.error) {
+    showAccountResult('Error: ' + result.error, true);
+    return;
+  }
+  await loadAccount();
+  showAccountResult(`Connected to ${result.accountLogin}.`, false);
+}
+
+// Installations of the Quire GitHub App the signed-in user already has access to but
+// hasn't bound to this browser's data yet — e.g. a teammate installed it on the org
+// already, or this is a fresh data directory. Lets Settings offer a one-click "Connect"
+// instead of always sending the user through the full GitHub install wizard again.
+async function loadConnectableInstallations() {
+  const el = document.getElementById('connectable-installations');
+  const result = await api('GET', '/account/github/available-installations');
+  const installations = result.installations || [];
+  if (installations.length) {
+    el.innerHTML = '<p>Already installed — connect without leaving this page:</p>' + installations.map(connectableInstallationHtml).join('');
+    el.style.display = 'block';
+  } else if (result.needsReconnect) {
+    el.innerHTML = `<div class="result-msg">Reconnect GitHub to check for installations you already have access to.
+      <button class="btn btn-defer" id="btn-check-installations-reconnect">Reconnect GitHub</button></div>`;
+    el.style.display = 'block';
+    document.getElementById('btn-check-installations-reconnect').addEventListener('click', () => {
+      startOAuth(document.getElementById('btn-check-installations-reconnect'), document.getElementById('account-result'));
+    });
+  } else {
+    el.innerHTML = '';
+    el.style.display = 'none';
+  }
+}
+
 accountDisconnectAllBtn.addEventListener('click', async () => {
   if (!confirm('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.')) return;
   await api('POST', '/account/github/disconnect-all', undefined);
@@ -919,6 +1027,7 @@ async function loadAccount() {
     renderAutomationStatus(status.selectedRepo);
     document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
     document.getElementById('chk-flag-conflicts-for-fleet').checked = status.flagConflictsForFleet ?? false;
+    document.getElementById('chk-deep-investigation').checked = status.enableDeepConflictInvestigation ?? false;
     loadRepos(status.selectedRepo);
   } else {
     statusEl.textContent = status.selectedRepo
@@ -929,6 +1038,7 @@ async function loadAccount() {
     accountDisconnectAllBtn.style.display = 'none';
     repoPanel.style.display = 'none';
   }
+  loadConnectableInstallations();
 }
 
 function showAccountResult(message, isError) {
@@ -938,17 +1048,22 @@ function showAccountResult(message, isError) {
   resultEl.style.display = 'block';
 }
 
+const ACCOUNT_SETTING_CHECKBOX_IDS = {
+  autoMergeOnAccept: 'chk-auto-merge',
+  flagConflictsForFleet: 'chk-flag-conflicts-for-fleet',
+  enableDeepConflictInvestigation: 'chk-deep-investigation',
+};
+
 async function updateAccountSetting(key, value) {
-  const checkbox = key === 'autoMergeOnAccept'
-    ? document.getElementById('chk-auto-merge')
-    : document.getElementById('chk-flag-conflicts-for-fleet');
+  const checkbox = document.getElementById(ACCOUNT_SETTING_CHECKBOX_IDS[key]);
   checkbox.disabled = true;
   try {
-    await api('POST', '/account/github/settings', {
-      autoMergeOnAccept: document.getElementById('chk-auto-merge').checked,
-      flagConflictsForFleet: document.getElementById('chk-flag-conflicts-for-fleet').checked,
-      [key]: value,
-    });
+    const body = {};
+    for (const [settingKey, elementId] of Object.entries(ACCOUNT_SETTING_CHECKBOX_IDS)) {
+      body[settingKey] = document.getElementById(elementId).checked;
+    }
+    body[key] = value;
+    await api('POST', '/account/github/settings', body);
   } finally {
     checkbox.disabled = false;
   }
@@ -960,6 +1075,10 @@ document.getElementById('chk-auto-merge').addEventListener('change', (e) => {
 
 document.getElementById('chk-flag-conflicts-for-fleet').addEventListener('change', (e) => {
   updateAccountSetting('flagConflictsForFleet', e.target.checked);
+});
+
+document.getElementById('chk-deep-investigation').addEventListener('change', (e) => {
+  updateAccountSetting('enableDeepConflictInvestigation', e.target.checked);
 });
 
 installBtn.addEventListener('click', async () => {

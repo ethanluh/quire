@@ -109,6 +109,17 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 				// New commits on a previously-decided PR (e.g. rejected, then reworked)
 				// deserve fresh review instead of staying permanently excluded.
 				await refreshDeps.decidedStore.clearDecided(parsed.pullRequestId);
+
+				// New commits may be exactly what a fleet was asked to push after a flagged
+				// conflict (or a human's own fix) — pick the stuck bundle back up instead of
+				// leaving it in "conflict" until someone notices and clicks "Retry". Actually
+				// landing it is gated the same way accept-time merging is (see gestures.ts):
+				// only auto-merge if the account opted into it, otherwise just clear the
+				// conflict and leave landing to a "Process" click.
+				const reattempted = await refreshDeps.queue.reattemptForPr(parsed.pullRequestId);
+				if (reattempted !== undefined && refreshDeps.accountState.current.autoMergeOnAccept === true) {
+					await refreshDeps.queue.dequeueNext();
+				}
 			}
 			await enqueueRefresh(parsed.repoOwner, parsed.repoName, refreshDeps);
 		})().catch((err: unknown) => {

@@ -27,10 +27,12 @@ import type { InstallationAccountState } from "../../src/engine/github/installat
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 import type { PipelineDeps } from "../../src/interface/server/ingestIntoQueue.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
-import type { InstallationAccount } from "../../src/engine/github/installationClient.js";
+import type { AccessibleInstallation, InstallationAccount } from "../../src/engine/github/installationClient.js";
 import { RequestError } from "@octokit/request-error";
 import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
 import type { UserTokenCache } from "../../src/engine/github/userTokenCache.js";
+import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -115,6 +117,19 @@ function cookiePair(setCookie: string | undefined): string {
 	return setCookie.split(";")[0] ?? "";
 }
 
+// Deliberately not `@octokit/request-error`'s `RequestError`: in production, this error comes
+// from a different, transitively-pinned copy of that package than any import here could resolve
+// to, so `instanceof` can never be relied on. This fake only replicates the `name`/`status`
+// shape the real error actually has, matching the duck-typed check `isInstallationRevoked` uses.
+class FakeHttpError extends Error {
+	readonly status: number;
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = "HttpError";
+		this.status = status;
+	}
+}
+
 describe("githubAppRouter", () => {
 	let dir: string;
 	let server: Server;
@@ -148,6 +163,7 @@ describe("githubAppRouter", () => {
 		enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>> = async (
 			repos,
 		) => repos,
+		listInstallationsForUser: (accessToken: string) => Promise<ReadonlyArray<AccessibleInstallation>> = async () => [],
 		isInstallationBoundToAnotherTeam: ((installationId: number) => boolean) | undefined = undefined,
 	): { accountPath: string; state: ServerState; refreshDeps: RefreshDeps; userTokenCache: UserTokenCache } {
 		const accountPath = join(dir, "installation.json");
@@ -171,6 +187,7 @@ describe("githubAppRouter", () => {
 			decidedStore,
 			state,
 			pipelineDeps: deps,
+			queue: new MergeQueue(join(dir, "queue.json"), client, new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
 		};
 		const app = express();
 		app.use(express.json());
@@ -195,6 +212,7 @@ describe("githubAppRouter", () => {
 				false,
 				userTokenCache,
 				enrichWithUserToken,
+				listInstallationsForUser,
 				isInstallationBoundToAnotherTeam,
 			),
 		);
@@ -217,6 +235,7 @@ describe("githubAppRouter", () => {
 			selectedRepo: undefined,
 			autoMergeOnAccept: false,
 			flagConflictsForFleet: false,
+			enableDeepConflictInvestigation: false,
 		});
 	});
 
@@ -379,6 +398,7 @@ const { accountPath } = setup(async () => []);
 			undefined,
 			undefined,
 			async (repos) => repos,
+			undefined,
 			() => true,
 		);
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -415,9 +435,7 @@ const { accountPath } = setup(async () => []);
 
 	it("redirects gracefully when the installation was revoked before the callback completes", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const revokedError = new RequestError("Not Found", 404, {
-			request: { method: "GET", url: "https://api.github.com/app/installations/555", headers: {}, body: undefined },
-		});
+		const revokedError = new FakeHttpError("Not Found", 404);
 		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, async () => {
 			throw revokedError;
 		});
@@ -865,10 +883,11 @@ const { accountPath } = setup(async () => []);
 			const { status, body } = await call(server, "POST", "/account/github/settings", {
 				autoMergeOnAccept: true,
 				flagConflictsForFleet: false,
+				enableDeepConflictInvestigation: false,
 			});
 
 			expect(status).toBe(200);
-			expect(body).toEqual({ autoMergeOnAccept: true, flagConflictsForFleet: false });
+			expect(body).toEqual({ autoMergeOnAccept: true, flagConflictsForFleet: false, enableDeepConflictInvestigation: false });
 
 			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
 			expect(persisted["autoMergeOnAccept"]).toBe(true);
@@ -898,6 +917,7 @@ const { accountPath } = setup(async () => []);
 			const { status } = await call(server, "POST", "/account/github/settings", {
 				autoMergeOnAccept: true,
 				flagConflictsForFleet: false,
+				enableDeepConflictInvestigation: false,
 			});
 
 			expect(status).toBe(400);
@@ -1009,6 +1029,7 @@ const { accountPath } = setup(async () => []);
 			selectedRepo: undefined,
 			autoMergeOnAccept: false,
 			flagConflictsForFleet: false,
+			enableDeepConflictInvestigation: false,
 		});
 	});
 
@@ -1049,5 +1070,120 @@ const { accountPath } = setup(async () => []);
 			}),
 		);
 		expect(body["selectedRepo"]).toBeUndefined();
+	});
+
+	describe("GET /available-installations", () => {
+		it("reports needsReconnect when no user token is cached for the requester", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, undefined, undefined, undefined, "octocat");
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "GET", "/account/github/available-installations");
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ installations: [], needsReconnect: true });
+		});
+
+		it("lists installations the signed-in user can access but hasn't bound yet", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const accessible: ReadonlyArray<AccessibleInstallation> = [
+				{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization" },
+			];
+			const { userTokenCache } = setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				"octocat",
+				undefined,
+				async () => accessible,
+			);
+			userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "GET", "/account/github/available-installations");
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ installations: accessible, needsReconnect: false });
+		});
+
+		it("excludes installations that are already bound to this tenant", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const accessible: ReadonlyArray<AccessibleInstallation> = [
+				{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization" },
+				{ installationId: 777, accountLogin: "octocat", accountType: "User" },
+			];
+			const { userTokenCache } = setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+				undefined,
+				undefined,
+				undefined,
+				"octocat",
+				undefined,
+				async () => accessible,
+			);
+			userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "GET", "/account/github/available-installations");
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ installations: [accessible[1]], needsReconnect: false });
+		});
+	});
+
+	describe("POST /connect", () => {
+		it("binds an already-accessible installation without going through the GitHub redirect", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const getInstallationAccount = async (installationId: number): Promise<InstallationAccount> => {
+				expect(installationId).toBe(555);
+				return { accountLogin: "acme-corp", accountType: "Organization" };
+			};
+			const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, getInstallationAccount);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/connect", { installationId: 555 });
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ connected: true, accountLogin: "acme-corp", accountType: "Organization" });
+
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { installations: Record<string, unknown>[] };
+			expect(persisted.installations).toEqual([
+				expect.objectContaining({ installationId: 555, accountLogin: "acme-corp" }),
+			]);
+		});
+
+		it("returns 400 without binding anything when the installation was revoked", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const revokedError = new RequestError("Not Found", 404, {
+				request: { method: "GET", url: "https://api.github.com/app/installations/555", headers: {}, body: undefined },
+			});
+			const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, async () => {
+				throw revokedError;
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/connect", { installationId: 555 });
+
+			expect(status).toBe(400);
+			expect(body["error"]).toBe("That installation is no longer accessible.");
+			await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+		});
+
+		it("rejects a non-numeric installationId", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup();
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(server, "POST", "/account/github/connect", { installationId: "not-a-number" });
+
+			expect(status).toBe(400);
+		});
 	});
 });

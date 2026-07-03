@@ -35,8 +35,10 @@ export interface InstallationAccountState {
 	// "auto-merge for org A but not org B."
 	autoMergeOnAccept?: boolean;
 	// Opt-in: post an unresolved merge conflict's detail as a plain PR comment for an
-	// external agent fleet to pick up (see preferences.ts).
+	// external agent fleet to pick up.
 	flagConflictsForFleet?: boolean;
+	// Opt-in: escalate an unresolved conflict to a Managed Agents investigation.
+	enableDeepConflictInvestigation?: boolean;
 }
 
 function isInstallationBinding(value: unknown): value is InstallationBinding {
@@ -68,6 +70,7 @@ function isInstallationAccountState(value: unknown): value is InstallationAccoun
 	if (record["selectedRepo"] !== undefined && !isSelectedRepo(record["selectedRepo"])) return false;
 	if (record["autoMergeOnAccept"] !== undefined && typeof record["autoMergeOnAccept"] !== "boolean") return false;
 	if (record["flagConflictsForFleet"] !== undefined && typeof record["flagConflictsForFleet"] !== "boolean") return false;
+	if (record["enableDeepConflictInvestigation"] !== undefined && typeof record["enableDeepConflictInvestigation"] !== "boolean") return false;
 	return true;
 }
 

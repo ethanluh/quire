@@ -1,5 +1,4 @@
 import type { Octokit } from "@octokit/rest";
-import { RequestError } from "@octokit/request-error";
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import { formatReviewCardComment } from "../review/comment.js";
 import type {
@@ -91,8 +90,18 @@ function isNotFoundError(err: unknown): boolean {
 // otherwise ("Resource not accessible by integration"). See README's "GitHub App setup".
 export class InsufficientGitHubPermissionError extends Error {}
 
+// @octokit/rest depends on a different (transitively-pinned) copy of @octokit/request-error
+// than the one this package imports directly, so npm can't dedupe them — real errors from
+// this.octokit.rest.* calls are never `instanceof` the class imported here. Both copies set
+// `name`/`status` the same way, so duck-type on those instead of on class identity. Exported
+// so other GitHub-error call sites (e.g. installationClient.ts) share this same detection
+// instead of re-introducing the identity check this bug came from.
+export function isHttpError(err: unknown): err is { name: string; status: number; message: string } {
+	return err instanceof Error && err.name === "HttpError" && typeof (err as { status?: unknown }).status === "number";
+}
+
 function isInsufficientPermission(err: unknown): boolean {
-	return err instanceof RequestError
+	return isHttpError(err)
 		&& err.status === 403
 		&& /Resource not accessible by integration/i.test(err.message);
 }
@@ -439,7 +448,7 @@ export class OctokitGitHubClient implements GitHubClient {
 				force: false,
 			});
 		} catch (err) {
-			if (err instanceof RequestError && (err.status === 422 || err.status === 409)) {
+			if (isHttpError(err) && (err.status === 422 || err.status === 409)) {
 				throw new NotFastForwardError(`${owner}/${repo} branch ${headBranch} moved during conflict resolution`);
 			}
 			throw err;
