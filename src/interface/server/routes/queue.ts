@@ -44,13 +44,15 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 
 	// A bundle stuck in "conflict" (automated resolution didn't apply or couldn't confidently
 	// resolve it — see INV-6) goes back to "queued" so the next /process pass tries again,
-	// whether the human fixed it manually on GitHub or just wants another attempt.
+	// whether the human fixed it manually on GitHub or just wants another attempt. Also accepts
+	// "resolving", so a human watching the dispatched Action's run isn't stuck waiting out the
+	// poll timeout before they can retry.
 	router.post("/:bundleId/retry", async (req, res, next) => {
 		try {
 			const bundleId = req.params["bundleId"] ?? "";
 			const retried = await queue.retryConflict(bundleId);
 			if (retried === undefined) {
-				res.status(400).json({ error: `Bundle ${bundleId} is not in a conflict state` });
+				res.status(400).json({ error: `Bundle ${bundleId} is not in a conflict or resolving state` });
 				return;
 			}
 			res.json({ status: "queued", bundleId });

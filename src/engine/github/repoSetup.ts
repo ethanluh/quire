@@ -69,6 +69,12 @@ on:
 jobs:
   resolve-conflict:
     runs-on: ubuntu-latest
+    # Confirmed against a live run (28638454529): with no permission-mode/max-turns set, Claude
+    # burned 25 turns and hit 8 tool-permission denials working around the interactive-style
+    # default, took 8m27s, and still left conflict markers behind. This job's checkout is
+    # disposable and single-purpose (contents: write only), so bypassPermissions is safe here;
+    # max-turns bounds the cost/time of a PR it genuinely can't resolve.
+    timeout-minutes: 15
     permissions:
       contents: write
       # claude-code-action authenticates via GitHub's OIDC provider, which requires this
@@ -87,9 +93,6 @@ jobs:
           git fetch origin "\${{ github.event.inputs.base_branch }}"
           git merge "origin/\${{ github.event.inputs.base_branch }}" --no-edit || true
 
-      # Verify claude-code-action's exact input names against its own README before relying on
-      # this in production — written against the documented anthropics/claude-code-action
-      # interface at plan time, not confirmed against a live run.
       - name: Resolve remaining conflicts with Claude Code
         uses: anthropics/claude-code-action@v1
         with:
@@ -98,6 +101,10 @@ jobs:
           # is always whatever bot dispatched this run — never hardcode a specific app slug
           # here, since every Quire installation registers its own app under its own name.
           allowed_bots: \${{ github.actor }}
+          claude_args: |
+            --permission-mode bypassPermissions
+            --max-turns 15
+          show_full_output: true
           prompt: |
             Resolve every remaining git merge conflict in this working tree (files still
             containing <<<<<<<, =======, >>>>>>> markers). This PR's declared direction is:
