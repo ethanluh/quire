@@ -226,6 +226,7 @@
     <div class="empty">Merge queue is empty.</div>
   </div>
   <button class="btn btn-accept" style="margin-top:16px" id="btn-process">Process next</button>
+  <button class="btn btn-accept" style="margin-top:16px" id="btn-process-all">Process all</button>
 </div>
 
 <div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
@@ -654,6 +655,37 @@ document.getElementById('btn-process').addEventListener('click', async () => {
     return;
   }
   loadQueue();
+});
+
+document.getElementById('btn-process-all').addEventListener('click', async () => {
+  const pending = queueEntries.filter(e => e.status === 'queued' || e.status === 'landing').length;
+  if (!pending) return;
+  if (!confirm(`Process all ${pending} queued item(s) in the merge queue?`)) return;
+
+  const btn = document.getElementById('btn-process-all');
+  btn.disabled = true;
+  let landed = 0, conflicts = 0, resolving = 0, processed = 0;
+
+  // dequeueNext() always moves an entry out of "queued"/"landing" on each call, so this
+  // is bounded by the queue size at the start — cap defensively in case that ever changes.
+  for (let i = 0; i < pending && i < queueEntries.length; i++) {
+    btn.textContent = `Processing… (${processed}/${pending})`;
+    const result = await api('POST', '/queue/process');
+    if (result.error) {
+      alert('Could not process queue: ' + result.error);
+      break;
+    }
+    if (result.status === 'empty') break;
+    processed++;
+    if (result.status === 'landed') landed++;
+    else if (result.status === 'conflict') conflicts++;
+    else if (result.status === 'resolving') resolving++;
+    await loadQueue();
+  }
+
+  btn.textContent = 'Process all';
+  btn.disabled = false;
+  alert(`Processed ${processed}: ${landed} landed, ${conflicts} conflict(s), ${resolving} resolving.`);
 });
 
 const clearAllBtn = document.getElementById('btn-clear-all');
