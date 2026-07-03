@@ -93,6 +93,12 @@
   .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
   .status-landed  { background: var(--color-accept-wash); color: var(--color-accept); }
 
+  .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
+  .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
+  .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
+  .pr-status-resolving { background: var(--color-flagged-wash); color: var(--color-flagged); }
+
   .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
   .result-msg.error { color: var(--color-reject); }
 
@@ -409,7 +415,17 @@ function prDriftBadges(prId, drift) {
   return badges.join('');
 }
 
-function prMemberListHtml(members, drift) {
+function prMergeStatusBadge(pr, mergeStatus) {
+  if (!mergeStatus) return '';
+  let status = 'pending';
+  if (mergeStatus.revertedPrIds.includes(pr.id)) status = 'reverted';
+  else if (mergeStatus.mergedPrIds.includes(pr.id)) status = 'merged';
+  else if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) status = 'conflict';
+  else if (mergeStatus.resolution && mergeStatus.resolution.prId === pr.id) status = 'resolving';
+  return `<span class="badge pr-status-${status}">Merge: ${escapeHtml(status)}</span>`;
+}
+
+function prMemberListHtml(members, drift, mergeStatus) {
   if (!members.length) return '<div class="empty">No member PRs.</div>';
   return '<div class="pr-member-list">' + members.map(pr => {
     const url = `https://github.com/${pr.repoOwner}/${pr.repoName}/pull/${pr.number}`;
@@ -419,6 +435,7 @@ function prMemberListHtml(members, drift) {
         <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)}</span>
       </div>
       <div class="pr-member-tags">
+        ${prMergeStatusBadge(pr, mergeStatus)}
         ${prDriftBadges(pr.id, drift)}
         ${ciStatusBadge(pr.ciStatus)}
         <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
@@ -443,7 +460,7 @@ function detailBodyHtml(detail, opts) {
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
     <h4>Member PRs</h4>
-    ${prMemberListHtml(detail.members || [], detail.drift)}
+    ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
   `;
 }
 
@@ -472,7 +489,10 @@ function showQueueDetail(bundleId) {
   if (!entry) return;
   openDetailModal(detailBodyHtml(
     { direction: entry.bundle.direction, effectSummary: entry.bundle.effectSummary, members: entry.bundle.members },
-    { queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt } },
+    {
+      queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt },
+      mergeStatus: { mergedPrIds: entry.mergedPrIds, revertedPrIds: entry.revertedPrIds, conflict: entry.conflict, resolution: entry.resolution },
+    },
   ));
 }
 
