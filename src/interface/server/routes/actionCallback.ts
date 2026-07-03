@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { Router } from "express";
 import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import { logConflictResolution } from "../../../engine/instrumentation/logger.js";
+import { notifyStateChanged } from "../changeEvents.js";
 
 const CALLBACK_TOKEN_HEADER = "x-quire-callback-token";
 
@@ -66,6 +67,9 @@ export function actionCallbackRouter(queue: MergeQueue, conflictLogPath: string)
 				await queue.markResolutionFailed(bundleId, prId, payload.reason ?? "unresolved (no reason given)");
 				await logConflictResolution(conflictLogPath, bundleId, prId, "unresolved", payload.reason);
 				res.status(200).json({ acknowledged: true });
+				// This is a GitHub Actions runner calling in, not an open tab — nothing else
+				// already knows this queue entry changed, so push it rather than wait for a poll.
+				notifyStateChanged();
 				return;
 			}
 
@@ -74,12 +78,15 @@ export function actionCallbackRouter(queue: MergeQueue, conflictLogPath: string)
 			await queue.markResolutionSucceeded(bundleId);
 			await logConflictResolution(conflictLogPath, bundleId, prId, "resolved");
 			res.status(200).json({ acknowledged: true });
+			notifyStateChanged();
 
 			// Auto-continue the queue rather than waiting for a human to notice the status
 			// changed and click "Process" — mirrors the webhook route's fire-and-forget refresh.
-			queue.dequeueNext().catch((err: unknown) => {
-				console.error(`Auto-continue after conflict resolution failed for bundle ${bundleId}:`, err);
-			});
+			queue.dequeueNext()
+				.catch((err: unknown) => {
+					console.error(`Auto-continue after conflict resolution failed for bundle ${bundleId}:`, err);
+				})
+				.finally(() => notifyStateChanged());
 		} catch (err) {
 			next(err);
 		}

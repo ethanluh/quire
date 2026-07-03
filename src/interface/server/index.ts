@@ -36,6 +36,7 @@ import { bundlesRouter } from "./routes/bundles.js";
 import { gesturesRouter } from "./routes/gestures.js";
 import { queueRouter } from "./routes/queue.js";
 import { shelfRouter } from "./routes/shelf.js";
+import { eventsRouter } from "./routes/events.js";
 import { auditRouter } from "./routes/audit.js";
 import { adminRouter } from "./routes/admin.js";
 import { accountRouter } from "./routes/account.js";
@@ -267,6 +268,7 @@ async function main(): Promise<void> {
 	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github, decidedStore, accountState));
 	app.use("/queue", queueRouter(queue, state, decidedStore));
 	app.use("/shelf", shelfRouter(state, decidedStore));
+	app.use("/events", eventsRouter());
 	app.use("/audit", auditRouter(auditStore));
 	app.use(
 		"/admin",
