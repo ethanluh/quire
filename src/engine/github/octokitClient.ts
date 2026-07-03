@@ -453,11 +453,17 @@ export class OctokitGitHubClient implements GitHubClient {
 		params: ConflictResolutionDispatchParams,
 	): Promise<ConflictResolutionDispatchResult> {
 		return withPermissionHint("dispatch the conflict-resolution workflow", async () => {
+			// `ref` picks which copy of the workflow file GitHub validates for a
+			// workflow_dispatch trigger and runs — it is unrelated to which branch the job
+			// itself checks out (the job does that via the head_branch *input*, below). Using
+			// the PR's own head branch here 404s/422s for any PR whose branch predates Quire's
+			// setup PR landing this workflow on the default branch, i.e. most existing PRs.
+			// The base branch is where the setup PR actually committed the workflow file.
 			await this.octokit.rest.actions.createWorkflowDispatch({
 				owner,
 				repo,
 				workflow_id: CONFLICT_RESOLUTION_WORKFLOW_PATH,
-				ref: params.headBranch,
+				ref: params.baseBranch,
 				inputs: {
 					pr_number: String(params.prNumber),
 					head_branch: params.headBranch,
@@ -467,7 +473,7 @@ export class OctokitGitHubClient implements GitHubClient {
 					callback_token: params.callbackToken,
 				},
 			});
-			const workflowRunId = await this.findRecentWorkflowRunId(owner, repo, params.headBranch);
+			const workflowRunId = await this.findRecentWorkflowRunId(owner, repo, params.baseBranch);
 			return workflowRunId !== undefined ? { workflowRunId } : {};
 		});
 	}
@@ -475,12 +481,12 @@ export class OctokitGitHubClient implements GitHubClient {
 	// Best-effort recovery of the run workflow_dispatch just created — its own response has
 	// no body. Racy by nature (another dispatch on the same branch could land first); a miss
 	// just leaves workflowRunId unset, which the callback path doesn't need anyway.
-	private async findRecentWorkflowRunId(owner: string, repo: string, headBranch: string): Promise<number | undefined> {
+	private async findRecentWorkflowRunId(owner: string, repo: string, dispatchRef: string): Promise<number | undefined> {
 		const { data } = await this.octokit.rest.actions.listWorkflowRuns({
 			owner,
 			repo,
 			workflow_id: CONFLICT_RESOLUTION_WORKFLOW_PATH,
-			branch: headBranch,
+			branch: dispatchRef,
 			event: "workflow_dispatch",
 			per_page: 1,
 		});
