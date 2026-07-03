@@ -92,6 +92,12 @@
   .status-queued  { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
   .status-landed  { background: var(--color-accept-wash); color: var(--color-accept); }
+  /* Same reject tier as pr-status-conflict — automated resolution was attempted and
+     failed; the bundle is stopped and waiting on a human, not mid-retry. */
+  .status-conflict { background: var(--color-reject-wash); color: var(--color-reject); }
+  /* Reject tier, not flagged: abort is a deliberate human give-up (like the reject
+     gesture), not a routine/retryable state the way conflict is. */
+  .status-aborted { background: var(--color-reject-wash); color: var(--color-reject); }
 
   .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
@@ -277,6 +283,14 @@
           <input type="checkbox" id="chk-auto-merge">
           Automatically merge accepted bundles (skips the manual "Process next" step)
         </label>
+        <label class="auto-merge-toggle">
+          <input type="checkbox" id="chk-flag-conflicts-for-fleet">
+          Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
+        </label>
+        <div id="sorting-notice" class="result-msg" style="display:none">
+          Starred/pinned sorting is unavailable until you reconnect GitHub (this happens after every server redeploy).
+          <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
+        </div>
         <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
         <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
       </div>
@@ -317,6 +331,9 @@
 </div>
 
 <script>
+// Only shelf/queue get a placeholder — review is the swipeable card stack (#stack),
+// whose own render path shouldn't be touched here.
+const TAB_LIST_IDS = { shelf: 'shelf-list', queue: 'queue-list' };
 const tabs = document.querySelectorAll('.tab');
 tabs.forEach(tab => {
   tab.addEventListener('click', () => {
@@ -324,6 +341,14 @@ tabs.forEach(tab => {
     tab.classList.add('active');
     document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
     document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+    // Force a real re-render instead of a cache hit silently no-op'ing against the
+    // placeholder below (see lastRenderedJson) — a deliberate tab switch should always
+    // show something, even if the underlying data turns out to be unchanged.
+    const listId = TAB_LIST_IDS[tab.dataset.tab];
+    if (listId) {
+      delete lastRenderedJson[tab.dataset.tab];
+      document.getElementById(listId).innerHTML = '<div class="empty">Loading&hellip;</div>';
+    }
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
@@ -358,6 +383,18 @@ async function api(method, path, body) {
     return { error: 'Sign in required' };
   }
   return r.json();
+}
+
+async function withPending(btn, pendingLabel, fn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = pendingLabel;
+  try {
+    return await fn();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 function escapeHtml(value) {
@@ -468,6 +505,7 @@ function detailBodyHtml(detail, opts) {
       <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(opts.queueMeta.status)}</span>
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
+    ${opts.mergeStatus && opts.mergeStatus.conflict ? `<div class="residual">Conflict: ${escapeHtml(opts.mergeStatus.conflict.reason)} — detected ${escapeHtml(opts.mergeStatus.conflict.detectedAt)}. Automated resolution did not apply; retry to try again.</div>` : ''}
     <h4>Member PRs</h4>
     ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
   `;
@@ -777,11 +815,17 @@ async function loadQueue() {
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry card">
-    <div><div>${escapeHtml(e.bundle.direction)}</div><div class="entry-id">${escapeHtml(e.bundleId)}</div></div>
+    <div>
+      <div>${escapeHtml(e.bundle.direction)}</div>
+      <div class="entry-id">${escapeHtml(e.bundleId)}</div>
+      ${e.status === 'conflict' && e.conflict ? `<div class="residual">Conflict: ${escapeHtml(e.conflict.reason)} (detected ${escapeHtml(e.conflict.detectedAt)})</div>` : ''}
+    </div>
     <div class="queue-entry-actions">
       <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
       <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
       ${e.status === 'queued' ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
+      ${['conflict', 'aborted'].includes(e.status) ? `<button class="btn btn-accept" onclick="reattemptQueueEntry('${escapeHtml(e.bundleId)}')">Reattempt</button>` : ''}
+      ${['landing', 'conflict'].includes(e.status) ? `<button class="btn btn-reject" onclick="abortQueueEntry('${escapeHtml(e.bundleId)}', ${e.mergedPrIds.length}, ${e.bundle.members.length})">Abort</button>` : ''}
     </div>
   </div>`).join('');
 }
@@ -792,8 +836,22 @@ async function removeFromQueue(bundleId) {
   loadQueue();
 }
 
-document.getElementById('btn-process').addEventListener('click', async () => {
-  const result = await api('POST', '/queue/process');
+async function abortQueueEntry(bundleId, mergedCount, totalCount) {
+  const message = mergedCount > 0
+    ? `Abort this bundle? ${mergedCount} of ${totalCount} member PRs already merged and will stay merged — aborting only stops Quire from retrying the rest. Nothing is reverted.`
+    : 'Abort this bundle? It will stop being retried and remain in the queue marked as aborted.';
+  if (!confirm(message)) return;
+  await api('POST', `/queue/${bundleId}/abort`, undefined);
+  loadQueue();
+}
+
+async function reattemptQueueEntry(bundleId) {
+  await api('POST', `/queue/${bundleId}/retry`, undefined);
+  loadQueue();
+}
+
+document.getElementById('btn-process').addEventListener('click', async (e) => {
+  const result = await withPending(e.currentTarget, 'Processing…', () => api('POST', '/queue/process'));
   if (result.error) {
     alert('Could not process queue: ' + result.error);
     return;
@@ -848,18 +906,28 @@ function hideSigninGate(login) {
   settingsBtn.style.display = 'inline-block';
 }
 
-document.getElementById('btn-signin').addEventListener('click', async () => {
-  const btn = document.getElementById('btn-signin');
+// Shared by "Sign in with GitHub" and "Reconnect GitHub" — both just need to run the OAuth
+// flow again. Safe to call even while already signed in: it doesn't touch the installation
+// binding or selected repo, only the session cookie and the in-memory starred/pinned token.
+async function startOAuth(btn, errorEl) {
   btn.disabled = true;
   const result = await fetch('/account/github/oauth/start').then((r) => r.json());
   if (result.error) {
-    const el = document.getElementById('signin-result');
-    el.textContent = 'Error: ' + result.error;
-    el.style.display = 'block';
+    errorEl.textContent = 'Error: ' + result.error;
+    errorEl.className = 'result-msg error';
+    errorEl.style.display = 'block';
     btn.disabled = false;
     return;
   }
   location.href = result.authorizeUrl;
+}
+
+document.getElementById('btn-signin').addEventListener('click', () => {
+  startOAuth(document.getElementById('btn-signin'), document.getElementById('signin-result'));
+});
+
+document.getElementById('btn-reconnect-github').addEventListener('click', () => {
+  startOAuth(document.getElementById('btn-reconnect-github'), document.getElementById('account-result'));
 });
 
 signoutBtn.addEventListener('click', async () => {
@@ -895,6 +963,7 @@ async function loadAccount() {
     accountDisconnectBtn.style.display = 'block';
     repoPanel.style.display = 'block';
     document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
+    document.getElementById('chk-flag-conflicts-for-fleet').checked = status.flagConflictsForFleet ?? false;
     loadRepos(status.selectedRepo);
   } else {
     statusEl.textContent = status.selectedRepo
@@ -907,8 +976,28 @@ async function loadAccount() {
   }
 }
 
-document.getElementById('chk-auto-merge').addEventListener('change', async (e) => {
-  await api('POST', '/account/github/settings', { autoMergeOnAccept: e.target.checked });
+async function updateAccountSetting(key, value) {
+  const checkbox = key === 'autoMergeOnAccept'
+    ? document.getElementById('chk-auto-merge')
+    : document.getElementById('chk-flag-conflicts-for-fleet');
+  checkbox.disabled = true;
+  try {
+    await api('POST', '/account/github/settings', {
+      autoMergeOnAccept: document.getElementById('chk-auto-merge').checked,
+      flagConflictsForFleet: document.getElementById('chk-flag-conflicts-for-fleet').checked,
+      [key]: value,
+    });
+  } finally {
+    checkbox.disabled = false;
+  }
+}
+
+document.getElementById('chk-auto-merge').addEventListener('change', (e) => {
+  updateAccountSetting('autoMergeOnAccept', e.target.checked);
+});
+
+document.getElementById('chk-flag-conflicts-for-fleet').addEventListener('change', (e) => {
+  updateAccountSetting('flagConflictsForFleet', e.target.checked);
 });
 
 installBtn.addEventListener('click', async () => {
@@ -969,13 +1058,13 @@ async function loadLlmAccount() {
   }
 }
 
-document.getElementById('btn-llm-connect').addEventListener('click', async () => {
+document.getElementById('btn-llm-connect').addEventListener('click', async (e) => {
   const provider = document.getElementById('llm-provider-select').value;
   const apiKeyInput = document.getElementById('llm-api-key');
   const apiKey = apiKeyInput.value.trim();
   const resultEl = document.getElementById('llm-account-result');
   if (!apiKey) return;
-  const result = await api('POST', '/account/llm/connect', { provider, apiKey });
+  const result = await withPending(e.currentTarget, 'Connecting…', () => api('POST', '/account/llm/connect', { provider, apiKey }));
   if (result.error) {
     resultEl.textContent = 'Error: ' + result.error;
     resultEl.className = 'result-msg error';
@@ -1034,6 +1123,7 @@ async function loadRepos(selectedRepo) {
   }
   loadedRepos = result.repos || [];
   loadedSelectedRepo = result.selected || selectedRepo;
+  document.getElementById('sorting-notice').style.display = result.sortingAvailable ? 'none' : 'block';
   renderRepoList();
 }
 

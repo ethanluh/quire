@@ -12,6 +12,7 @@ import {
 	reconstructContent,
 	resolveMechanicalHunk,
 } from "./conflictHunks.js";
+import type { SemanticHunkResolution } from "./semanticHunkResolver.js";
 import { resolveSemanticHunks } from "./semanticHunkResolver.js";
 
 export type FileResolutionPlan =
@@ -81,15 +82,25 @@ export function planFileResolutions(trees: ConflictTrees): ReadonlyArray<FileRes
 	return plans;
 }
 
-const HUNK_PREVIEW_LINE_LENGTH = 60;
+// Hunks are small by construction (a few lines each — see conflictHunks.ts), so the full
+// side renders without needing the truncation a whole-file preview would require.
+function renderHunkSide(label: string, lines: ReadonlyArray<string>): string {
+	return `  ${label}:\n${lines.map((l) => `    ${l}`).join("\n")}`;
+}
 
-// A short, human-scannable anchor for a hunk in a failure reason — enough for a reviewer to
-// find the right conflict marker in the file without re-diffing it by hand (see INV-6).
-function describeHunkSide(lines: ReadonlyArray<string>): string {
-	const first = lines[0] ?? "";
-	const truncated = first.length > HUNK_PREVIEW_LINE_LENGTH ? `${first.slice(0, HUNK_PREVIEW_LINE_LENGTH)}…` : first;
-	const suffix = lines.length > 1 ? ` (+${lines.length - 1} more line${lines.length > 2 ? "s" : ""})` : "";
-	return `"${truncated}"${suffix}`;
+// Full detail for one low-confidence hunk — per INV-6, a reviewer should be able to act on
+// this without re-diffing the file by hand: the actual conflicting content on every side,
+// plus what the model tried and how sure it was, rather than a bare "couldn't resolve".
+function describeLowConfidenceHunk(hunk: ConflictHunk, resolution: SemanticHunkResolution): string {
+	return [
+		renderHunkSide("base", hunk.baseLines),
+		renderHunkSide("ours", hunk.oursLines),
+		renderHunkSide("theirs", hunk.theirsLines),
+		`  model's attempted resolution (confidence: ${resolution.confidence}):\n${resolution.resolution
+			.split("\n")
+			.map((l) => `    ${l}`)
+			.join("\n")}`,
+	].join("\n");
 }
 
 export type ConflictResolutionOutcome = { status: "resolved" } | { status: "failed"; reason: string };
@@ -157,19 +168,26 @@ export async function resolveMergeConflict(
 
 			if (semanticHunks.length > 0) {
 				const semanticResolutions = await resolveSemanticHunks(semanticHunks, pr.declaredDirection, provider);
+				// Collect every low-confidence hunk before failing, rather than stopping at the
+				// first one — a file with several ambiguous hunks should disclose all of them in
+				// one pass instead of making a human retry repeatedly to discover each in turn.
+				const lowConfidenceReports: string[] = [];
 				for (let i = 0; i < semanticHunks.length; i++) {
 					const hunk = semanticHunks[i];
 					const resolution = semanticResolutions[i];
 					if (hunk === undefined || resolution === undefined) continue;
 					if (resolution.confidence === "low") {
-						// Per INV-6, disclose which hunk beat the resolver, not just that one did —
-						// a bare "couldn't resolve" reason forces a human to re-diff the file by hand.
-						return {
-							status: "failed",
-							reason: `${plan.path}: could not confidently resolve a conflicting hunk (ours: ${describeHunkSide(hunk.oursLines)} vs theirs: ${describeHunkSide(hunk.theirsLines)})`,
-						};
+						lowConfidenceReports.push(describeLowConfidenceHunk(hunk, resolution));
+						continue;
 					}
 					resolutions.set(hunk.index, resolution.resolution);
+				}
+				if (lowConfidenceReports.length > 0) {
+					const plural = lowConfidenceReports.length > 1;
+					return {
+						status: "failed",
+						reason: `${plan.path}: could not confidently resolve ${lowConfidenceReports.length} conflicting hunk${plural ? "s" : ""}:\n${lowConfidenceReports.join("\n\n")}`,
+					};
 				}
 			}
 

@@ -223,6 +223,12 @@ export class OctokitGitHubClient implements GitHubClient {
 		);
 	}
 
+	async postComment(owner: string, repo: string, prNumber: number, body: string): Promise<void> {
+		await withPermissionHint("post a comment", () =>
+			this.octokit.rest.issues.createComment({ owner, repo, issue_number: prNumber, body }),
+		);
+	}
+
 	async getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined> {
 		return this.getFileContentAtRef(owner, repo, path, undefined);
 	}
