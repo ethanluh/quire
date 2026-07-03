@@ -368,20 +368,20 @@ describe("MergeQueue concurrency", () => {
 	});
 });
 
-describe("MergeQueue.retryConflict", () => {
+describe("MergeQueue.reattempt", () => {
 	let dir: string;
 
 	afterEach(async () => {
 		if (dir) await rm(dir, { recursive: true, force: true });
 	});
 
-	it("returns undefined when the bundle isn't in a conflict state", async () => {
+	it("returns undefined when the bundle isn't in a conflict or aborted state", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 		await queue.enqueue(makeBundle("bundle-1"));
 
-		await expect(queue.retryConflict("bundle-1")).resolves.toBeUndefined();
+		await expect(queue.reattempt("bundle-1")).resolves.toBeUndefined();
 	});
 
 	it("clears the conflict and requeues, so a later dequeueNext can land it", async () => {
@@ -397,13 +397,177 @@ describe("MergeQueue.retryConflict", () => {
 
 		// The human fixes the branch-protection issue on GitHub, then retries.
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
-		const retried = await queue.retryConflict("bundle-1");
+		const retried = await queue.reattempt("bundle-1");
 		expect(retried?.status).toBe("queued");
 		expect(retried?.conflict).toBeUndefined();
 
 		const landed = await queue.dequeueNext();
 		expect(landed?.status).toBe("landed");
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
+	});
+
+	it("clears abortedAt and requeues an aborted bundle, resuming from its partial merge progress", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		github.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2]));
+		await queue.dequeueNext(); // merges pr1, blocks on pr2 with status "conflict"
+		await queue.abort("bundle-1");
+
+		github.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "clean" }));
+		const retried = await queue.reattempt("bundle-1");
+		expect(retried?.status).toBe("queued");
+		expect(retried?.abortedAt).toBeUndefined();
+		expect(retried?.mergedPrIds).toEqual([pr1.id]);
+
+		const landed = await queue.dequeueNext();
+		expect(landed?.status).toBe("landed");
+		// pr1 was merged before the abort; pr2 merges now — pr1 is never re-merged.
+		expect(github.mergedPrs).toEqual(["org/repo/1", "org/repo/2"]);
+	});
+});
+
+describe("MergeQueue.abort", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	async function setup(): Promise<{ github: StubGitHubClient; queue: MergeQueue }> {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		return { github, queue };
+	}
+
+	it("aborts a bundle stuck in conflict, clearing the conflict reason", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		const blocked = await queue.dequeueNext();
+		expect(blocked?.status).toBe("conflict");
+
+		const aborted = await queue.abort("bundle-1");
+
+		expect(aborted?.status).toBe("aborted");
+		expect(aborted?.conflict).toBeUndefined();
+		expect(aborted?.abortedAt).toEqual(expect.any(String));
+	});
+
+	it("preserves mergedPrIds on abort so the partial-merge residual stays visible", async () => {
+		const { github, queue } = await setup();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		github.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2]));
+		const blocked = await queue.dequeueNext();
+		expect(blocked?.status).toBe("conflict");
+		expect(blocked?.mergedPrIds).toEqual([pr1.id]);
+
+		const aborted = await queue.abort("bundle-1");
+
+		expect(aborted?.status).toBe("aborted");
+		expect(aborted?.mergedPrIds).toEqual([pr1.id]);
+	});
+
+	it("returns undefined for a queued bundle (use removeQueued instead)", async () => {
+		const { queue } = await setup();
+		await queue.enqueue(makeBundle("bundle-1"));
+
+		await expect(queue.abort("bundle-1")).resolves.toBeUndefined();
+		expect((await queue.getEntry("bundle-1"))?.status).toBe("queued");
+	});
+
+	it("returns undefined for a landed bundle", async () => {
+		const { queue } = await setup();
+		await queue.enqueue(makeBundle("bundle-1", [makePr()]));
+		await queue.dequeueNext();
+
+		await expect(queue.abort("bundle-1")).resolves.toBeUndefined();
+		expect((await queue.getEntry("bundle-1"))?.status).toBe("landed");
+	});
+
+	it("returns undefined for an already-aborted bundle", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.dequeueNext();
+		await queue.abort("bundle-1");
+
+		await expect(queue.abort("bundle-1")).resolves.toBeUndefined();
+	});
+
+	it("silently no-ops when the bundle is not in the queue", async () => {
+		const { queue } = await setup();
+
+		await expect(queue.abort("missing-bundle")).resolves.toBeUndefined();
+	});
+});
+
+describe("MergeQueue.revertPr", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	async function setup(): Promise<{ github: StubGitHubClient; queue: MergeQueue }> {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		return { github, queue };
+	}
+
+	it("reverts a PR from a fully landed bundle", async () => {
+		const { queue } = await setup();
+		const pr = makePr();
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.dequeueNext();
+
+		const revertUrl = await queue.revertPr("bundle-1", pr.id);
+
+		expect(revertUrl).toEqual(expect.any(String));
+		expect((await queue.getEntry("bundle-1"))?.revertedPrIds).toEqual([pr.id]);
+	});
+
+	it("reverts a PR that merged before the bundle was aborted", async () => {
+		const { github, queue } = await setup();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		github.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2]));
+		await queue.dequeueNext();
+		await queue.abort("bundle-1");
+
+		const revertUrl = await queue.revertPr("bundle-1", pr1.id);
+
+		expect(revertUrl).toEqual(expect.any(String));
+		expect((await queue.getEntry("bundle-1"))?.revertedPrIds).toEqual([pr1.id]);
+	});
+
+	it("rejects reverting a PR that was never merged", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.dequeueNext();
+
+		await expect(queue.revertPr("bundle-1", pr.id)).rejects.toThrow(/was not merged/);
+	});
+
+	it("rejects reverting for a bundle not in the queue", async () => {
+		const { queue } = await setup();
+
+		await expect(queue.revertPr("missing-bundle", "pr-1")).rejects.toThrow(/not found in queue/);
 	});
 });
 
