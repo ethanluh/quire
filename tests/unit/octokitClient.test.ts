@@ -1,12 +1,24 @@
 import { describe, it, expect, jest } from "@jest/globals";
 import type { Octokit } from "@octokit/rest";
-import { RequestError } from "@octokit/request-error";
 import { OctokitGitHubClient, InsufficientGitHubPermissionError } from "../../src/engine/github/octokitClient.js";
 
-function insufficientPermissionError(): RequestError {
-	return new RequestError("Resource not accessible by integration", 403, {
-		request: { method: "POST", url: "", headers: {} },
-	});
+// Deliberately NOT `@octokit/request-error`'s `RequestError`: in production, errors thrown by
+// `this.octokit.rest.*` calls come from a different, transitively-pinned copy of that package
+// than the one the source file could import, so `instanceof` can never be relied on. This fake
+// only replicates the `name`/`status` shape both copies actually set, so these tests exercise
+// the same duck-typed detection the real code uses instead of accidentally relying on class
+// identity like the bug this fixes did.
+class FakeHttpError extends Error {
+	readonly status: number;
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = "HttpError";
+		this.status = status;
+	}
+}
+
+function insufficientPermissionError(): FakeHttpError {
+	return new FakeHttpError("Resource not accessible by integration", 403);
 }
 
 interface FakeCheckRun {
@@ -31,8 +43,8 @@ function makePrResponse(body: string | null, overrides: Record<string, unknown> 
 	};
 }
 
-function notFoundError(): RequestError {
-	return new RequestError("Not Found", 404, { request: { method: "GET", url: "", headers: {} } });
+function notFoundError(): FakeHttpError {
+	return new FakeHttpError("Not Found", 404);
 }
 
 function makeFakeOctokit(opts: {
@@ -318,7 +330,7 @@ describe("OctokitGitHubClient", () => {
 		});
 
 		it("rethrows an unrelated merge failure unchanged", async () => {
-			const notFound = new RequestError("Not Found", 404, { request: { method: "PUT", url: "", headers: {} } });
+			const notFound = new FakeHttpError("Not Found", 404);
 			const { octokit } = makeFakeOctokit({ mergeRejects: notFound });
 			const client = new OctokitGitHubClient(octokit);
 			await expect(client.mergePullRequest("org", "repo", 7)).rejects.toBe(notFound);
