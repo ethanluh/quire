@@ -233,6 +233,19 @@ async function main(): Promise<void> {
 	}, QUEUE_REFRESH_INTERVAL_MS);
 	queueRefreshTimer.unref();
 
+	// Checks in on any in-flight Managed Agents deep-investigation sessions (opt-in — see
+	// tenant.ts's DeepInvestigationDeps). A no-op for tenants who never started one:
+	// pollInvestigations() only touches "investigating" entries. Reuses the same cadence as
+	// the queue-branch refresh above rather than introducing a third interval knob.
+	const investigationPollTimer = setInterval(() => {
+		for (const tenant of registry.all()) {
+			tenant.queue.pollInvestigations().catch((err: unknown) => {
+				console.error(`Deep conflict investigation poll failed for ${tenant.login}:`, err);
+			});
+		}
+	}, QUEUE_REFRESH_INTERVAL_MS);
+	investigationPollTimer.unref();
+
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);
 	});

@@ -12,6 +12,11 @@ export interface StoredPreferences {
 	// agent fleet watching the repo's PRs can pick it up, instead of only recording it as the
 	// bundle's conflict.reason for a human to see inside Quire.
 	flagConflictsForFleet?: boolean;
+	// Opt-in: escalate a merge conflict the fast resolver couldn't confidently clear to a
+	// Quire-hosted Managed Agents investigation instead of just recording the failure — see
+	// mergeQueue.ts's DeepInvestigationDeps. Only does anything while the connected LLM
+	// account is Anthropic (the tier is Anthropic-only).
+	enableDeepConflictInvestigation?: boolean;
 }
 
 function isStoredPreferences(value: unknown): value is StoredPreferences {

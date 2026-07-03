@@ -7,12 +7,15 @@ import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { loadInstallation } from "../../engine/github/installation.js";
 import { loadPreferences, savePreferences } from "../../engine/github/preferences.js";
-import { buildInstallationClient, buildInstallationOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
+import { buildInstallationClient, buildInstallationOctokit, getInstallationAccount, mintScopedRepoToken } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
 import { listInstallationRepositories } from "../../engine/github/repos.js";
 import type { RepoSummary } from "../../engine/github/repos.js";
 import type { UserTokenCache } from "../../engine/github/userTokenCache.js";
 import { MergeQueue, DEFAULT_MERGEABILITY_POLL_DELAYS_MS } from "../../engine/queue/mergeQueue.js";
+import type { DeepInvestigationDeps } from "../../engine/queue/mergeQueue.js";
+import { ensureDeepResolverAgent } from "../../engine/queue/deepConflictInvestigation.js";
+import { AnthropicManagedAgentsClient } from "../../engine/queue/managedAgentsClient.js";
 import { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
 import { PrEffectCache } from "../../engine/cache/prCache.js";
 import { AuditStore, loadAuditStore } from "../../engine/gate/auditStore.js";
@@ -142,6 +145,24 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : shared.resolveDefaultLlmProvider();
 	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
 
+	// Reused across investigations for this tenant, never re-minted per call (see
+	// ensureDeepResolverAgent's own guidance) — persisted next to the tenant's other
+	// per-account state.
+	const deepResolverAgentPath = join(dir, "deep-resolver-agent.json");
+	const deepInvestigation: DeepInvestigationDeps = {
+		shouldEnable: () => accountState.current?.enableDeepConflictInvestigation === true,
+		// This tier is Anthropic-only (see the design decision it implements): a Gemini or
+		// stub-backed account has nothing for it to run against.
+		getClient: () =>
+			llmAccountState.current?.provider === "anthropic" ? new AnthropicManagedAgentsClient(llmAccountState.current.apiKey) : undefined,
+		ensureAgent: (client) => ensureDeepResolverAgent(client, deepResolverAgentPath),
+		mintRepoToken: (_owner, repo) => {
+			const installationId = accountState.current?.installationId;
+			if (installationId === undefined) throw new Error("No GitHub App installation bound — cannot mint a repo token");
+			return mintScopedRepoToken(shared.appConfig, installationId, repo);
+		},
+	};
+
 	const queue = new MergeQueue(
 		queuePath,
 		clientHolder,
@@ -149,6 +170,7 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 		conflictLogPath,
 		DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
 		() => accountState.current?.flagConflictsForFleet === true,
+		deepInvestigation,
 	);
 	await queue.load();
 

@@ -21,6 +21,7 @@ const SelectRepoSchema = z.object({
 const SettingsSchema = z.object({
 	autoMergeOnAccept: z.boolean(),
 	flagConflictsForFleet: z.boolean(),
+	enableDeepConflictInvestigation: z.boolean(),
 });
 
 const INSTALL_STATE_COOKIE_NAME = "quire_install_state";
@@ -61,6 +62,7 @@ export function githubAppRouter(
 				selectedRepo: accountState.preferences.selectedRepo,
 				autoMergeOnAccept: accountState.preferences.autoMergeOnAccept ?? false,
 				flagConflictsForFleet: accountState.preferences.flagConflictsForFleet ?? false,
+				enableDeepConflictInvestigation: accountState.preferences.enableDeepConflictInvestigation ?? false,
 			});
 			return;
 		}
@@ -72,6 +74,7 @@ export function githubAppRouter(
 			selectedRepo: binding.selectedRepo,
 			autoMergeOnAccept: binding.autoMergeOnAccept ?? false,
 			flagConflictsForFleet: binding.flagConflictsForFleet ?? false,
+			enableDeepConflictInvestigation: binding.enableDeepConflictInvestigation ?? false,
 		});
 	});
 
@@ -82,13 +85,13 @@ export function githubAppRouter(
 				res.status(400).json({ error: "Install the GitHub App first" });
 				return;
 			}
-			const { autoMergeOnAccept, flagConflictsForFleet } = req.body as z.infer<typeof SettingsSchema>;
-			const updated: InstallationBinding = { ...current, autoMergeOnAccept, flagConflictsForFleet };
+			const { autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation } = req.body as z.infer<typeof SettingsSchema>;
+			const updated: InstallationBinding = { ...current, autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation };
 			accountState.current = updated;
 			await saveInstallation(accountPath, updated);
-			accountState.preferences = { ...accountState.preferences, autoMergeOnAccept, flagConflictsForFleet };
+			accountState.preferences = { ...accountState.preferences, autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation };
 			await savePreferences(preferencesPath, accountState.preferences);
-			res.json({ autoMergeOnAccept, flagConflictsForFleet });
+			res.json({ autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation });
 		} catch (err) {
 			next(err);
 		}
@@ -152,6 +155,9 @@ export function githubAppRouter(
 					: {}),
 				...(accountState.preferences.flagConflictsForFleet !== undefined
 					? { flagConflictsForFleet: accountState.preferences.flagConflictsForFleet }
+					: {}),
+				...(accountState.preferences.enableDeepConflictInvestigation !== undefined
+					? { enableDeepConflictInvestigation: accountState.preferences.enableDeepConflictInvestigation }
 					: {}),
 			};
 			accountState.current = binding;

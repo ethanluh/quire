@@ -22,6 +22,9 @@ export interface InstallationBinding {
 	// Opt-in: post an unresolved merge conflict's detail as a plain PR comment for an
 	// external agent fleet to pick up (see preferences.ts).
 	flagConflictsForFleet?: boolean;
+	// Opt-in: escalate an unresolved conflict to a Managed Agents investigation (see
+	// preferences.ts).
+	enableDeepConflictInvestigation?: boolean;
 }
 
 function isInstallationBinding(value: unknown): value is InstallationBinding {
