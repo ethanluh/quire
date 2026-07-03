@@ -3,6 +3,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pollPendingResolutions } from "../../src/interface/server/resolutionPoll.js";
+import { onStateChanged } from "../../src/interface/server/changeEvents.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 import type { Bundle, PullRequest } from "../../src/engine/types/core.js";
@@ -93,18 +94,24 @@ describe("pollPendingResolutions", () => {
 		return { queue, pr };
 	}
 
-	it("leaves a recently-dispatched entry alone", async () => {
+	it("leaves a recently-dispatched entry alone and doesn't push a state-changed notification", async () => {
 		const { queue } = await setupResolving(new Date().toISOString());
+		let notified = false;
+		const unsubscribe = onStateChanged(() => { notified = true; });
 
 		await pollPendingResolutions(queue, 20 * 60_000, join(dir, "conflict.ndjson"));
 
 		const entry = await queue.getEntry("bundle-1");
 		expect(entry?.status).toBe("resolving");
+		expect(notified).toBe(false);
+		unsubscribe();
 	});
 
-	it("moves a stale entry to conflict once past the timeout", async () => {
+	it("moves a stale entry to conflict once past the timeout and pushes a state-changed notification", async () => {
 		const staleIso = new Date(Date.now() - 30 * 60_000).toISOString();
 		const { queue, pr } = await setupResolving(staleIso);
+		let notified = false;
+		const unsubscribe = onStateChanged(() => { notified = true; });
 
 		await pollPendingResolutions(queue, 20 * 60_000, join(dir, "conflict.ndjson"));
 
@@ -113,6 +120,8 @@ describe("pollPendingResolutions", () => {
 		expect(entry?.resolution).toBeUndefined();
 		expect(entry?.conflict).toMatchObject({ prId: pr.id });
 		expect(entry?.conflict?.reason).toContain("did not report back within 20 minutes");
+		expect(notified).toBe(true);
+		unsubscribe();
 	});
 
 	it("ignores entries that aren't resolving", async () => {

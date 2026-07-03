@@ -497,6 +497,12 @@ const SWIPE_X = 110;
 const SWIPE_Y = 100;
 const STAMP_DEADZONE = 24;
 
+// Cache of the last-rendered JSON per pane so polling can skip a DOM rebuild
+// when nothing actually changed — important for the review stack, which
+// re-attaches pointer listeners and resets stamp/transform state on every
+// renderStack() call.
+const lastRenderedJson = {};
+
 async function loadReview() {
   const status = await api('GET', '/account/github/status');
   if (!status.connected) {
@@ -505,7 +511,11 @@ async function loadReview() {
     updateReviewBadge();
     return;
   }
-  reviewCards = await api('GET', '/bundles');
+  const cards = await api('GET', '/bundles');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.review) return;
+  lastRenderedJson.review = json;
+  reviewCards = cards;
   renderStack();
 }
 
@@ -709,6 +719,9 @@ document.getElementById('btn-tap-details').addEventListener('click', () => {
 // --- Shelf ---
 async function loadShelf() {
   const cards = await api('GET', '/shelf');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.shelf) return;
+  lastRenderedJson.shelf = json;
   const el = document.getElementById('shelf-list');
   el.innerHTML = cards.length ? cards.map(c => `<div class="list-card card">
     ${cardBodyHtml(c)}
@@ -729,6 +742,9 @@ async function promote(bundleId) {
 async function loadQueue() {
   const entries = await api('GET', '/queue');
   queueEntries = entries;
+  const json = JSON.stringify(entries);
+  if (json === lastRenderedJson.queue) return;
+  lastRenderedJson.queue = json;
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry card">
@@ -1001,7 +1017,56 @@ themeBtn.addEventListener('click', () => {
 });
 
 checkSignedIn().then((signedIn) => {
-  if (signedIn) refreshAndLoadReview();
+  if (signedIn) {
+    refreshAndLoadReview();
+    startPolling();
+    startLiveUpdates();
+  }
+});
+
+// Server state is already kept fresh by the GitHub webhook + reconciliation poll
+// (see routes/webhook.ts); these endpoints just read that in-memory state, so
+// polling them here is cheap and never itself calls the GitHub API.
+const POLL_INTERVAL_MS = 10000;
+let pollTimer = null;
+
+function pollActivePane() {
+  if (document.hidden) return;
+  const activeTab = document.querySelector('.tab.active');
+  if (!activeTab) return;
+  const pane = activeTab.dataset.tab;
+  if (pane === 'review') {
+    // Don't rebuild the swipeable stack out from under an in-progress
+    // gesture — the current drag/commit will finish and the next tick
+    // will pick up whatever changed.
+    if (gestureInFlight || (topCardEl && topCardEl.classList.contains('dragging'))) return;
+    loadReview();
+  } else if (pane === 'shelf') {
+    loadShelf();
+  } else if (pane === 'queue') {
+    loadQueue();
+  }
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
+}
+
+// Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
+// a webhook, reconciliation pass, or conflict-resolution callback changes state, so the active
+// pane updates immediately instead of waiting for the next poll tick. The interval above stays
+// running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
+// server's own reconciliation timer is a fallback for a missed webhook delivery. Reuses
+// pollActivePane's own gesture-in-flight/dragging guard, so a push can't yank the stack out
+// from under an active swipe either.
+function startLiveUpdates() {
+  const source = new EventSource('/events');
+  source.onmessage = () => pollActivePane();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) pollActivePane();
 });
 </script>
 </body>

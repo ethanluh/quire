@@ -504,6 +504,10 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && detailModalBackdrop.style.display !== 'none') closeDetailModal();
 });
 
+// Cache of the last-rendered JSON per pane so polling can skip a DOM rebuild
+// when nothing actually changed (avoids flicker/lost hover state on idle ticks).
+const lastRenderedJson = {};
+
 async function loadReview() {
   const status = await api('GET', '/account/github/status');
   const el = document.getElementById('card-list');
@@ -512,6 +516,9 @@ async function loadReview() {
     return;
   }
   const cards = await api('GET', '/bundles');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.review) return;
+  lastRenderedJson.review = json;
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, false)).join('') : '<div class="empty">No bundles in review queue.</div>';
 }
 
@@ -530,6 +537,9 @@ async function refreshAndLoadReview() {
 
 async function loadShelf() {
   const cards = await api('GET', '/shelf');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.shelf) return;
+  lastRenderedJson.shelf = json;
   const el = document.getElementById('shelf-list');
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, true)).join('') : '<div class="empty">Shelf is empty.</div>';
 }
@@ -537,6 +547,9 @@ async function loadShelf() {
 async function loadQueue() {
   const entries = await api('GET', '/queue');
   queueEntries = entries;
+  const json = JSON.stringify(entries);
+  if (json === lastRenderedJson.queue) return;
+  lastRenderedJson.queue = json;
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry">
@@ -923,9 +936,48 @@ if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop
   location.replace('mobile.html');
 } else {
   checkSignedIn().then((signedIn) => {
-    if (signedIn) refreshAndLoadReview();
+    if (signedIn) {
+      refreshAndLoadReview();
+      startPolling();
+      startLiveUpdates();
+    }
   });
 }
+
+// Server state is already kept fresh by the GitHub webhook + reconciliation poll
+// (see routes/webhook.ts); these endpoints just read that in-memory state, so
+// polling them here is cheap and never itself calls the GitHub API.
+const POLL_INTERVAL_MS = 10000;
+let pollTimer = null;
+
+function pollActivePane() {
+  if (document.hidden) return;
+  const activeTab = document.querySelector('.tab.active');
+  if (!activeTab) return;
+  const pane = activeTab.dataset.tab;
+  if (pane === 'review') loadReview();
+  else if (pane === 'shelf') loadShelf();
+  else if (pane === 'queue') loadQueue();
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
+}
+
+// Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
+// a webhook, reconciliation pass, or conflict-resolution callback changes state, so the active
+// pane updates immediately instead of waiting for the next poll tick. The interval above stays
+// running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
+// server's own reconciliation timer is a fallback for a missed webhook delivery.
+function startLiveUpdates() {
+  const source = new EventSource('/events');
+  source.onmessage = () => pollActivePane();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) pollActivePane();
+});
 document.getElementById('link-mobile').addEventListener('click', () => {
   localStorage.removeItem(VIEW_PREF_KEY);
 });

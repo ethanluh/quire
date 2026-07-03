@@ -5,6 +5,7 @@ import { join } from "node:path";
 import express from "express";
 import type { Server } from "node:http";
 import { actionCallbackRouter } from "../../src/interface/server/routes/actionCallback.js";
+import { onStateChanged } from "../../src/interface/server/changeEvents.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 import type { Bundle, PullRequest } from "../../src/engine/types/core.js";
@@ -125,9 +126,11 @@ describe("actionCallbackRouter", () => {
 		return { status: res.status, body: await res.json() };
 	}
 
-	it("requeues the bundle on a valid resolved callback and triggers a merge attempt", async () => {
+	it("requeues the bundle on a valid resolved callback, triggers a merge attempt, and pushes state-changed notifications", async () => {
 		const { github, queue, pr, callbackToken } = await setup();
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		let notifyCount = 0;
+		const unsubscribe = onStateChanged(() => { notifyCount += 1; });
 
 		const { status, body } = await post("/bundle-1/resolution", callbackToken, { outcome: "resolved" });
 
@@ -145,10 +148,15 @@ describe("actionCallbackRouter", () => {
 		const entry = await queue.getEntry("bundle-1");
 		expect(entry?.status).toBe("landed");
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
+		// Once for markResolutionSucceeded, once for dequeueNext's auto-continue settling.
+		expect(notifyCount).toBe(2);
+		unsubscribe();
 	});
 
-	it("moves the bundle to conflict on an unresolved callback, surfacing the reason", async () => {
+	it("moves the bundle to conflict on an unresolved callback, surfacing the reason, and pushes a state-changed notification", async () => {
 		const { queue, pr, callbackToken } = await setup();
+		let notified = false;
+		const unsubscribe = onStateChanged(() => { notified = true; });
 
 		const { status } = await post("/bundle-1/resolution", callbackToken, {
 			outcome: "unresolved",
@@ -160,6 +168,8 @@ describe("actionCallbackRouter", () => {
 		expect(entry?.status).toBe("conflict");
 		expect(entry?.conflict).toMatchObject({ prId: pr.id, reason: "could not confidently resolve" });
 		expect(entry?.resolution).toBeUndefined();
+		expect(notified).toBe(true);
+		unsubscribe();
 	});
 
 	it("rejects a missing or wrong callback token with 401 and leaves the entry resolving", async () => {

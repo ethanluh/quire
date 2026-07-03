@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { RequestError } from "@octokit/request-error";
 import { refreshRepoQueue, enqueueRefresh, InstallationRevokedError, AccountChangedError } from "../../src/interface/server/refreshRepoQueue.js";
 import type { RefreshDeps } from "../../src/interface/server/refreshRepoQueue.js";
+import { onStateChanged } from "../../src/interface/server/changeEvents.js";
 import { createAccountState } from "../../src/interface/server/accountState.js";
 import { createServerState } from "../../src/interface/server/state.js";
 import { GitHubClientHolder } from "../../src/engine/github/clientHolder.js";
@@ -219,5 +220,33 @@ describe("enqueueRefresh", () => {
 		await Promise.all([first, second]);
 
 		expect(client.calls).toBe(2);
+	});
+
+	it("pushes a state-changed notification after each successful refresh, so an open SSE connection doesn't wait for the next poll tick", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
+		const deps: RefreshDeps = {
+			accountState: createAccountState(BASE_BINDING),
+			accountPath: join(dir, "installation.json"),
+			preferencesPath: join(dir, "preferences.json"),
+			clientHolder: new GitHubClientHolder(new StubGitHubClient()),
+			appConfig: { appId: "1", privateKey: "unused" },
+			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),
+			state: createServerState(),
+			pipelineDeps: {
+				config: PIPELINE_CONFIG,
+				provider: new StubLlmProvider(),
+				analyzer: new StubStaticAnalyzer(),
+				auditStore: new AuditStore(),
+				prCache: new PrEffectCache(),
+			},
+		};
+		let notifyCount = 0;
+		const unsubscribe = onStateChanged(() => { notifyCount += 1; });
+
+		await enqueueRefresh("octocat", "hello-world", deps);
+		await enqueueRefresh("octocat", "hello-world", deps);
+
+		expect(notifyCount).toBe(2);
+		unsubscribe();
 	});
 });
