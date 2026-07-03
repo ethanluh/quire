@@ -17,7 +17,9 @@ const DECLARED_DIRECTION_SECTION = `## Declared direction
 Quire ingests PRs by reading the \`declared-direction\` marker above. PRs missing it are silently skipped from the triage queue.
 `;
 
-const WORKFLOW_CONTENT = `name: Quire declared-direction check
+// Exported so tests can seed a repo whose committed copy already matches, and so an already
+// content-conforming repo is distinguishable from one carrying a stale, pre-fix version.
+export const WORKFLOW_CONTENT = `name: Quire declared-direction check
 
 on:
   pull_request:
@@ -40,7 +42,7 @@ jobs:
 // workflow_dispatch inputs are all strings; the job re-merges the branch itself (rather than
 // receiving pre-computed conflict content) so it's a self-sufficient normal git checkout, and
 // verifies its own output before pushing rather than trusting the model's edit outright.
-const CONFLICT_RESOLUTION_WORKFLOW_CONTENT = `name: Quire conflict resolution
+export const CONFLICT_RESOLUTION_WORKFLOW_CONTENT = `name: Quire conflict resolution
 
 on:
   workflow_dispatch:
@@ -92,6 +94,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: \${{ secrets.ANTHROPIC_API_KEY }}
+          # Dispatched via Quire's own GitHub App installation token, so the triggering actor
+          # is always whatever bot dispatched this run — never hardcode a specific app slug
+          # here, since every Quire installation registers its own app under its own name.
+          allowed_bots: \${{ github.actor }}
           prompt: |
             Resolve every remaining git merge conflict in this working tree (files still
             containing <<<<<<<, =======, >>>>>>> markers). This PR's declared direction is:
@@ -197,9 +203,14 @@ export async function setUpDeclaredDirectionConvention(
 		client.getFileContent(owner, name, CLAUDE_MD_PATH),
 	]);
 
+	// The PR template and CLAUDE.md are user-owned files Quire only appends a section to, so
+	// conformance there just checks the section is present. The two workflow files are wholly
+	// generated and owned by Quire, so a stale copy (an older template version, from before a
+	// fix like the id-token or allowed_bots ones) needs to be treated as non-conforming and
+	// re-pushed — otherwise re-running setup after a Quire upgrade can never repair them.
 	const templateConforms = template !== undefined && template.content.includes(DECLARED_DIRECTION_SUBSTRING);
-	const workflowConforms = workflow !== undefined;
-	const conflictWorkflowConforms = conflictWorkflow !== undefined;
+	const workflowConforms = workflow !== undefined && workflow.content === WORKFLOW_CONTENT;
+	const conflictWorkflowConforms = conflictWorkflow !== undefined && conflictWorkflow.content === CONFLICT_RESOLUTION_WORKFLOW_CONTENT;
 	const claudeMdConforms = claudeMd !== undefined && claudeMd.content.includes(CONFLICT_RESOLUTION_SUBSTRING);
 
 	if (templateConforms && workflowConforms && conflictWorkflowConforms && claudeMdConforms) {
