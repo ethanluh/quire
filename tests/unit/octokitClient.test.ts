@@ -1,6 +1,7 @@
 import { describe, it, expect, jest } from "@jest/globals";
 import type { Octokit } from "@octokit/rest";
 import { OctokitGitHubClient, InsufficientGitHubPermissionError } from "../../src/engine/github/octokitClient.js";
+import { UNDECLARED_DIRECTION } from "../../src/engine/types/core.js";
 
 // Deliberately NOT `@octokit/request-error`'s `RequestError`: in production, errors thrown by
 // `this.octokit.rest.*` calls come from a different, transitively-pinned copy of that package
@@ -87,6 +88,7 @@ function makeFakeOctokit(opts: {
 	getTree: jest.Mock;
 	createWorkflowDispatch: jest.Mock;
 	listWorkflowRuns: jest.Mock;
+	listFiles: jest.Mock;
 } {
 	const pr = opts.pr ?? makePrResponse("<!-- declared-direction: add passwordless auth -->");
 	const get = jest.fn(async (params: { mediaType?: { format: string } }) => {
@@ -182,6 +184,7 @@ function makeFakeOctokit(opts: {
 		getTree,
 		createWorkflowDispatch,
 		listWorkflowRuns,
+		listFiles,
 	};
 }
 
@@ -196,10 +199,11 @@ describe("OctokitGitHubClient", () => {
 			expect(payload.filesTouched).toEqual(["src/auth.ts"]);
 		});
 
-		it("throws when the PR body has no declared-direction marker (INV-1 fail-closed)", async () => {
+		it("labels declaredDirection as undeclared when the PR body has no marker (INV-1: never inferred)", async () => {
 			const { octokit } = makeFakeOctokit({ pr: makePrResponse("just a plain description") });
 			const client = new OctokitGitHubClient(octokit);
-			await expect(client.getPullRequest("org", "repo", 7)).rejects.toThrow(/declared-direction/);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.declaredDirection).toBe(UNDECLARED_DIRECTION);
 		});
 
 		it("reports pending when a check run has not completed", async () => {
@@ -271,17 +275,37 @@ describe("OctokitGitHubClient", () => {
 			expect(skipped).toEqual([]);
 		});
 
+		it("ingests a PR with no declared-direction marker instead of skipping it", async () => {
+			const good = makePrResponse("<!-- declared-direction: add passwordless auth -->", { id: 1, number: 5 });
+			const undeclared = makePrResponse("no marker here", { id: 2, number: 6 });
+			const { octokit } = makeFakeOctokit({ listPrs: [good, undeclared] });
+			const client = new OctokitGitHubClient(octokit);
+			const { payloads, skipped } = await client.listOpenPullRequests("org", "repo");
+			expect(payloads.map((p) => p.number)).toEqual([5, 6]);
+			expect(payloads.map((p) => p.declaredDirection)).toEqual([
+				"add passwordless auth",
+				UNDECLARED_DIRECTION,
+			]);
+			expect(skipped).toEqual([]);
+		});
+
 		it("skips a PR that fails to map instead of failing the whole batch, and reports it as skipped", async () => {
 			const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
 			const good = makePrResponse("<!-- declared-direction: add passwordless auth -->", { id: 1, number: 5 });
-			const bad = makePrResponse("no marker here", { id: 2, number: 6 });
-			const { octokit } = makeFakeOctokit({ listPrs: [good, bad] });
+			const bad = makePrResponse("<!-- declared-direction: add rate limiting -->", { id: 2, number: 6 });
+			const { octokit, listFiles } = makeFakeOctokit({ listPrs: [good, bad] });
+			listFiles.mockImplementation(async (params: unknown) => {
+				if ((params as { pull_number: number }).pull_number === 6) {
+					throw new Error("GitHub API error fetching files");
+				}
+				return { data: [{ filename: "src/auth.ts" }] };
+			});
 			const client = new OctokitGitHubClient(octokit);
 			const { payloads, skipped } = await client.listOpenPullRequests("org", "repo");
 			expect(payloads.map((p) => p.number)).toEqual([5]);
 			expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("org/repo#6"));
 			expect(skipped).toEqual([
-				{ number: 6, reason: expect.stringContaining("no <!-- declared-direction: ... --> marker") },
+				{ number: 6, reason: expect.stringContaining("GitHub API error fetching files") },
 			]);
 			errorSpy.mockRestore();
 		});

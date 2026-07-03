@@ -1,4 +1,4 @@
-import type { Bundle, PullRequest } from "../types/core.js";
+import { UNDECLARED_DIRECTION, type Bundle, type PullRequest } from "../types/core.js";
 import type { LlmProvider } from "../drift/effectList/provider.js";
 import { extractEffects } from "../drift/effectList/extractor.js";
 import { clusterPRs, type ClusteringFailure, type ClusterSeed } from "./similarity.js";
@@ -136,11 +136,21 @@ export async function buildBundles(
 	}
 	const toCluster = extracted.filter((pr) => !seededIds.has(pr.id));
 
+	// PRs with no declared direction must never be grouped with another PR — not with a
+	// declared PR (that would attribute a fabricated direction to them, INV-1) and not
+	// with each other on the strength of sharing the same placeholder text (that would
+	// manufacture agreement out of mutual absence of a declaration, INV-1/INV-3). Pull
+	// them out before similarity clustering runs and give each its own singleton bundle.
+	const undeclared = toCluster.filter((pr) => pr.declaredDirection === UNDECLARED_DIRECTION);
+	const toClusterDeclared = toCluster.filter((pr) => pr.declaredDirection !== UNDECLARED_DIRECTION);
+
 	const { clusters, failures: clusteringFailures } = await clusterPRs(
-		toCluster, effectsByPr, provider, { threshold: config.similarityThreshold }, seeds, prCache, modelKey,
+		toClusterDeclared, effectsByPr, provider, { threshold: config.similarityThreshold }, seeds, prCache, modelKey,
 	);
 
-	const bundles = clusters.map((members): Bundle => {
+	const allClusters = [...clusters, ...undeclared.map((pr) => [pr])];
+
+	const bundles = allClusters.map((members): Bundle => {
 		const anchor = members[0];
 		if (anchor === undefined) throw new Error("Cluster must have at least one member");
 		return {

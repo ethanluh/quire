@@ -88,7 +88,7 @@
     background-image: var(--select-chevron);
     background-repeat: no-repeat;
     background-position: right var(--space-3) center;
-    background-size: 12px;
+    background-size: var(--space-3);
     padding-right: var(--space-8);
   }
   .account-panel + .account-panel { margin-top: var(--space-6); }
@@ -141,7 +141,7 @@
     white-space: nowrap;
   }
   .repo-entry.selected { border-color: var(--color-brand); }
-  .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 64px; justify-content: center; }
+  .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 var(--space-16); justify-content: center; }
   .repo-entry .badge-priority { font-size: var(--text-xs); flex: 0 0 auto; white-space: nowrap; }
   .repo-group-header {
     font-size: var(--text-xs);
@@ -276,8 +276,8 @@
   <div class="queue-list" id="queue-list">
     <div class="empty">Merge queue is empty.</div>
   </div>
-  <button class="btn btn-accept" style="margin-top:16px" id="btn-process">Process next</button>
-  <button class="btn btn-accept" style="margin-top:16px" id="btn-process-all">Process all</button>
+  <button class="btn btn-accept" style="margin-top:var(--space-4)" id="btn-process">Process next</button>
+  <button class="btn btn-accept" style="margin-top:var(--space-4)" id="btn-process-all">Process all</button>
 </div>
 
 <div id="pane-audit" class="pane">
@@ -1441,9 +1441,10 @@ async function selectRepo(owner, name, installationId) {
     const skipped = result.skipped || [];
     const parts = [`Selected ${owner}/${name}.`, `${result.bundlesCreated || 0} bundle(s) created.`];
     if (skipped.length) {
-      // Most commonly: the PR body has no <!-- declared-direction: ... --> marker
-      // (INV-1's fail-closed case) — surfaced so an empty/short queue isn't a silent mystery.
-      parts.push(`${skipped.length} PR(s) could not be ingested (e.g. missing declared-direction marker) and were skipped.`);
+      // A missing declared-direction marker no longer lands here — it's ingested and
+      // given its own bundle instead. This now only covers genuine per-PR fetch
+      // failures (e.g. a GitHub API error while reading the diff or file list).
+      parts.push(`${skipped.length} PR(s) could not be ingested (e.g. a GitHub API error) and were skipped.`);
     }
     if (result.webhookRegistered) {
       parts.push('Webhook registered — new PRs will be ingested automatically.');

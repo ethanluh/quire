@@ -9,7 +9,7 @@ const DECLARED_DIRECTION_SECTION = `## Declared direction
 
 <!-- declared-direction: one-sentence summary of this PR's product-direction intent -->
 
-Quire ingests PRs by reading the \`declared-direction\` marker above. PRs missing it are silently skipped from the triage queue.
+Quire ingests PRs by reading the \`declared-direction\` marker above. PRs missing it still reach the triage queue, but each lands in its own bundle instead of being grouped with related work.
 `;
 
 // Exported so tests can seed a repo whose committed copy already matches, and so an already
@@ -29,7 +29,7 @@ jobs:
           PR_BODY: \${{ github.event.pull_request.body }}
         run: |
           if ! printf '%s' "$PR_BODY" | grep -qP '<!--\\s*declared-direction:\\s*\\S.*-->'; then
-            echo "::error::PR body is missing a <!-- declared-direction: ... --> marker. Quire will silently skip this PR without it."
+            echo "::error::PR body is missing a <!-- declared-direction: ... --> marker. Quire will still triage this PR, but on its own instead of grouped with related work."
             exit 1
           fi
 `;
@@ -38,7 +38,7 @@ const SETUP_PR_TITLE = "Set up Quire's declared-direction PR convention";
 
 const SETUP_PR_BODY = `<!-- declared-direction: Document and enforce the declared-direction PR convention Quire needs to ingest this repo's PRs -->
 
-Quire ingests PRs by reading a \`<!-- declared-direction: ... -->\` marker from the PR body — PRs missing it are silently skipped from the triage queue. This PR:
+Quire ingests PRs by reading a \`<!-- declared-direction: ... -->\` marker from the PR body — PRs missing it still reach the triage queue, but each lands in its own bundle instead of being grouped with related work. This PR:
 
 - Adds a "Declared direction" section to the PR template so contributors know to include the marker.
 - Adds a CI check (\`${WORKFLOW_PATH}\`) that fails a PR missing the marker.

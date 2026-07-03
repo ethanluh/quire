@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
 import { runGate } from "../../src/engine/gate/gate.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
-import type { PullRequest } from "../../src/engine/types/core.js";
+import { UNDECLARED_DIRECTION, type PullRequest } from "../../src/engine/types/core.js";
 import type { GateConfig } from "../../src/engine/types/gate.js";
 
 function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
@@ -56,6 +56,27 @@ describe("runGate", () => {
 		const existing = [makePR({ id: "pr-0" })];
 		const result = await runGate(makePR({ id: "pr-1" }), config, audit, existing);
 		expect(result.outcome.result).toBe("reject");
+	});
+
+	it("does not flag two undeclared-direction PRs as duplicates of each other", async () => {
+		const config: GateConfig = { criteria: [{ name: "duplicate", mode: "enforce" }] };
+		const existing = [makePR({ id: "pr-0", declaredDirection: UNDECLARED_DIRECTION })];
+		const result = await runGate(
+			makePR({ id: "pr-1", declaredDirection: UNDECLARED_DIRECTION }),
+			config,
+			audit,
+			existing,
+		);
+		expect(result.outcome.result).toBe("pass");
+	});
+
+	it("does not flag an undeclared-direction PR as out of scope", async () => {
+		const config: GateConfig = {
+			criteria: [{ name: "outOfScope", mode: "enforce" }],
+			scopeKeywords: ["auth"],
+		};
+		const result = await runGate(makePR({ declaredDirection: UNDECLARED_DIRECTION }), config, audit);
+		expect(result.outcome.result).toBe("pass");
 	});
 
 	it("records a per-criterion decision only for criteria not in off mode", async () => {

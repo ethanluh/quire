@@ -1,5 +1,5 @@
 import type { Octokit } from "@octokit/rest";
-import type { GestureAction, ReviewCard } from "../types/core.js";
+import { UNDECLARED_DIRECTION, type GestureAction, type ReviewCard } from "../types/core.js";
 import { formatReviewCardComment } from "../review/comment.js";
 import type {
 	FoundOrCreatedPullRequest,
@@ -145,14 +145,15 @@ function normalizeMergeableState(draft: boolean, mergeableState: string): Mergea
 	}
 }
 
-function extractDeclaredDirection(body: string | null, owner: string, repo: string, prNumber: number): string {
+function extractDeclaredDirection(body: string | null): string {
 	const match = body !== null ? DECLARED_DIRECTION_MARKER.exec(body) : null;
 	const direction = match?.[1]?.trim();
 	if (direction === undefined || direction.length === 0) {
-		// INV-1: a verdict needs an explicit declared prior, never an inferred one.
-		throw new Error(
-			`${owner}/${repo}#${prNumber} has no <!-- declared-direction: ... --> marker in its body`,
-		);
+		// INV-1: a verdict needs an explicit declared prior, never an inferred one — so a
+		// missing marker gets an explicit "undeclared" label instead of being skipped or
+		// having a direction inferred from the diff. Downstream (bundling, gate criteria)
+		// treats this sentinel as "no evidence," never as a real declaration to compare.
+		return UNDECLARED_DIRECTION;
 	}
 	return direction;
 }
@@ -177,10 +178,12 @@ export class OctokitGitHubClient implements GitHubClient {
 			if (result.status === "fulfilled") {
 				payloads.push(result.value);
 			} else {
-				// One PR's failure (e.g. a missing declared-direction marker) must not
-				// take down ingestion for every other open PR in the same repo — but the
+				// One PR's failure (e.g. a diff or file-list fetch error) must not take
+				// down ingestion for every other open PR in the same repo — but the
 				// caller still needs to know it happened instead of seeing an empty queue
-				// with no explanation.
+				// with no explanation. A missing declared-direction marker no longer
+				// lands here — extractDeclaredDirection() labels it UNDECLARED_DIRECTION
+				// instead of throwing, so that PR still ingests normally.
 				const reason = String(result.reason);
 				console.error(`Skipping ${owner}/${repo}#${prs[i]?.number}: ${reason}`);
 				skipped.push({ number: prs[i]?.number ?? -1, reason });
@@ -497,7 +500,7 @@ export class OctokitGitHubClient implements GitHubClient {
 			headSha: pr.head.sha,
 			diff: diffResponse.data as string,
 			ciStatus,
-			declaredDirection: extractDeclaredDirection(pr.body, owner, repo, pr.number),
+			declaredDirection: extractDeclaredDirection(pr.body),
 			filesTouched: files.map((f) => f.filename),
 		};
 	}
