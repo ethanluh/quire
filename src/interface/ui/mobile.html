@@ -24,7 +24,6 @@
     letter-spacing: var(--tracking-tight); color: var(--color-text-primary);
   }
   header .subtitle { font-size: var(--text-xs); color: var(--color-text-muted); flex: 1; }
-  header a { font-size: var(--text-sm); color: var(--color-brand); text-decoration: none; }
 
   main { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--color-surface-page); }
   .pane { display: none; padding: var(--space-4); height: 100%; }
@@ -94,13 +93,12 @@
   .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
   .status-landed  { background: var(--color-accept-wash); color: var(--color-accept); }
 
-  .ingest-form p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
-  .ingest-form textarea {
-    width: 100%; height: 40vh; background: var(--color-surface-overlay); border: 1px solid var(--color-border);
-    border-radius: var(--radius-md); color: var(--color-text-primary); font-family: var(--font-mono);
-    font-size: var(--text-sm); padding: var(--space-3); resize: vertical;
-  }
-  .ingest-form .btn-ingest { margin-top: var(--space-3); width: 100%; text-align: center; }
+  .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
+  .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
+  .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
+  .pr-status-resolving { background: var(--color-flagged-wash); color: var(--color-flagged); }
+
   .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
   .result-msg.error { color: var(--color-reject); }
 
@@ -121,7 +119,9 @@
     background-size: 12px;
     padding-right: var(--space-8);
   }
-  .account-panel .btn { margin-top: var(--space-3); width: 100%; text-align: center; }
+  .account-panel .btn, .settings-section .btn { margin-top: var(--space-3); width: 100%; text-align: center; }
+  .settings-btn-row { margin-top: var(--space-3); }
+  .settings-btn-row .btn { width: auto; margin-top: 0; }
   .account-panel + .account-panel { margin-top: var(--space-6); }
   .account-status { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); font-size: var(--text-sm); }
   .account-status .login { font-weight: var(--weight-medium); color: var(--color-text-primary); }
@@ -164,9 +164,18 @@
     flex: 1; text-align: center; padding: var(--space-3) 0 var(--space-2); font-size: var(--text-xs);
     color: var(--color-text-muted); border-top: 2px solid transparent; cursor: pointer;
   }
-  nav.tabbar .tab .icon { display: block; margin-bottom: var(--space-1); }
+  nav.tabbar .tab .icon { display: block; margin-bottom: var(--space-1); position: relative; }
   nav.tabbar .tab .icon svg { width: var(--text-lg); height: var(--text-lg); }
   nav.tabbar .tab.active { color: var(--color-brand); border-top-color: var(--color-brand); }
+
+  .tab-badge {
+    position: absolute; top: -6px; right: -10px;
+    min-width: 20px; height: 20px; padding: 0 5px;
+    border-radius: var(--radius-pill);
+    background: var(--color-brand); color: #fff;
+    font-size: 12px; font-weight: var(--weight-semibold);
+    line-height: 20px; text-align: center;
+  }
 
   #toast {
     position: fixed; left: var(--space-4); right: var(--space-4); bottom: calc(78px + env(safe-area-inset-bottom));
@@ -182,8 +191,7 @@
   <h1>Quire</h1>
   <span class="subtitle">Mobile triage</span>
   <span class="subtitle" id="signed-in-as" style="display:none"></span>
-  <a href="index.html?desktop=1">Desktop view</a>
-  <button class="btn btn-defer" id="btn-signout" style="display:none">Sign out</button>
+  <button class="btn btn-defer btn-settings" id="btn-settings" title="Settings" style="display:none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
 </header>
 
 <div class="modal-backdrop" id="signin-gate" style="display:none">
@@ -206,9 +214,6 @@
       <span>accept <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></span>
     </div>
     <div class="tap-gestures">
-      <button class="btn btn-reject" id="btn-tap-reject">Reject</button>
-      <button class="btn btn-defer" id="btn-tap-defer">Defer</button>
-      <button class="btn btn-accept" id="btn-tap-accept">Accept</button>
       <button class="btn" id="btn-tap-details">Details</button>
     </div>
   </div>
@@ -222,17 +227,33 @@
     <button class="btn btn-accept" style="margin-top:14px" id="btn-process">Process next</button>
   </div>
 
-  <div id="pane-ingest" class="pane">
-    <div class="ingest-form">
-      <p>Paste a PR payload (or array of payloads) as JSON:</p>
-      <textarea id="ingest-payload" placeholder='{"id":"pr-1","repoOwner":"org","repoName":"repo","number":1,"declaredDirection":"add passwordless auth","diff":{"raw":"...","hunks":[]},"ciStatus":"success"}'></textarea>
-      <button class="btn btn-defer btn-ingest" id="btn-ingest">Ingest</button>
-      <div id="ingest-result" class="result-msg" style="display:none"></div>
-    </div>
-  </div>
+  </main>
 
-  <div id="pane-account" class="pane">
-    <div class="account-panel">
+<nav class="tabbar">
+  <div class="tab active" data-tab="review"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg><span class="tab-badge" id="tab-badge-review" style="display:none">0</span></span>Review</div>
+  <div class="tab" data-tab="shelf"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg></span>Shelf</div>
+  <div class="tab" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Queue</div>
+</nav>
+
+<div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
+  <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <h3 class="modal-title" id="settings-modal-title">Settings</h3>
+
+    <div class="settings-section">
+      <h4>Preferences</h4>
+      <div class="settings-btn-row">
+        <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+        <a class="btn btn-defer" id="link-desktop" href="index.html?desktop=1">Desktop view</a>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <h4>Session</h4>
+      <button class="btn btn-defer" id="btn-signout">Sign out</button>
+    </div>
+
+    <div class="settings-section account-panel">
+      <h4>GitHub connection</h4>
       <div class="account-status" id="account-status">Checking connection&hellip;</div>
       <div id="account-connect-form">
         <p>Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
@@ -252,8 +273,8 @@
       </div>
     </div>
 
-    <div class="account-panel">
-      <h3>LLM provider</h3>
+    <div class="settings-section account-panel">
+      <h4>LLM provider</h4>
       <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
       <div id="llm-connect-form">
         <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles.</p>
@@ -268,8 +289,8 @@
       <div id="llm-account-result" class="result-msg" style="display:none"></div>
     </div>
 
-    <div class="account-panel">
-      <h3>Team</h3>
+    <div class="settings-section account-panel">
+      <h4>Team</h4>
       <p>Teammates on the same team share this GitHub connection, repo, LLM key, and merge queue.</p>
       <div class="account-status" id="team-status">Checking team&hellip;</div>
       <div id="team-members-list"></div>
@@ -281,16 +302,12 @@
       <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
       <div id="team-result" class="result-msg" style="display:none"></div>
     </div>
-  </div>
-</main>
 
-<nav class="tabbar">
-  <div class="tab active" data-tab="review"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></span>Review</div>
-  <div class="tab" data-tab="shelf"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg></span>Shelf</div>
-  <div class="tab" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Queue</div>
-  <div class="tab" data-tab="ingest"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></span>Ingest</div>
-  <div class="tab" data-tab="account"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/></svg></span>Account</div>
-</nav>
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-settings-modal-close">Close</button>
+    </div>
+  </div>
+</div>
 
 <div id="toast"></div>
 
@@ -315,8 +332,26 @@ tabs.forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
-    if (tab.dataset.tab === 'account') { loadAccount(); loadLlmAccount(); loadTeam(); }
   });
+});
+
+const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
+function openSettingsModal() {
+  settingsModalBackdrop.style.display = 'flex';
+  loadAccount();
+  loadLlmAccount();
+  loadTeam();
+}
+function closeSettingsModal() {
+  settingsModalBackdrop.style.display = 'none';
+}
+document.getElementById('btn-settings').addEventListener('click', openSettingsModal);
+document.getElementById('btn-settings-modal-close').addEventListener('click', closeSettingsModal);
+settingsModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === settingsModalBackdrop) closeSettingsModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && settingsModalBackdrop.style.display !== 'none') closeSettingsModal();
 });
 
 async function api(method, path, body) {
@@ -360,6 +395,7 @@ function cardBodyHtml(card) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
   return `<div class="card-direction">${escapeHtml(card.directionSummary)}</div>
     <div class="card-meta">
+      <span class="badge badge-neutral">${card.memberCount} PR${card.memberCount === 1 ? '' : 's'}</span>
       <span class="badge badge-neutral">Blast radius: ${card.blastRadius} files</span>
       ${driftBadge(card.drift)} ${flags}
     </div>
@@ -394,7 +430,17 @@ function prDriftBadges(prId, drift) {
   return badges.join('');
 }
 
-function prMemberListHtml(members, drift) {
+function prMergeStatusBadge(pr, mergeStatus) {
+  if (!mergeStatus) return '';
+  let status = 'pending';
+  if (mergeStatus.revertedPrIds.includes(pr.id)) status = 'reverted';
+  else if (mergeStatus.mergedPrIds.includes(pr.id)) status = 'merged';
+  else if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) status = 'conflict';
+  else if (mergeStatus.resolution && mergeStatus.resolution.prId === pr.id) status = 'resolving';
+  return `<span class="badge pr-status-${status}">Merge: ${escapeHtml(status)}</span>`;
+}
+
+function prMemberListHtml(members, drift, mergeStatus) {
   if (!members.length) return '<div class="empty">No member PRs.</div>';
   return '<div class="pr-member-list">' + members.map(pr => {
     const url = `https://github.com/${pr.repoOwner}/${pr.repoName}/pull/${pr.number}`;
@@ -404,6 +450,7 @@ function prMemberListHtml(members, drift) {
         <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)}</span>
       </div>
       <div class="pr-member-tags">
+        ${prMergeStatusBadge(pr, mergeStatus)}
         ${prDriftBadges(pr.id, drift)}
         ${ciStatusBadge(pr.ciStatus)}
         <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
@@ -428,7 +475,7 @@ function detailBodyHtml(detail, opts) {
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
     <h4>Member PRs</h4>
-    ${prMemberListHtml(detail.members || [], detail.drift)}
+    ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
   `;
 }
 
@@ -457,7 +504,10 @@ function showQueueDetail(bundleId) {
   if (!entry) return;
   openDetailModal(detailBodyHtml(
     { direction: entry.bundle.direction, effectSummary: entry.bundle.effectSummary, members: entry.bundle.members },
-    { queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt } },
+    {
+      queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt },
+      mergeStatus: { mergedPrIds: entry.mergedPrIds, revertedPrIds: entry.revertedPrIds, conflict: entry.conflict, resolution: entry.resolution },
+    },
   ));
 }
 
@@ -482,15 +532,33 @@ const SWIPE_X = 110;
 const SWIPE_Y = 100;
 const STAMP_DEADZONE = 24;
 
+// Cache of the last-rendered JSON per pane so polling can skip a DOM rebuild
+// when nothing actually changed — important for the review stack, which
+// re-attaches pointer listeners and resets stamp/transform state on every
+// renderStack() call.
+const lastRenderedJson = {};
+
 async function loadReview() {
   const status = await api('GET', '/account/github/status');
   if (!status.connected) {
     reviewCards = [];
     stackEl.innerHTML = '<div class="stack-empty">Connect a GitHub account to see the review queue.</div>';
+    updateReviewBadge();
     return;
   }
-  reviewCards = await api('GET', '/bundles');
+  const cards = await api('GET', '/bundles');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.review) return;
+  lastRenderedJson.review = json;
+  reviewCards = cards;
   renderStack();
+}
+
+function updateReviewBadge() {
+  const badge = document.getElementById('tab-badge-review');
+  const count = reviewCards.length;
+  badge.textContent = String(count);
+  badge.style.display = count > 0 ? 'inline-flex' : 'none';
 }
 
 // Pulls the selected repo's current PRs from GitHub before rendering, so a fresh page
@@ -507,6 +575,7 @@ async function refreshAndLoadReview() {
 }
 
 function renderStack() {
+  updateReviewBadge();
   stackEl.innerHTML = '';
   topCardEl = null;
   gestureInFlight = false;
@@ -678,19 +747,6 @@ function commit(el, card, action, flyTransform) {
   });
 }
 
-function tapGesture(action) {
-  if (!reviewCards.length || gestureInFlight || !topCardEl) return;
-  const card = reviewCards[0];
-  const el = topCardEl;
-  const flyTransform = action === 'accept' ? 'translate(900px, 0) rotate(20deg)'
-    : action === 'reject' ? 'translate(-900px, 0) rotate(-20deg)'
-    : 'translate(0, 600px) rotate(0deg)';
-  commit(el, card, action, flyTransform);
-}
-
-document.getElementById('btn-tap-accept').addEventListener('click', () => tapGesture('accept'));
-document.getElementById('btn-tap-defer').addEventListener('click', () => tapGesture('defer'));
-document.getElementById('btn-tap-reject').addEventListener('click', () => tapGesture('reject'));
 document.getElementById('btn-tap-details').addEventListener('click', () => {
   if (reviewCards.length) showBundleDetail(reviewCards[0].bundleId);
 });
@@ -698,6 +754,9 @@ document.getElementById('btn-tap-details').addEventListener('click', () => {
 // --- Shelf ---
 async function loadShelf() {
   const cards = await api('GET', '/shelf');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.shelf) return;
+  lastRenderedJson.shelf = json;
   const el = document.getElementById('shelf-list');
   el.innerHTML = cards.length ? cards.map(c => `<div class="list-card card">
     ${cardBodyHtml(c)}
@@ -718,6 +777,9 @@ async function promote(bundleId) {
 async function loadQueue() {
   const entries = await api('GET', '/queue');
   queueEntries = entries;
+  const json = JSON.stringify(entries);
+  if (json === lastRenderedJson.queue) return;
+  lastRenderedJson.queue = json;
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry card">
@@ -745,47 +807,25 @@ document.getElementById('btn-process').addEventListener('click', async () => {
   loadQueue();
 });
 
-// --- Ingest ---
-document.getElementById('btn-ingest').addEventListener('click', async () => {
-  const raw = document.getElementById('ingest-payload').value.trim();
-  const el = document.getElementById('ingest-result');
-  try {
-    const body = JSON.parse(raw);
-    const result = await api('POST', '/prs/ingest', body);
-    if (result.error) {
-      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created. ${result.error}`;
-      el.className = 'result-msg error';
-    } else {
-      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
-      el.className = 'result-msg';
-    }
-    el.style.display = 'block';
-    loadReview();
-  } catch (e) {
-    el.textContent = 'Error: ' + e.message;
-    el.className = 'result-msg error';
-    el.style.display = 'block';
-  }
-});
-
 // --- Sign-in gate ---
 // The API itself enforces the session requirement; this gate is a UX convenience so the
 // app doesn't just sit there showing empty/error states before the user has signed in.
 const signinGate = document.getElementById('signin-gate');
 const signedInAsEl = document.getElementById('signed-in-as');
 const signoutBtn = document.getElementById('btn-signout');
+const settingsBtn = document.getElementById('btn-settings');
 
 function showSigninGate() {
   signinGate.style.display = 'flex';
   signedInAsEl.style.display = 'none';
-  signoutBtn.style.display = 'none';
+  settingsBtn.style.display = 'none';
 }
 
 function hideSigninGate(login) {
   signinGate.style.display = 'none';
   signedInAsEl.textContent = `Signed in as ${login}`;
   signedInAsEl.style.display = 'inline';
-  signoutBtn.style.display = 'inline-block';
+  settingsBtn.style.display = 'inline-block';
 }
 
 document.getElementById('btn-signin').addEventListener('click', async () => {
@@ -837,7 +877,9 @@ async function loadAccount() {
     document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
     loadRepos(status.selectedRepo);
   } else {
-    statusEl.textContent = 'Not connected.';
+    statusEl.textContent = status.selectedRepo
+      ? `Not connected. Will resume watching ${status.selectedRepo.owner}/${status.selectedRepo.name} once reconnected.`
+      : 'Not connected.';
     accountConnectForm.style.display = 'block';
     installBtn.disabled = false;
     accountDisconnectBtn.style.display = 'none';
@@ -872,7 +914,7 @@ installBtn.addEventListener('click', async () => {
   history.replaceState(null, '', location.pathname);
   const signedIn = await checkSignedIn();
   if (!signedIn) return;
-  document.querySelector('.tab[data-tab="account"]').click();
+  openSettingsModal();
   await loadAccount();
   if (result === 'error') {
     const resultEl = document.getElementById('account-result');
@@ -1150,13 +1192,70 @@ async function selectRepo(owner, name) {
 
 // Theme: "paper" (light, default) and "ink" (dark) — kept in sync with the desktop view.
 const THEME_KEY = 'quire-theme';
-document.documentElement.setAttribute('data-theme', localStorage.getItem(THEME_KEY) === 'ink' ? 'ink' : 'paper');
+const themeBtn = document.getElementById('btn-theme');
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  themeBtn.textContent = theme === 'ink' ? 'Light' : 'Dark';
+}
+applyTheme(localStorage.getItem(THEME_KEY) === 'ink' ? 'ink' : 'paper');
+themeBtn.addEventListener('click', () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+});
 
 checkSignedIn().then((signedIn) => {
   if (signedIn) {
     refreshAndLoadReview();
     loadTeam(); // populates myRole before the Queue tab needs it for the Process/Remove buttons
+    startPolling();
+    startLiveUpdates();
   }
+});
+
+// Server state is already kept fresh by the GitHub webhook + reconciliation poll
+// (see routes/webhook.ts); these endpoints just read that in-memory state, so
+// polling them here is cheap and never itself calls the GitHub API.
+const POLL_INTERVAL_MS = 10000;
+let pollTimer = null;
+
+function pollActivePane() {
+  if (document.hidden) return;
+  const activeTab = document.querySelector('.tab.active');
+  if (!activeTab) return;
+  const pane = activeTab.dataset.tab;
+  if (pane === 'review') {
+    // Don't rebuild the swipeable stack out from under an in-progress
+    // gesture — the current drag/commit will finish and the next tick
+    // will pick up whatever changed.
+    if (gestureInFlight || (topCardEl && topCardEl.classList.contains('dragging'))) return;
+    loadReview();
+  } else if (pane === 'shelf') {
+    loadShelf();
+  } else if (pane === 'queue') {
+    loadQueue();
+  }
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
+}
+
+// Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
+// a webhook, reconciliation pass, or conflict-resolution callback changes state, so the active
+// pane updates immediately instead of waiting for the next poll tick. The interval above stays
+// running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
+// server's own reconciliation timer is a fallback for a missed webhook delivery. Reuses
+// pollActivePane's own gesture-in-flight/dragging guard, so a push can't yank the stack out
+// from under an active swipe either.
+function startLiveUpdates() {
+  const source = new EventSource('/events');
+  source.onmessage = () => pollActivePane();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) pollActivePane();
 });
 </script>
 </body>

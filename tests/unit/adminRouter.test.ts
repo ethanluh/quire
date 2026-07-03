@@ -18,7 +18,6 @@ import { createServerState } from "../../src/interface/server/state.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
-import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import type { PullRequest, Bundle, ReviewCard } from "../../src/engine/types/core.js";
 
@@ -47,6 +46,7 @@ function makeCard(bundleId: string): ReviewCard {
 		drift: { status: "clean" },
 		residualDisclosure: "behavioral confirm not run",
 		inputsHash: "hash-1",
+		memberCount: 0,
 	};
 }
 
@@ -89,7 +89,7 @@ describe("adminRouter POST /reset", () => {
 		const auditStore = new AuditStore();
 		await auditStore.add(makePR(), "duplicate", "looks like a dup");
 
-		const queue = new MergeQueue(queuePath, new StubGitHubClient(), new StubLlmProvider(), join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(queuePath, new StubGitHubClient(), "https://quire.example.com/callbacks/action-resolution", join(dir, "conflict.ndjson"));
 		await queue.load();
 		await queue.enqueue(makeBundle("b-3"));
 
@@ -124,7 +124,7 @@ describe("adminRouter POST /reset", () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-admin-"));
 		const state = createServerState();
 		const auditStore = new AuditStore();
-		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new StubLlmProvider(), join(dir, "conflict.ndjson"));
+		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), "https://quire.example.com/callbacks/action-resolution", join(dir, "conflict.ndjson"));
 		await queue.load();
 		const decidedStore = new DecidedPrStore(join(dir, "decided-prs.json"));
 

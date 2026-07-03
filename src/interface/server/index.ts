@@ -17,12 +17,15 @@ import { createAllowlist } from "./allowlist.js";
 import { requireSession } from "./middleware/requireSession.js";
 import { resolveMembership } from "./middleware/resolveMembership.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
+import { eventsRouter } from "./routes/events.js";
 import { accountRouter } from "./routes/account.js";
 import { teamRouter } from "./routes/team.js";
 import { migrateLegacyData } from "./migrateLegacyData.js";
 import { TeamStore } from "../../engine/team/teamStore.js";
 import type { WebhookConfig } from "./routes/webhook.js";
 import { webhookRouter } from "./routes/webhook.js";
+import { actionCallbackRouter } from "./routes/actionCallback.js";
+import { pollPendingResolutions } from "./resolutionPoll.js";
 import { verifyGithubSignature } from "./middleware/webhookSignature.js";
 import { errorHandler } from "./middleware/errors.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
@@ -38,6 +41,10 @@ const DATA_DIR = process.env.QUIRE_DATA_DIR ?? join(process.cwd(), "data");
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const RECONCILE_INTERVAL_MS =
 	parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "20", 10) * 60 * 1000;
+const RESOLUTION_POLL_INTERVAL_MS =
+	parseInt(process.env["QUIRE_RESOLUTION_POLL_INTERVAL_MINUTES"] ?? "2", 10) * 60 * 1000;
+const RESOLUTION_TIMEOUT_MS =
+	parseInt(process.env["QUIRE_RESOLUTION_TIMEOUT_MINUTES"] ?? "20", 10) * 60 * 1000;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -116,6 +123,10 @@ async function main(): Promise<void> {
 		isProduction,
 		resolveDefaultLlmProvider: () => resolveLlmProvider(process.env),
 		userTokenCache,
+		// Each team's MergeQueue needs its own callback URL for the conflict-resolution
+		// Action to POST back to (see tenant.ts) — same QUIRE_PUBLIC_URL constraint as the
+		// GitHub webhook above applies per team, not just once globally.
+		publicUrl,
 	};
 
 	// Every team gets its own isolated GitHub App installation, repo selection, PR queue,
@@ -133,14 +144,15 @@ async function main(): Promise<void> {
 	// so it must be parsed (and mounted) before the global express.json() below would
 	// otherwise consume the body as parsed JSON. Its own signature check is the trust
 	// boundary here, independent of session auth (GitHub's delivery carries no cookie).
-	// One App, one webhook endpoint, many tenants' installations — each delivery is routed
-	// to its owning tenant by the installation id it carries (see webhookRouter).
+	// One App, one webhook endpoint, many tenants' installations — each delivery (both
+	// pull_request and workflow_run events) is routed to its owning tenant by the
+	// installation id it carries (see webhookRouter).
 	if (webhookConfig !== undefined) {
 		app.use(
 			"/webhooks/github",
 			express.raw({ type: "application/json" }),
 			verifyGithubSignature(webhookConfig.secret),
-			webhookRouter((installationId) => registry.findByInstallationId(installationId)?.refreshDeps),
+			webhookRouter((installationId) => registry.findByInstallationId(installationId)),
 		);
 		console.log("GitHub webhook receiver: enabled at /webhooks/github");
 	} else {
@@ -162,7 +174,21 @@ async function main(): Promise<void> {
 		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache),
 	);
 
+	// A third carve-out alongside the two OAuth routes above and the HMAC-verified GitHub
+	// webhook: called by a GitHub Actions runner, not a logged-in user, so it authenticates
+	// via a per-dispatch capability token instead of a session cookie (see routes/
+	// actionCallback.ts). The bundleId in the callback URL doesn't carry a team, so the
+	// lookup scans every loaded tenant's queue for it (see TenantRegistry.findByBundleId).
+	app.use("/callbacks/action-resolution", actionCallbackRouter((bundleId) => registry.findByBundleId(bundleId)));
+
 	app.use(session);
+
+	// Push-side companion to the per-tenant polling routes below: a global "refresh" bus,
+	// not tenant data itself, so it's fine to share across every signed-in team the same
+	// way the session gate above is — each client only re-polls its own tenant-scoped
+	// endpoints when it fires (see routes/events.ts).
+	app.use("/events", eventsRouter());
+
 	app.use(resolveMembership(teamStore));
 
 	// Team management (create/join/switch/invite/leave) operates on the login-level
@@ -209,6 +235,21 @@ async function main(): Promise<void> {
 		}
 	}, RECONCILE_INTERVAL_MS);
 	reconcileTimer.unref();
+
+	// Fallback for the conflict-resolution callback (see routes/actionCallback.ts): if the
+	// Action's callback never arrives (network blip, the workflow's final step itself
+	// failing), a "resolving" entry would otherwise wait forever. This only checks elapsed
+	// time, not the Action run's actual status — the callback remains the primary signal.
+	// Iterates every loaded tenant, same as the reconcile timer above — each team's queue
+	// times out on its own schedule, independent of every other team's.
+	const resolutionPollTimer = setInterval(() => {
+		for (const tenant of registry.all()) {
+			pollPendingResolutions(tenant.queue, RESOLUTION_TIMEOUT_MS, tenant.conflictLogPath).catch((err: unknown) => {
+				console.error(`Resolution poll failed for ${tenant.teamId}:`, err);
+			});
+		}
+	}, RESOLUTION_POLL_INTERVAL_MS);
+	resolutionPollTimer.unref();
 
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);

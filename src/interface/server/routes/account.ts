@@ -26,13 +26,16 @@ function oauthResultRedirectUrl(status: "connected" | "error", reason: string | 
 	return `/?${params.toString()}`;
 }
 
-// Pure identity: "Sign in with GitHub" using the GitHub App's own OAuth (protocol-
-// identical to a standalone OAuth App's, just with no scope requested — the resulting
-// token is used once, here, to resolve who is signing in via verifyIdentity, then
-// discarded. It is never used to call the GitHub API; that access comes from a separate
-// installation binding (routes/githubApp.ts), which is why this router no longer has a
-// PAT-based /connect or any /repos*/disconnect routes — those belonged to the old
-// token-owns-API-access model this replaces.
+// Identity first, API access second: "Sign in with GitHub" using the GitHub App's own
+// OAuth (protocol-identical to a standalone OAuth App's, just with no scope requested —
+// GitHub Apps take their user-to-server permissions from the App's own configuration, not
+// a scope param). The resulting token is used here to resolve who is signing in via
+// verifyIdentity, then cached in-memory only (userTokenCache — never persisted to disk or
+// placed in the session cookie) purely so the repo picker can enrich with the user's
+// starred/pinned repos later; it is never used for anything ingestion-related. That access
+// comes from a separate installation binding (routes/githubApp.ts), which is why this
+// router still has no PAT-based /connect or any /repos*/disconnect routes — those belonged
+// to the old token-owns-API-access model this replaces.
 export function accountRouter(
 	oauth: OAuthDeps,
 	verifyIdentity: (token: string) => Promise<VerifiedTokenIdentity>,

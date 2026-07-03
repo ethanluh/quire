@@ -19,7 +19,7 @@ Every PR body must also include a `<!-- declared-direction: ... -->` HTML commen
 - **GitHub auth is a GitHub App, not a personal token.** Register one (see `.env.example`'s `GITHUB_APP_*` vars and this file's "GitHub App setup" pointer once written) and set the resulting env vars — without them the server refuses to start. Sign-in uses the App's own OAuth (identity only); actual API access comes from an installation bound via the Account tab's "Install GitHub App" button. There is no more `GITHUB_TOKEN`/PAT fallback and no `StubGitHubClient`-backed demo login — the app requires a real (even if locally-scoped) GitHub App to sign in at all.
 - **Multi-tenant by team, not by login.** Every team gets its own fully isolated `TenantContext` (`src/interface/server/tenant.ts`) — its own GitHub App installation/repo selection, PR queue, decided-PR record, LLM account, and in-memory review state. `TenantRegistry` creates these lazily per `teamId` and hydrates every existing one from disk at startup so webhooks/reconciliation work for teams that aren't actively browsing. A login resolves to its *active* team via `resolveMembership` (`TeamStore`'s login→team membership index, `data/users/<login>/membership.json`) before a `TenantContext` is ever looked up, so several logins on the same team share one installation/repo/queue/API key on purpose — but nothing downstream of that resolution may read or write another team's state. That isolation-by-account-connection boundary is what fixed a prior cross-account bleed bug where one teammate's GitHub App connection silently overwrote another's; the team layer generalizes it from "per login" to "per team."
 - **Access control**: every route except the two login-establishing ones (`/account/github/oauth/start`, `/account/github/oauth/callback`) and the HMAC-verified webhook route requires a signed session cookie (`middleware/requireSession.ts`), gated by `QUIRE_ALLOWED_GITHUB_LOGINS`. This replaces the old localhost-only/`X-Quire-Admin`-header model — Quire is designed to be reachable off the box it runs on now.
-- **Dogfooding on the Quire repo itself**: open `http://localhost:3000`, sign in with GitHub, install the GitHub App on your account/org from the Account tab, then select `quire` from the repo list. Selecting a repo immediately fetches its open PRs and ingests them into the queue. Its own PRs must carry the `<!-- declared-direction: ... -->` marker (see "Pull request discipline" above) or they're silently skipped.
+- **Dogfooding on the Quire repo itself**: open `http://localhost:3000`, sign in with GitHub, install the GitHub App on your account/org from Settings (gear icon in the header), then select `quire` from the repo list. Selecting a repo immediately fetches its open PRs and ingests them into the queue. Its own PRs must carry the `<!-- declared-direction: ... -->` marker (see "Pull request discipline" above) or they're silently skipped.
 - **Automated tests**: `npm test` (Jest via `ts-jest`, ESM), `npm run build` (`tsc`), `npm run lint` (`tsc --noEmit`).
 
 ## Code style
@@ -110,3 +110,20 @@ Phase order is load-bearing — do not reorder.
 - **Phase 2** — behavioral confirm on flagged tail (gated on Phase 0 showing material drift).
 - **Phase 2.5** — measure the silent-rider hole on passed members. Forks: negligible → ship; material → Phase 3.
 - **Phase 3** — directed/search-based test generation (conditional on Phase 2.5).
+
+## Quire conflict-resolution guidance
+
+When resolving a merge conflict in this repository (via Quire's conflict-resolution Action):
+
+- Prefer the more recently-authored intent when two changes are genuinely incompatible —
+  favor the incoming PR's change over stale `main` content, unless main's change is clearly a
+  bugfix the PR predates.
+- When both sides changed non-overlapping regions of the same file, preserve both changes —
+  never silently drop either side's edit.
+- Never leave `<<<<<<<`, `=======`, or `>>>>>>>` conflict markers in the final file content.
+- Use the PR's declared direction (given as context) as the tiebreaker when intent is
+  ambiguous — resolve in whichever way keeps that direction intact.
+- If you cannot confidently resolve a conflict without risking incorrect behavior, say so
+  explicitly rather than committing a plausible-looking but wrong resolution.
+- Run any available build/lint/test step after resolving, if the repo has one, before
+  finishing.

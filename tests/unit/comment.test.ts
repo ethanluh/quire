@@ -11,6 +11,7 @@ function makeCard(overrides: Partial<ReviewCard> = {}): ReviewCard {
 		drift: { status: "clean" },
 		residualDisclosure: "behavioral confirm not run",
 		inputsHash: "hash-1",
+		memberCount: 1,
 		...overrides,
 	};
 }

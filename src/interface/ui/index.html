@@ -27,8 +27,8 @@
     color: var(--color-text-primary);
   }
   header .subtitle { font-size: var(--text-sm); color: var(--color-text-muted); }
-  header .btn-theme { margin-left: auto; }
-  header a.btn { text-decoration: none; }
+  header .btn-settings { margin-left: auto; }
+  header .btn-settings svg { margin-top: 1px; }
 
   .tabs { padding: var(--space-3) var(--space-6) 0; background: var(--color-surface-page); }
 
@@ -144,21 +144,6 @@
   .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 64px; justify-content: center; }
   .repo-entry .badge-priority { font-size: var(--text-xs); flex: 0 0 auto; white-space: nowrap; }
 
-  .ingest-form p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
-  .ingest-form textarea {
-    width: 100%;
-    height: 220px;
-    background: var(--color-surface-overlay);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    color: var(--color-text-primary);
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    padding: var(--space-3);
-    resize: vertical;
-  }
-  .ingest-form textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-  .ingest-form .btn-ingest { margin-top: var(--space-3); }
   .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
   .result-msg.error { color: var(--color-reject); }
 
@@ -184,9 +169,16 @@
     padding: var(--space-1) var(--space-3);
     border-radius: var(--radius-pill);
   }
-  .status-queued  { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
-  .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
-  .status-landed  { background: var(--color-accept-wash); color: var(--color-accept); }
+  .status-queued   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .status-landing  { background: var(--color-flagged-wash); color: var(--color-flagged); }
+  .status-landed   { background: var(--color-accept-wash); color: var(--color-accept); }
+  .status-resolving { background: var(--color-flagged-wash); color: var(--color-flagged); }
+
+  .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
+  .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
+  .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
+  .pr-status-resolving { background: var(--color-flagged-wash); color: var(--color-flagged); }
 </style>
 </head>
 <body>
@@ -194,10 +186,7 @@
   <h1>Quire</h1>
   <span class="subtitle">Direction triage for swarm PRs</span>
   <span class="subtitle" id="signed-in-as" style="display:none"></span>
-  <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
-  <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
-  <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
-  <button class="btn btn-defer" id="btn-signout" style="display:none">Sign out</button>
+  <button class="btn btn-defer btn-settings" id="btn-settings" title="Settings" style="display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> Settings</button>
 </header>
 
 <div class="modal-backdrop" id="signin-gate" style="display:none">
@@ -215,8 +204,6 @@
   <div class="tab active" data-tab="review">Review queue</div>
   <div class="tab" data-tab="shelf">Shelf</div>
   <div class="tab" data-tab="queue">Merge queue</div>
-  <div class="tab" data-tab="ingest">Ingest</div>
-  <div class="tab" data-tab="account">Account</div>
 </div>
 
 <div id="pane-review" class="pane active">
@@ -241,48 +228,66 @@
   <button class="btn btn-accept" style="margin-top:16px" id="btn-process">Process next</button>
 </div>
 
-<div id="pane-ingest" class="pane">
-  <div class="ingest-form">
-    <p>Paste a PR payload (or array of payloads) as JSON:</p>
-    <textarea id="ingest-payload" placeholder='{"id":"pr-1","repoOwner":"org","repoName":"repo","number":1,"declaredDirection":"add passwordless auth","diff":{"raw":"...","hunks":[]},"ciStatus":"success"}'></textarea>
-    <button class="btn btn-defer btn-ingest" id="btn-ingest">Ingest</button>
-    <div id="ingest-result" class="result-msg" style="display:none"></div>
-  </div>
-</div>
+<div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
+  <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <h3 class="modal-title" id="settings-modal-title">Settings</h3>
 
-<div id="pane-account" class="pane">
-  <div class="account-panel">
-    <div class="account-status" id="account-status">Checking connection&hellip;</div>
-    <div id="account-connect-form">
-      <p>Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
-      <div class="account-connect-actions">
-        <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
+    <div class="settings-section">
+      <h4>Preferences</h4>
+      <div class="settings-btn-row">
+        <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+        <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
       </div>
     </div>
-    <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
-    <div id="account-result" class="result-msg" style="display:none"></div>
 
-    <div class="repo-panel" id="repo-panel" style="display:none">
-      <h3>Repository to work on</h3>
-      <div class="automation-status" id="automation-status" style="display:none"></div>
-      <label class="auto-merge-toggle">
-        <input type="checkbox" id="chk-auto-merge">
-        Automatically merge accepted bundles (skips the manual "Process next" step)
-      </label>
-      <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
-      <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
+    <div class="settings-section">
+      <h4>Session</h4>
+      <button class="btn btn-defer" id="btn-signout">Sign out</button>
     </div>
-  </div>
 
-  <div class="account-panel">
-    <h3>LLM provider</h3>
-    <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles. Falls back to <code>.env</code> configuration (or a stub with no real extraction) when disconnected.</p>
-    <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
-    <div id="llm-connect-form">
-      <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
+    <div class="settings-section account-panel">
+      <h4>GitHub connection</h4>
+      <div class="account-status" id="account-status">Checking connection&hellip;</div>
+      <div id="account-connect-form">
+        <p>Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
+        <div class="account-connect-actions">
+          <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
+        </div>
+      </div>
+      <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
+      <div id="account-result" class="result-msg" style="display:none"></div>
+
+      <div class="repo-panel" id="repo-panel" style="display:none">
+        <h3>Repository to work on</h3>
+        <div class="automation-status" id="automation-status" style="display:none"></div>
+        <label class="auto-merge-toggle">
+          <input type="checkbox" id="chk-auto-merge">
+          Automatically merge accepted bundles (skips the manual "Process next" step)
+        </label>
+        <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
+        <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
+      </div>
     </div>
-    <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
-    <div id="llm-account-result" class="result-msg" style="display:none"></div>
+
+    <div class="settings-section account-panel">
+      <h4>LLM provider</h4>
+      <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles. Falls back to <code>.env</code> configuration (or a stub with no real extraction) when disconnected.</p>
+      <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
+      <div id="llm-connect-form">
+        <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
+      </div>
+      <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
+      <div id="llm-account-result" class="result-msg" style="display:none"></div>
+    </div>
+
+    <div class="settings-section">
+      <h4>Danger zone</h4>
+      <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-settings-modal-close">Close</button>
+    </div>
   </div>
 
   <div class="account-panel">
@@ -344,8 +349,26 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
-    if (tab.dataset.tab === 'account') { loadAccount(); loadLlmAccount(); loadTeam(); }
   });
+});
+
+const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
+function openSettingsModal() {
+  settingsModalBackdrop.style.display = 'flex';
+  loadAccount();
+  loadLlmAccount();
+  loadTeam();
+}
+function closeSettingsModal() {
+  settingsModalBackdrop.style.display = 'none';
+}
+document.getElementById('btn-settings').addEventListener('click', openSettingsModal);
+document.getElementById('btn-settings-modal-close').addEventListener('click', closeSettingsModal);
+settingsModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === settingsModalBackdrop) closeSettingsModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && settingsModalBackdrop.style.display !== 'none') closeSettingsModal();
 });
 
 async function api(method, path, body) {
@@ -433,7 +456,17 @@ function prDriftBadges(prId, drift) {
   return badges.join('');
 }
 
-function prMemberListHtml(members, drift) {
+function prMergeStatusBadge(pr, mergeStatus) {
+  if (!mergeStatus) return '';
+  let status = 'pending';
+  if (mergeStatus.revertedPrIds.includes(pr.id)) status = 'reverted';
+  else if (mergeStatus.mergedPrIds.includes(pr.id)) status = 'merged';
+  else if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) status = 'conflict';
+  else if (mergeStatus.resolution && mergeStatus.resolution.prId === pr.id) status = 'resolving';
+  return `<span class="badge pr-status-${status}">Merge: ${escapeHtml(status)}</span>`;
+}
+
+function prMemberListHtml(members, drift, mergeStatus) {
   if (!members.length) return '<div class="empty">No member PRs.</div>';
   return '<div class="pr-member-list">' + members.map(pr => {
     const url = `https://github.com/${pr.repoOwner}/${pr.repoName}/pull/${pr.number}`;
@@ -443,12 +476,36 @@ function prMemberListHtml(members, drift) {
         <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)}</span>
       </div>
       <div class="pr-member-tags">
+        ${prMergeStatusBadge(pr, mergeStatus)}
         ${prDriftBadges(pr.id, drift)}
         ${ciStatusBadge(pr.ciStatus)}
         <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
       </div>
     </div>`;
   }).join('') + '</div>';
+}
+
+// Ticked by the setInterval below rather than recomputed on every render, so an open detail
+// modal keeps counting up without the caller having to re-fetch or re-render anything.
+function elapsedSince(iso) {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  const mins = Math.floor(seconds / 60);
+  return mins > 0 ? `${mins}m ${seconds % 60}s` : `${seconds}s`;
+}
+
+function resolutionHtml(resolution, bundleId) {
+  if (!resolution) return '';
+  const runLink = resolution.workflowRunId
+    ? ` &middot; <a href="https://github.com/${escapeHtml(resolution.repoOwner)}/${escapeHtml(resolution.repoName)}/actions/runs/${resolution.workflowRunId}" target="_blank" rel="noopener">View run</a>`
+    : '';
+  const retryBtn = bundleId
+    ? `<button class="btn btn-reject" onclick="retryResolving('${escapeHtml(bundleId)}')">Retry now</button>`
+    : '';
+  return `<div class="residual">
+      Awaiting conflict-resolution Action in ${escapeHtml(resolution.repoOwner)}/${escapeHtml(resolution.repoName)}
+      &mdash; dispatched <span class="resolution-elapsed" data-dispatched-at="${escapeHtml(resolution.dispatchedAt)}">${elapsedSince(resolution.dispatchedAt)}</span> ago${runLink}
+      ${retryBtn}
+    </div>`;
 }
 
 function detailBodyHtml(detail, opts) {
@@ -466,8 +523,9 @@ function detailBodyHtml(detail, opts) {
       <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(opts.queueMeta.status)}</span>
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
+    ${resolutionHtml(opts.resolution, opts.bundleId)}
     <h4>Member PRs</h4>
-    ${prMemberListHtml(detail.members || [], detail.drift)}
+    ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
   `;
 }
 
@@ -496,8 +554,32 @@ function showQueueDetail(bundleId) {
   if (!entry) return;
   openDetailModal(detailBodyHtml(
     { direction: entry.bundle.direction, effectSummary: entry.bundle.effectSummary, members: entry.bundle.members },
-    { queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt } },
+    {
+      queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt },
+      resolution: entry.resolution,
+      bundleId,
+      mergeStatus: { mergedPrIds: entry.mergedPrIds, revertedPrIds: entry.revertedPrIds, conflict: entry.conflict, resolution: entry.resolution },
+    },
   ));
+}
+
+// Detail modal is opened once and left static otherwise — this is what makes the elapsed-time
+// text in resolutionHtml() actually count up while a "resolving" bundle's modal stays open.
+setInterval(() => {
+  document.querySelectorAll('.resolution-elapsed').forEach((el) => {
+    el.textContent = elapsedSince(el.dataset.dispatchedAt);
+  });
+}, 1000);
+
+async function retryResolving(bundleId) {
+  if (!confirm('Give up waiting on the conflict-resolution Action and requeue this bundle now?')) return;
+  const result = await api('POST', `/queue/${bundleId}/retry`, undefined);
+  if (result.error) {
+    alert('Could not retry: ' + result.error);
+    return;
+  }
+  closeDetailModal();
+  loadQueue();
 }
 
 document.getElementById('btn-detail-modal-close').addEventListener('click', closeDetailModal);
@@ -508,6 +590,10 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && detailModalBackdrop.style.display !== 'none') closeDetailModal();
 });
 
+// Cache of the last-rendered JSON per pane so polling can skip a DOM rebuild
+// when nothing actually changed (avoids flicker/lost hover state on idle ticks).
+const lastRenderedJson = {};
+
 async function loadReview() {
   const status = await api('GET', '/account/github/status');
   const el = document.getElementById('card-list');
@@ -516,6 +602,9 @@ async function loadReview() {
     return;
   }
   const cards = await api('GET', '/bundles');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.review) return;
+  lastRenderedJson.review = json;
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, false)).join('') : '<div class="empty">No bundles in review queue.</div>';
 }
 
@@ -534,6 +623,9 @@ async function refreshAndLoadReview() {
 
 async function loadShelf() {
   const cards = await api('GET', '/shelf');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.shelf) return;
+  lastRenderedJson.shelf = json;
   const el = document.getElementById('shelf-list');
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, true)).join('') : '<div class="empty">Shelf is empty.</div>';
 }
@@ -541,6 +633,9 @@ async function loadShelf() {
 async function loadQueue() {
   const entries = await api('GET', '/queue');
   queueEntries = entries;
+  const json = JSON.stringify(entries);
+  if (json === lastRenderedJson.queue) return;
+  lastRenderedJson.queue = json;
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry">
@@ -582,28 +677,6 @@ document.getElementById('btn-process').addEventListener('click', async () => {
   loadQueue();
 });
 
-document.getElementById('btn-ingest').addEventListener('click', async () => {
-  const raw = document.getElementById('ingest-payload').value.trim();
-  const el = document.getElementById('ingest-result');
-  try {
-    const body = JSON.parse(raw);
-    const result = await api('POST', '/prs/ingest', body);
-    if (result.error) {
-      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created. ${result.error}`;
-      el.className = 'result-msg error';
-    } else {
-      el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
-      el.className = 'result-msg';
-    }
-    el.style.display = 'block';
-    loadReview();
-  } catch (e) {
-    el.textContent = 'Error: ' + e.message;
-    el.className = 'result-msg error';
-    el.style.display = 'block';
-  }
-});
-
 const clearAllBtn = document.getElementById('btn-clear-all');
 clearAllBtn.style.display = 'inline-block';
 clearAllBtn.addEventListener('click', async () => {
@@ -625,18 +698,19 @@ clearAllBtn.addEventListener('click', async () => {
 const signinGate = document.getElementById('signin-gate');
 const signedInAsEl = document.getElementById('signed-in-as');
 const signoutBtn = document.getElementById('btn-signout');
+const settingsBtn = document.getElementById('btn-settings');
 
 function showSigninGate() {
   signinGate.style.display = 'flex';
   signedInAsEl.style.display = 'none';
-  signoutBtn.style.display = 'none';
+  settingsBtn.style.display = 'none';
 }
 
 function hideSigninGate(login) {
   signinGate.style.display = 'none';
   signedInAsEl.textContent = `Signed in as ${login}`;
   signedInAsEl.style.display = 'inline';
-  signoutBtn.style.display = 'inline-block';
+  settingsBtn.style.display = 'inline-block';
 }
 
 document.getElementById('btn-signin').addEventListener('click', async () => {
@@ -698,7 +772,9 @@ async function loadAccount() {
     document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
     loadRepos(status.selectedRepo);
   } else {
-    statusEl.textContent = 'Not connected.';
+    statusEl.textContent = status.selectedRepo
+      ? `Not connected. Will resume watching ${status.selectedRepo.owner}/${status.selectedRepo.name} once reconnected.`
+      : 'Not connected.';
     accountConnectForm.style.display = 'block';
     installBtn.disabled = false;
     accountDisconnectBtn.style.display = 'none';
@@ -741,7 +817,7 @@ installBtn.addEventListener('click', async () => {
   history.replaceState(null, '', location.pathname);
   const signedIn = await checkSignedIn();
   if (!signedIn) return;
-  showTab('account');
+  openSettingsModal();
   await loadAccount();
   if (result === 'error') {
     showAccountResult('GitHub connection failed: ' + (params.get('reason') || 'unknown error'), true);
@@ -975,8 +1051,10 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
-  const starredBadge = repo.starred ? '<span class="badge badge-clean badge-priority">★ Favorite</span>' : '';
-  const pinnedBadge = repo.pinned ? '<span class="badge badge-neutral badge-priority">📌 Pinned</span>' : '';
+  const starIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>';
+  const pinIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
+  const starredBadge = repo.starred ? `<span class="badge badge-clean badge-priority">${starIcon} Favorite</span>` : '';
+  const pinnedBadge = repo.pinned ? `<span class="badge badge-neutral badge-priority">${pinIcon} Pinned</span>` : '';
   const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
@@ -1100,9 +1178,46 @@ if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop
     if (signedIn) {
       refreshAndLoadReview();
       loadTeam(); // populates myRole before the Queue tab needs it for the Process/Remove buttons
+      startPolling();
+      startLiveUpdates();
     }
   });
 }
+
+// Server state is already kept fresh by the GitHub webhook + reconciliation poll
+// (see routes/webhook.ts); these endpoints just read that in-memory state, so
+// polling them here is cheap and never itself calls the GitHub API.
+const POLL_INTERVAL_MS = 10000;
+let pollTimer = null;
+
+function pollActivePane() {
+  if (document.hidden) return;
+  const activeTab = document.querySelector('.tab.active');
+  if (!activeTab) return;
+  const pane = activeTab.dataset.tab;
+  if (pane === 'review') loadReview();
+  else if (pane === 'shelf') loadShelf();
+  else if (pane === 'queue') loadQueue();
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
+}
+
+// Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
+// a webhook, reconciliation pass, or conflict-resolution callback changes state, so the active
+// pane updates immediately instead of waiting for the next poll tick. The interval above stays
+// running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
+// server's own reconciliation timer is a fallback for a missed webhook delivery.
+function startLiveUpdates() {
+  const source = new EventSource('/events');
+  source.onmessage = () => pollActivePane();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) pollActivePane();
+});
 document.getElementById('link-mobile').addEventListener('click', () => {
   localStorage.removeItem(VIEW_PREF_KEY);
 });

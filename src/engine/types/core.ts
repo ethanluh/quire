@@ -67,6 +67,7 @@ export interface ReviewCard {
 	// are still valid without recomputing them, while directionSummary (declaredDirection
 	// is metadata, not a drift-check input, INV-1) is always refreshed independent of this.
 	inputsHash: string;
+	memberCount: number;
 }
 
 export type GestureAction = "accept" | "defer" | "reject";

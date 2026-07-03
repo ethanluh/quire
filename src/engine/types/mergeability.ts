@@ -19,6 +19,11 @@ export interface MergeabilityResult {
 	// repo no longer exists — either way, an installation on the base repo can't write to
 	// it, so resolution must bail rather than attempt a commit that will 403/404.
 	isFork: boolean;
+	// True when GitHub already merged this PR (out of band, or a prior queue attempt that
+	// merged but crashed before persisting mergedPrIds). GitHub never resolves
+	// mergeable_state away from "unknown" for a closed/merged PR, so this must be checked
+	// before anything looks at `state`, or a merged PR reads as a stuck "unknownPending".
+	merged: boolean;
 	headBranch: string;
 	headSha: string;
 	baseBranch: string;

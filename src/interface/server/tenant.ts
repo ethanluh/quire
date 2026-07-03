@@ -6,6 +6,7 @@ import type { GitHubClient } from "../../engine/github/client.js";
 import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { loadInstallation } from "../../engine/github/installation.js";
+import { loadPreferences, savePreferences } from "../../engine/github/preferences.js";
 import { buildInstallationClient, buildInstallationOctokit, buildUserOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
 import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../engine/github/repos.js";
@@ -59,6 +60,9 @@ export interface TenantSharedConfig {
 	// enrich the repo picker with their starred/pinned repos. Shared by every tenant's
 	// router for the same reason appConfig/appSlug are: it isn't per-account data.
 	userTokenCache: UserTokenCache;
+	// Undefined when QUIRE_PUBLIC_URL isn't configured — each team's MergeQueue derives its
+	// own callback URL from this (see loadTenant), same constraint as the GitHub webhook.
+	publicUrl: string | undefined;
 }
 
 // Everything that used to be a single process-wide singleton (accountState, the GitHub
@@ -81,6 +85,9 @@ export interface TenantContext {
 	prCache: PrEffectCache;
 	auditStore: AuditStore;
 	refreshDeps: RefreshDeps;
+	// Exposed so index.ts's resolution-poll timer and webhookRouter's workflow_run handling
+	// can log to the right team's instrumentation file instead of a single global one.
+	conflictLogPath: string;
 	// Every route mounted behind a session, composed once per tenant from the exact same
 	// router factories index.ts used to call once at startup — building N independent
 	// instances (one per tenant) instead of one shared instance is what gives each tenant
@@ -98,6 +105,7 @@ function sanitizeTeamId(teamId: string): string {
 async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: TenantRegistry): Promise<TenantContext> {
 	const dir = join(shared.dataDir, "teams", teamId);
 	const installationPath = join(dir, "installation.json");
+	const preferencesPath = join(dir, "preferences.json");
 	const llmAccountPath = join(dir, "llm-account.json");
 	const queuePath = join(dir, "queue.json");
 	const decidedPrsPath = join(dir, "decided-prs.json");
@@ -111,17 +119,23 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	const decidedStore = new DecidedPrStore(decidedPrsPath);
 	const prCache = new PrEffectCache(prCachePath);
 
-	// None of these five reads depend on another's result — run them concurrently instead
-	// of one after another on this tenant's cold-start path (this is on the hot path for
+	// None of these reads depend on another's result — run them concurrently instead of one
+	// after another on this tenant's cold-start path (this is on the hot path for
 	// resolveTenant's first getOrCreate call for a team, not just process startup).
-	const [installationBinding, auditStore, connectedLlmAccount] = await Promise.all([
+	const [installationBinding, preferences, auditStore, connectedLlmAccount] = await Promise.all([
 		loadInstallation(installationPath),
+		loadPreferences(preferencesPath),
 		loadAuditStore(auditLogPath),
 		loadLlmAccount(llmAccountPath),
 		decidedStore.load(),
 		prCache.load(),
 	]);
-	const accountState = createAccountState(installationBinding);
+	const accountState = createAccountState(installationBinding, preferences);
+	// Backfills preferences.json for a team whose installation was bound before this file
+	// existed — persisted once here so the values survive even if the server restarts
+	// before the next /settings or /repos/select call (both of which keep it in sync
+	// going forward).
+	await savePreferences(preferencesPath, accountState.preferences);
 
 	let initialClient: GitHubClient;
 	if (installationBinding !== undefined) {
@@ -137,7 +151,11 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : shared.resolveDefaultLlmProvider();
 	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
 
-	const queue = new MergeQueue(queuePath, clientHolder, llmProviderHolder, conflictLogPath);
+	// The conflict-resolution Action's callback needs a real reachable URL — same constraint
+	// as the GitHub webhook. Without QUIRE_PUBLIC_URL, dispatching a conflict fails fast
+	// instead of waiting on a callback that could never arrive.
+	const callbackBaseUrl = shared.publicUrl !== undefined ? `${shared.publicUrl}/callbacks/action-resolution` : undefined;
+	const queue = new MergeQueue(queuePath, clientHolder, callbackBaseUrl, conflictLogPath);
 	await queue.load();
 
 	const instrumentationSink = createNdjsonInstrumentationSink({ gateLogPath, driftScreenLogPath });
@@ -157,6 +175,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	const refreshDeps: RefreshDeps = {
 		accountState,
 		accountPath: installationPath,
+		preferencesPath,
 		clientHolder,
 		appConfig: shared.appConfig,
 		decidedStore,
@@ -207,6 +226,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		prCache,
 		auditStore,
 		refreshDeps,
+		conflictLogPath,
 		router,
 	};
 }
@@ -250,6 +270,17 @@ export class TenantRegistry {
 			if (tenant.accountState.current?.installationId === installationId) return tenant;
 		}
 		return undefined;
+	}
+
+	// The conflict-resolution Action's callback (routes/actionCallback.ts) and its webhook
+	// workflow_run fallback both only carry a bundleId, not a teamId — a bundleId is unique
+	// across every team's queue (see mergeQueue.ts's id generation), so scanning every
+	// loaded tenant's queue for it is the only way to find who owns it.
+	async findByBundleId(bundleId: string): Promise<TenantContext | undefined> {
+		const matches = await Promise.all(
+			[...this.tenants.values()].map(async (tenant) => ((await tenant.queue.getEntry(bundleId)) !== undefined ? tenant : undefined)),
+		);
+		return matches.find((tenant): tenant is TenantContext => tenant !== undefined);
 	}
 
 	// True when some OTHER already-loaded team has this installation bound. Checked by

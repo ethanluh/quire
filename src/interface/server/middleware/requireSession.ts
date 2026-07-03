@@ -16,9 +16,10 @@ declare global {
 }
 
 // Replaces localOnly+requireAdminHeader everywhere except the login-establishing routes
-// (oauth/start, oauth/callback) and the HMAC-verified webhook route. A real SameSite
-// cookie makes the old custom-header CSRF defense redundant — a cross-origin page can't
-// get an authenticated request sent at all, so one middleware now does auth, CSRF
+// (oauth/start, oauth/callback), the HMAC-verified webhook route, and the conflict-resolution
+// Action callback (its own per-dispatch capability token — see routes/actionCallback.ts). A
+// real SameSite cookie makes the old custom-header CSRF defense redundant — a cross-origin
+// page can't get an authenticated request sent at all, so one middleware now does auth, CSRF
 // protection, and (from Stage 2 onward) tenant resolution.
 export function requireSession(sessionSecret: string, allowlist: Allowlist, secureCookies: boolean) {
 	return function (req: Request, res: Response, next: NextFunction): void {

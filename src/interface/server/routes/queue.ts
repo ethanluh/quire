@@ -1,15 +1,28 @@
 import { Router } from "express";
 import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
+import type { MergeQueueEntry } from "../../../engine/types/queue.js";
 import type { ServerState } from "../state.js";
 import { requireRole } from "../middleware/requireRole.js";
+
+type RedactedMergeQueueEntry = Omit<MergeQueueEntry, "resolution"> & {
+	resolution?: Omit<NonNullable<MergeQueueEntry["resolution"]>, "callbackToken">;
+};
+
+// callbackToken is a bearer capability for the Action's callback — it must never reach a
+// client, so every entry serialized to a response goes through this first.
+function redactEntry(entry: MergeQueueEntry): RedactedMergeQueueEntry {
+	if (entry.resolution === undefined) return entry;
+	const { callbackToken: _callbackToken, ...rest } = entry.resolution;
+	return { ...entry, resolution: rest };
+}
 
 export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore: DecidedPrStore): Router {
 	const router = Router();
 
 	router.get("/", async (_req, res, next) => {
 		try {
-			res.json(await queue.listEntries());
+			res.json((await queue.listEntries()).map(redactEntry));
 		} catch (err) {
 			next(err);
 		}
@@ -38,13 +51,15 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 
 	// A bundle stuck in "conflict" (automated resolution didn't apply or couldn't confidently
 	// resolve it — see INV-6) goes back to "queued" so the next /process pass tries again,
-	// whether the human fixed it manually on GitHub or just wants another attempt.
+	// whether the human fixed it manually on GitHub or just wants another attempt. Also accepts
+	// "resolving", so a human watching the dispatched Action's run isn't stuck waiting out the
+	// poll timeout before they can retry.
 	router.post("/:bundleId/retry", requireRole("owner"), async (req, res, next) => {
 		try {
 			const bundleId = req.params["bundleId"] ?? "";
 			const retried = await queue.retryConflict(bundleId);
 			if (retried === undefined) {
-				res.status(400).json({ error: `Bundle ${bundleId} is not in a conflict state` });
+				res.status(400).json({ error: `Bundle ${bundleId} is not in a conflict or resolving state` });
 				return;
 			}
 			res.json({ status: "queued", bundleId });

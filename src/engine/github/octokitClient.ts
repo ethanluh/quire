@@ -2,10 +2,23 @@ import type { Octokit } from "@octokit/rest";
 import { RequestError } from "@octokit/request-error";
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import { formatReviewCardComment } from "../review/comment.js";
-import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
+import type {
+	ConflictResolutionDispatchParams,
+	ConflictResolutionDispatchResult,
+	FoundOrCreatedPullRequest,
+	GitHubClient,
+	ListOpenPullRequestsResult,
+	RawPRPayload,
+	RepoFile,
+} from "./client.js";
 import { BinaryFileError } from "./client.js";
+import { CONFLICT_RESOLUTION_WORKFLOW_PATH } from "./repoSetup.js";
 import type { ConflictTrees, MergeabilityResult, MergeabilityState, ResolvedFile, TreeEntry } from "../types/mergeability.js";
 import { NotFastForwardError } from "../types/mergeability.js";
+
+// How recent a workflow run must be to count as "the one we just dispatched" when recovering
+// its id after workflow_dispatch's response body (which carries no run id at all).
+const RECENT_DISPATCH_WINDOW_MS = 30_000;
 
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
 // declares direction in an HTML comment so it renders invisibly in the PR body.
@@ -80,6 +93,30 @@ function isNotFoundError(err: unknown): boolean {
 	return typeof err === "object" && err !== null && "status" in err && (err as { status: unknown }).status === 404;
 }
 
+// Thrown when the GitHub App's installation has read-only access but the call needs
+// write (merge/close/revert/comment) — surfaces as a raw, unhelpful 403 from GitHub
+// otherwise ("Resource not accessible by integration"). See README's "GitHub App setup".
+export class InsufficientGitHubPermissionError extends Error {}
+
+function isInsufficientPermission(err: unknown): boolean {
+	return err instanceof RequestError
+		&& err.status === 403
+		&& /Resource not accessible by integration/i.test(err.message);
+}
+
+async function withPermissionHint<T>(action: string, fn: () => Promise<T>): Promise<T> {
+	try {
+		return await fn();
+	} catch (err) {
+		if (isInsufficientPermission(err)) {
+			throw new InsufficientGitHubPermissionError(
+				`GitHub App is missing the permission needed to ${action}. See README.md's "GitHub App setup" section for the required permissions, then re-approve the installation.`,
+			);
+		}
+		throw err;
+	}
+}
+
 // GitHub's `mergeable_state` is an untyped string in Octokit's own schema (it has grown
 // new values before) — map it once, here, to the closed union the rest of the codebase
 // works with. Anything not explicitly recognized falls into "unrecognized", the same
@@ -151,23 +188,29 @@ export class OctokitGitHubClient implements GitHubClient {
 	}
 
 	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
-		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-		if (pr.draft === true) {
-			await this.octokit.graphql(MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION, { pullRequestId: pr.node_id });
-		}
-		await this.octokit.rest.pulls.merge({ owner, repo, pull_number: prNumber });
+		await withPermissionHint("merge a pull request", async () => {
+			const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+			if (pr.draft === true) {
+				await this.octokit.graphql(MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION, { pullRequestId: pr.node_id });
+			}
+			await this.octokit.rest.pulls.merge({ owner, repo, pull_number: prNumber });
+		});
 	}
 
 	async closePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
-		await this.octokit.rest.pulls.update({ owner, repo, pull_number: prNumber, state: "closed" });
+		await withPermissionHint("close a pull request", () =>
+			this.octokit.rest.pulls.update({ owner, repo, pull_number: prNumber, state: "closed" }),
+		);
 	}
 
 	async revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string> {
-		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-		const result = await this.octokit.graphql<RevertPullRequestResponse>(REVERT_PULL_REQUEST_MUTATION, {
-			pullRequestId: pr.node_id,
+		return withPermissionHint("revert a pull request", async () => {
+			const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+			const result = await this.octokit.graphql<RevertPullRequestResponse>(REVERT_PULL_REQUEST_MUTATION, {
+				pullRequestId: pr.node_id,
+			});
+			return result.revertPullRequest.pullRequest.url;
 		});
-		return result.revertPullRequest.pullRequest.url;
 	}
 
 	async postReviewCardComment(
@@ -177,12 +220,14 @@ export class OctokitGitHubClient implements GitHubClient {
 		action: GestureAction,
 		card: ReviewCard,
 	): Promise<void> {
-		await this.octokit.rest.issues.createComment({
-			owner,
-			repo,
-			issue_number: prNumber,
-			body: formatReviewCardComment(action, card),
-		});
+		await withPermissionHint("post a review card comment", () =>
+			this.octokit.rest.issues.createComment({
+				owner,
+				repo,
+				issue_number: prNumber,
+				body: formatReviewCardComment(action, card),
+			}),
+		);
 	}
 
 	async getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined> {
@@ -202,25 +247,27 @@ export class OctokitGitHubClient implements GitHubClient {
 		content: string,
 		message: string,
 	): Promise<void> {
-		const branchRef = `heads/${branch}`;
-		try {
-			await this.octokit.rest.git.getRef({ owner, repo, ref: branchRef });
-		} catch (err) {
-			if (!isNotFoundError(err)) throw err;
-			const defaultBranch = await this.getDefaultBranch(owner, repo);
-			const { data: defaultRef } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
-			await this.octokit.rest.git.createRef({ owner, repo, ref: `refs/${branchRef}`, sha: defaultRef.object.sha });
-		}
+		await withPermissionHint("create or update a file in a repo", async () => {
+			const branchRef = `heads/${branch}`;
+			try {
+				await this.octokit.rest.git.getRef({ owner, repo, ref: branchRef });
+			} catch (err) {
+				if (!isNotFoundError(err)) throw err;
+				const defaultBranch = await this.getDefaultBranch(owner, repo);
+				const { data: defaultRef } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
+				await this.octokit.rest.git.createRef({ owner, repo, ref: `refs/${branchRef}`, sha: defaultRef.object.sha });
+			}
 
-		const existing = await this.getFileContentAtRef(owner, repo, path, branch);
-		await this.octokit.rest.repos.createOrUpdateFileContents({
-			owner,
-			repo,
-			path,
-			message,
-			content: Buffer.from(content, "utf8").toString("base64"),
-			branch,
-			...(existing !== undefined ? { sha: existing.sha } : {}),
+			const existing = await this.getFileContentAtRef(owner, repo, path, branch);
+			await this.octokit.rest.repos.createOrUpdateFileContents({
+				owner,
+				repo,
+				path,
+				message,
+				content: Buffer.from(content, "utf8").toString("base64"),
+				branch,
+				...(existing !== undefined ? { sha: existing.sha } : {}),
+			});
 		});
 	}
 
@@ -229,26 +276,28 @@ export class OctokitGitHubClient implements GitHubClient {
 		repo: string,
 		params: { head: string; base: string; title: string; body: string },
 	): Promise<FoundOrCreatedPullRequest> {
-		const { data: openPrs } = await this.octokit.rest.pulls.list({
-			owner,
-			repo,
-			state: "open",
-			head: `${owner}:${params.head}`,
-		});
-		const found = openPrs[0];
-		if (found !== undefined) {
-			return { number: found.number, url: found.html_url, created: false };
-		}
+		return withPermissionHint("open a pull request", async () => {
+			const { data: openPrs } = await this.octokit.rest.pulls.list({
+				owner,
+				repo,
+				state: "open",
+				head: `${owner}:${params.head}`,
+			});
+			const found = openPrs[0];
+			if (found !== undefined) {
+				return { number: found.number, url: found.html_url, created: false };
+			}
 
-		const { data: created } = await this.octokit.rest.pulls.create({
-			owner,
-			repo,
-			head: params.head,
-			base: params.base,
-			title: params.title,
-			body: params.body,
+			const { data: created } = await this.octokit.rest.pulls.create({
+				owner,
+				repo,
+				head: params.head,
+				base: params.base,
+				title: params.title,
+				body: params.body,
+			});
+			return { number: created.number, url: created.html_url, created: true };
 		});
-		return { number: created.number, url: created.html_url, created: true };
 	}
 
 	private async getFileContentAtRef(
@@ -274,13 +323,18 @@ export class OctokitGitHubClient implements GitHubClient {
 		// Repos are nullable in GitHub's schema (deleted fork) — either a null head repo or
 		// one with a different id than the base means resolution can't write to it.
 		const isFork = pr.head.repo === null || pr.base.repo === null || pr.head.repo.id !== pr.base.repo.id;
+		// pr.base.sha is a cached pointer GitHub only refreshes when the PR itself is
+		// synchronized (e.g. a push to head) — it silently lags behind the base branch's
+		// real tip when other PRs land on it in the meantime. Read the live tip instead.
+		const baseSha = await this.getBranchTipSha(owner, repo, pr.base.ref);
 		return {
 			state: normalizeMergeableState(pr.draft === true, pr.mergeable_state ?? "unknown"),
 			isFork,
+			merged: pr.merged === true,
 			headBranch: pr.head.ref,
 			headSha: pr.head.sha,
 			baseBranch: pr.base.ref,
-			baseSha: pr.base.sha,
+			baseSha,
 		};
 	}
 
@@ -290,7 +344,9 @@ export class OctokitGitHubClient implements GitHubClient {
 
 	async getConflictTrees(owner: string, repo: string, prNumber: number): Promise<ConflictTrees> {
 		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-		const baseSha = pr.base.sha;
+		// See getMergeability's comment above — pr.base.sha can lag behind the base
+		// branch's real tip, which would make this diff against a stale "theirs".
+		const baseSha = await this.getBranchTipSha(owner, repo, pr.base.ref);
 		const headSha = pr.head.sha;
 
 		const { data: comparison } = await this.octokit.rest.repos.compareCommitsWithBasehead({
@@ -389,6 +445,60 @@ export class OctokitGitHubClient implements GitHubClient {
 			}
 			throw err;
 		}
+	}
+
+	async dispatchConflictResolution(
+		owner: string,
+		repo: string,
+		params: ConflictResolutionDispatchParams,
+	): Promise<ConflictResolutionDispatchResult> {
+		return withPermissionHint("dispatch the conflict-resolution workflow", async () => {
+			// `ref` picks which copy of the workflow file GitHub validates for a
+			// workflow_dispatch trigger and runs — it is unrelated to which branch the job
+			// itself checks out (the job does that via the head_branch *input*, below). Using
+			// the PR's own head branch here 404s/422s for any PR whose branch predates Quire's
+			// setup PR landing this workflow on the default branch, i.e. most existing PRs.
+			// The base branch is where the setup PR actually committed the workflow file.
+			await this.octokit.rest.actions.createWorkflowDispatch({
+				owner,
+				repo,
+				workflow_id: CONFLICT_RESOLUTION_WORKFLOW_PATH,
+				ref: params.baseBranch,
+				inputs: {
+					pr_number: String(params.prNumber),
+					head_branch: params.headBranch,
+					base_branch: params.baseBranch,
+					declared_direction: params.declaredDirection,
+					callback_url: params.callbackUrl,
+					callback_token: params.callbackToken,
+				},
+			});
+			const workflowRunId = await this.findRecentWorkflowRunId(owner, repo, params.baseBranch);
+			return workflowRunId !== undefined ? { workflowRunId } : {};
+		});
+	}
+
+	// Best-effort recovery of the run workflow_dispatch just created — its own response has
+	// no body. Racy by nature (another dispatch on the same branch could land first); a miss
+	// just leaves workflowRunId unset, which the callback path doesn't need anyway.
+	private async findRecentWorkflowRunId(owner: string, repo: string, dispatchRef: string): Promise<number | undefined> {
+		const { data } = await this.octokit.rest.actions.listWorkflowRuns({
+			owner,
+			repo,
+			workflow_id: CONFLICT_RESOLUTION_WORKFLOW_PATH,
+			branch: dispatchRef,
+			event: "workflow_dispatch",
+			per_page: 1,
+		});
+		const run = data.workflow_runs[0];
+		if (run === undefined) return undefined;
+		const ageMs = Date.now() - new Date(run.created_at).getTime();
+		return ageMs <= RECENT_DISPATCH_WINDOW_MS ? run.id : undefined;
+	}
+
+	private async getBranchTipSha(owner: string, repo: string, branch: string): Promise<string> {
+		const { data } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+		return data.object.sha;
 	}
 
 	private async getFlatTree(owner: string, repo: string, treeSha: string): Promise<ReadonlyMap<string, TreeEntry>> {
