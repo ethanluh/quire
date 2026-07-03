@@ -208,6 +208,45 @@
     opacity: 0; pointer-events: none; transition: opacity var(--duration-base) var(--ease-standard); z-index: 100;
   }
   #toast.visible { opacity: 1; }
+
+  /* --- Settings: full-screen sheet, not a floating modal --- */
+  #settings-modal-backdrop {
+    background: transparent;
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+  }
+  #settings-modal-backdrop .settings-modal {
+    padding: 0;
+    max-width: none;
+    max-height: none;
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    animation: settings-sheet-in var(--duration-base) var(--ease-standard);
+  }
+  .settings-header {
+    justify-content: flex-start;
+    flex: 0 0 auto;
+    padding: calc(var(--space-3) + env(safe-area-inset-top)) var(--space-4) var(--space-3);
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface-card);
+    margin-bottom: 0;
+  }
+  .settings-header .modal-title { font-size: var(--text-lg); }
+  .settings-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: var(--space-4) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom));
+  }
+  @keyframes settings-sheet-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
 </style>
 </head>
 <body>
@@ -266,71 +305,24 @@
 
 <div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
   <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
-    <h3 class="modal-title" id="settings-modal-title">Settings</h3>
-
-    <div class="settings-section">
-      <h4>Preferences</h4>
-      <div class="settings-btn-row">
-        <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
-        <a class="btn btn-defer" id="link-desktop" href="index.html?desktop=1">Desktop view</a>
-      </div>
+    <div class="settings-header">
+      <button class="btn btn-defer btn-icon" id="btn-settings-modal-close" title="Close" aria-label="Close settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
+      <h3 class="modal-title" id="settings-modal-title">Settings</h3>
     </div>
 
-    <div class="settings-section">
-      <h4>Session</h4>
-      <button class="btn btn-defer" id="btn-signout">Sign out</button>
-    </div>
-
-    <div class="settings-section account-panel">
-      <h4>GitHub connection</h4>
-      <div class="account-status" id="account-status">Checking connection&hellip;</div>
-      <div id="installations-list"></div>
-      <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
-      <div id="account-connect-form">
-        <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
-        <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
-      </div>
-      <div id="account-result" class="result-msg" style="display:none"></div>
-
-      <div class="repo-panel" id="repo-panel" style="display:none">
-        <h3>Repository to work on</h3>
-        <label class="auto-merge-toggle">
-          <input type="checkbox" id="chk-auto-merge">
-          Automatically merge accepted bundles (skips the manual "Process next" step)
-        </label>
-        <label class="auto-merge-toggle">
-          <input type="checkbox" id="chk-flag-conflicts-for-fleet">
-          Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
-        </label>
-        <label class="auto-merge-toggle">
-          <input type="checkbox" id="chk-deep-investigation">
-          Escalate unresolved merge conflicts to a Quire-hosted deep investigation (requires an Anthropic API key connected below)
-        </label>
-        <div id="sorting-notice" class="result-msg" style="display:none">
-          Starred/pinned sorting is unavailable until you reconnect GitHub (this happens after every server redeploy).
-          <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
+    <div class="settings-body">
+      <div class="settings-section">
+        <h4>Preferences</h4>
+        <div class="settings-btn-row">
+          <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+          <a class="btn btn-defer" id="link-desktop" href="index.html?desktop=1">Desktop view</a>
         </div>
-        <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
-        <div id="repo-list-warning" class="result-msg error" style="display:none"></div>
-        <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
       </div>
-    </div>
 
-    <div class="settings-section account-panel">
-      <h4>LLM provider</h4>
-      <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
-      <div id="llm-connect-form">
-        <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles.</p>
-        <select id="llm-provider-select">
-          <option value="anthropic">Anthropic</option>
-          <option value="gemini">Gemini</option>
-        </select>
-        <input type="password" id="llm-api-key" placeholder="API key" autocomplete="off">
-        <button class="btn btn-accept" id="btn-llm-connect">Connect</button>
+      <div class="settings-section">
+        <h4>Session</h4>
+        <button class="btn btn-defer" id="btn-signout">Sign out</button>
       </div>
-      <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
-      <div id="llm-account-result" class="result-msg" style="display:none"></div>
-    </div>
 
     <div class="settings-section account-panel">
       <h4>Team</h4>
@@ -346,8 +338,61 @@
       <div id="team-result" class="result-msg" style="display:none"></div>
     </div>
 
-    <div class="modal-actions">
-      <button class="btn btn-defer" id="btn-settings-modal-close">Close</button>
+      <div class="settings-section account-panel">
+        <h4>GitHub connection</h4>
+        <div class="account-status" id="account-status">Checking connection&hellip;</div>
+        <div id="installations-list"></div>
+        <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
+        <div id="account-connect-form">
+          <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
+          <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
+        </div>
+        <div id="account-result" class="result-msg" style="display:none"></div>
+
+        <div class="repo-panel" id="repo-panel" style="display:none">
+          <h3>Repository to work on</h3>
+          <label class="auto-merge-toggle">
+            <input type="checkbox" id="chk-auto-merge">
+            Automatically merge accepted bundles (skips the manual "Process next" step)
+          </label>
+          <label class="auto-merge-toggle">
+            <input type="checkbox" id="chk-flag-conflicts-for-fleet">
+            Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
+          </label>
+          <label class="auto-merge-toggle">
+            <input type="checkbox" id="chk-deep-investigation">
+            Escalate unresolved merge conflicts to a Quire-hosted deep investigation (requires an Anthropic API key connected below)
+          </label>
+          <div id="sorting-notice" class="result-msg" style="display:none">
+            Starred/pinned sorting is unavailable until you reconnect GitHub (this happens after every server redeploy).
+            <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
+          </div>
+          <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
+          <div id="repo-list-warning" class="result-msg error" style="display:none"></div>
+          <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
+        </div>
+      </div>
+
+      <div class="settings-section account-panel">
+        <h4>LLM provider</h4>
+        <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
+        <div id="llm-connect-form">
+          <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles.</p>
+          <select id="llm-provider-select">
+            <option value="anthropic">Anthropic</option>
+            <option value="gemini">Gemini</option>
+          </select>
+          <input type="password" id="llm-api-key" placeholder="API key" autocomplete="off">
+          <button class="btn btn-accept" id="btn-llm-connect">Connect</button>
+        </div>
+        <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
+        <div id="llm-account-result" class="result-msg" style="display:none"></div>
+      </div>
+
+      <div class="settings-section">
+        <h4>Danger zone</h4>
+        <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
+      </div>
     </div>
   </div>
 </div>
@@ -939,6 +984,20 @@ document.getElementById('btn-process').addEventListener('click', async (e) => {
     alert('Could not process queue: ' + result.error);
     return;
   }
+  loadQueue();
+});
+
+const clearAllBtn = document.getElementById('btn-clear-all');
+clearAllBtn.style.display = 'inline-block';
+clearAllBtn.addEventListener('click', async () => {
+  if (!confirm('Clear all stored content (bundles, shelf, merge queue, audit log)? This cannot be undone.')) return;
+  const result = await api('POST', '/admin/reset', undefined);
+  if (result.error) {
+    alert('Could not clear data: ' + result.error);
+    return;
+  }
+  loadReview();
+  loadShelf();
   loadQueue();
 });
 
