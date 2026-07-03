@@ -198,6 +198,19 @@ body {
 	margin-top: var(--space-3);
 }
 
+/* Larger, denser dialogs than the base .card confirm-modal — more sections and
+   longer-running content, so they get more breathing room than the space-5
+   every other card uses. */
+.modal-backdrop .detail-modal,
+.modal-backdrop .settings-modal {
+	padding: var(--space-6);
+}
+
+.detail-modal .modal-title,
+.settings-modal .modal-title {
+	margin-bottom: var(--space-5);
+}
+
 .modal-backdrop .detail-modal {
 	max-width: 640px;
 	max-height: 85vh;
