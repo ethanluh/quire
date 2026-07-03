@@ -39,6 +39,23 @@ export class MergeQueue {
 		await saveState(this.statePath, this.state);
 	}
 
+	// dequeueNext()/markResolutionSucceeded()/markResolutionFailed()/retryConflict() are each
+	// reachable from independent triggers (a human's manual "Process" click, autoMergeOnAccept,
+	// the conflict-resolution Action's callback, the workflow_run webhook, and the timeout poll
+	// fallback) that don't coordinate with each other. Chaining every call through this lock
+	// serializes them onto `this.state` instead of letting two land concurrently and silently
+	// drop one side's update — mirrors refreshRepoQueue.ts's per-repo `inFlight` map, collapsed
+	// to a single chain since only one queue entry is ever actively processed at a time.
+	private lock: Promise<unknown> = Promise.resolve();
+	private withLock<T>(fn: () => Promise<T>): Promise<T> {
+		const run = this.lock.then(fn, fn);
+		this.lock = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	}
+
 	async enqueue(bundle: Bundle, card?: ReviewCard): Promise<void> {
 		const entry: MergeQueueEntry = {
 			bundleId: bundle.id,
@@ -61,6 +78,10 @@ export class MergeQueue {
 	}
 
 	async dequeueNext(): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.dequeueNextLocked());
+	}
+
+	private async dequeueNextLocked(): Promise<MergeQueueEntry | undefined> {
 		// Resume a bundle stuck in "landing" (e.g. the process crashed mid-merge) before
 		// picking up a fresh "queued" one, so a partial merge is never silently abandoned.
 		// "resolving" entries are deliberately excluded from both scans — they're not stuck,
@@ -259,6 +280,10 @@ export class MergeQueue {
 	// that it's thrashing. That manual override is logged the same way the poll timeout logs
 	// one, since it's the same "gave up waiting on the Action" outcome either way.
 	async retryConflict(bundleId: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.retryConflictLocked(bundleId));
+	}
+
+	private async retryConflictLocked(bundleId: string): Promise<MergeQueueEntry | undefined> {
 		const entry = this.state.entries.find(
 			(e) => e.bundleId === bundleId && (e.status === "conflict" || e.status === "resolving"),
 		);
@@ -282,6 +307,10 @@ export class MergeQueue {
 	// callback, or the poll fallback finding the run completed) — the PR's branch should now
 	// be mergeable, so go back to "queued" and let the next dequeueNext() re-attempt the merge.
 	async markResolutionSucceeded(bundleId: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.markResolutionSucceededLocked(bundleId));
+	}
+
+	private async markResolutionSucceededLocked(bundleId: string): Promise<MergeQueueEntry | undefined> {
 		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "resolving");
 		if (entry === undefined) return undefined;
 		const { resolution: _resolution, ...rest } = entry;
@@ -290,9 +319,14 @@ export class MergeQueue {
 		return requeued;
 	}
 
-	// The Action reported it couldn't resolve the conflict (or the poll fallback timed out
-	// waiting for it) — surface the reason per INV-6, retryable via the normal conflict flow.
+	// The Action reported it couldn't resolve the conflict (or the workflow_run webhook / poll
+	// fallback reported the run ended without one) — surface the reason per INV-6, retryable
+	// via the normal conflict flow.
 	async markResolutionFailed(bundleId: string, prId: string, reason: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.markResolutionFailedLocked(bundleId, prId, reason));
+	}
+
+	private async markResolutionFailedLocked(bundleId: string, prId: string, reason: string): Promise<MergeQueueEntry | undefined> {
 		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "resolving");
 		if (entry === undefined) return undefined;
 		const { resolution: _resolution, ...rest } = entry;
@@ -303,6 +337,18 @@ export class MergeQueue {
 		};
 		await this.setEntry(bundleId, failed);
 		return failed;
+	}
+
+	// Used by the workflow_run webhook handler to find which (if any) resolving entry a
+	// completed Action run belongs to, without exposing internal state directly.
+	async findResolvingByWorkflowRun(repoOwner: string, repoName: string, workflowRunId: number): Promise<MergeQueueEntry | undefined> {
+		return this.state.entries.find(
+			(e) =>
+				e.status === "resolving" &&
+				e.resolution?.workflowRunId === workflowRunId &&
+				e.resolution.repoOwner === repoOwner &&
+				e.resolution.repoName === repoName,
+		);
 	}
 
 	async clear(): Promise<void> {

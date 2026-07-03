@@ -335,6 +335,37 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 	});
 });
 
+describe("MergeQueue concurrency", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	// Two independent triggers (e.g. a manual "Process" click and autoMergeOnAccept) can call
+	// dequeueNext() back to back. Without serialization, the second call can pick up the first
+	// bundle while it's still "landing" (the status dequeueNext itself just set, synchronously,
+	// before its first await) instead of moving on to the next queued bundle — both then race
+	// on the same bundle's members instead of one call handling each bundle in turn.
+	it("serializes overlapping dequeueNext calls so each queued bundle is landed exactly once", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		await queue.load();
+
+		const prA = makePr({ id: "pr-a", number: 1 });
+		const prB = makePr({ id: "pr-b", number: 2 });
+		await queue.enqueue(makeBundle("bundle-a", [prA]));
+		await queue.enqueue(makeBundle("bundle-b", [prB]));
+
+		const results = await Promise.all([queue.dequeueNext(), queue.dequeueNext()]);
+
+		expect(results.map((r) => r?.bundleId).sort()).toEqual(["bundle-a", "bundle-b"]);
+		expect(results.every((r) => r?.status === "landed")).toBe(true);
+		expect(github.mergedPrs.sort()).toEqual(["org/repo/1", "org/repo/2"]);
+	});
+});
+
 describe("MergeQueue.markResolutionSucceeded / markResolutionFailed", () => {
 	let dir: string;
 
