@@ -18,7 +18,7 @@ function makeCard(bundleId: string): ReviewCard {
 	};
 }
 
-function makeBundle(id: string): Bundle {
+function makeBundle(id: string, filesTouched: ReadonlyArray<string> = []): Bundle {
 	return {
 		id,
 		direction: "add passwordless auth",
@@ -32,7 +32,7 @@ function makeBundle(id: string): Bundle {
 				headSha: "sha-1",
 				declaredDirection: "add passwordless auth",
 				diff: { raw: "", hunks: [] },
-				filesTouched: [],
+				filesTouched,
 				symbolsTouched: [],
 				testNamesChanged: [],
 				ciStatus: "success",
@@ -138,5 +138,27 @@ describe("bundlesRouter — GET /", () => {
 		const body = (await res.json()) as ReadonlyArray<Record<string, unknown>>;
 
 		expect(body).toEqual([expect.objectContaining({ bundleId: "b-1", assignedTo: "bob", assignedAt: "2026-01-01T00:00:00.000Z" })]);
+	});
+
+	it("orders bundles by conflict risk, putting an isolated bundle ahead of ones sharing files", async () => {
+		const state = createServerState();
+		// "entangled" and "rival" both touch src/shared.ts; "isolated" touches nothing shared.
+		state.bundles.set("entangled", makeBundle("entangled", ["src/shared.ts"]));
+		state.cards.set("entangled", makeCard("entangled"));
+		state.bundles.set("isolated", makeBundle("isolated", ["src/only.ts"]));
+		state.cards.set("isolated", makeCard("isolated"));
+		state.bundles.set("rival", makeBundle("rival", ["src/shared.ts"]));
+		state.cards.set("rival", makeCard("rival"));
+		const app = express();
+		app.use("/bundles", bundlesRouter(state));
+		server = app.listen(0);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const address = server.address();
+		if (address === null || typeof address === "string") throw new Error("no address");
+		const res = await fetch(`http://127.0.0.1:${address.port}/bundles`);
+		const body = (await res.json()) as ReadonlyArray<{ bundleId: string }>;
+
+		expect(body[0]?.bundleId).toBe("isolated");
 	});
 });
