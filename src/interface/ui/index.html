@@ -30,6 +30,18 @@
   header .btn-settings { margin-left: auto; }
   header .btn-settings svg { margin-top: 1px; }
 
+  .header-status { display: inline-flex; align-items: center; gap: var(--space-2); }
+  .header-team-switcher {
+    font: inherit;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-sunken);
+    color: var(--color-text-secondary);
+  }
+
   .tabs { padding: var(--space-3) var(--space-6) 0; background: var(--color-surface-page); }
 
   .pane { display: none; padding: var(--space-6); }
@@ -236,6 +248,11 @@
   <h1>Quire</h1>
   <span class="subtitle">Direction triage for swarm PRs</span>
   <span class="subtitle" id="signed-in-as" style="display:none"></span>
+  <span class="header-status" id="header-status" style="display:none">
+    <span class="badge badge-neutral" id="header-team-badge"></span>
+    <select class="header-team-switcher" id="header-team-switcher" style="display:none" title="Switch team"></select>
+    <span class="badge badge-neutral" id="header-repo-badge" style="display:none"></span>
+  </span>
   <button class="btn btn-defer btn-settings" id="btn-settings" title="Settings" style="display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> Settings</button>
 </header>
 
@@ -908,6 +925,7 @@ function showSigninGate() {
   signinGate.style.display = 'flex';
   signedInAsEl.style.display = 'none';
   settingsBtn.style.display = 'none';
+  document.getElementById('header-status').style.display = 'none';
 }
 
 function hideSigninGate(login) {
@@ -915,6 +933,7 @@ function hideSigninGate(login) {
   signedInAsEl.textContent = `Signed in as ${login}`;
   signedInAsEl.style.display = 'inline';
   settingsBtn.style.display = 'inline-block';
+  document.getElementById('header-status').style.display = 'inline-flex';
 }
 
 // Shared by "Sign in with GitHub" and "Reconnect GitHub" — both just need to run the OAuth
@@ -1064,6 +1083,25 @@ async function loadAccount() {
     repoPanel.style.display = 'none';
   }
   loadConnectableInstallations();
+  renderHeaderRepo(status.selectedRepo);
+}
+
+function renderHeaderRepo(selectedRepo) {
+  const badge = document.getElementById('header-repo-badge');
+  if (!selectedRepo) {
+    badge.style.display = 'none';
+    return;
+  }
+  badge.textContent = `${selectedRepo.owner}/${selectedRepo.name}`;
+  badge.style.display = 'inline-flex';
+}
+
+// A lighter-weight sibling of loadAccount() for the header: just the selected repo, on
+// every page load, without also paying for loadAccount()'s installations/repo-list/
+// connectable-installations fetches (those only matter once Settings is actually open).
+async function loadHeaderRepo() {
+  const status = await api('GET', '/account/github/status');
+  renderHeaderRepo(status.selectedRepo);
 }
 
 function showAccountResult(message, isError) {
@@ -1279,7 +1317,37 @@ async function loadTeam() {
   document.getElementById('team-switcher').innerHTML = (teams || [])
     .map((t) => `<option value="${escapeHtml(t.teamId)}" ${t.active ? 'selected' : ''}>${escapeHtml(t.name)}</option>`)
     .join('');
+  renderHeaderTeam(status.name, teams || []);
 }
+
+// Shows a plain team-name badge when the login belongs to only one team, or a select
+// (its currently active/default team, changed immediately on pick) once it belongs to
+// more than one — no point cluttering the header with a dropdown that only ever offers
+// one choice.
+function renderHeaderTeam(activeName, teams) {
+  const badge = document.getElementById('header-team-badge');
+  const switcher = document.getElementById('header-team-switcher');
+  if (teams.length > 1) {
+    switcher.innerHTML = teams
+      .map((t) => `<option value="${escapeHtml(t.teamId)}" ${t.active ? 'selected' : ''}>${escapeHtml(t.name)}</option>`)
+      .join('');
+    switcher.style.display = 'inline-block';
+    badge.style.display = 'none';
+  } else {
+    badge.textContent = activeName;
+    badge.style.display = 'inline-flex';
+    switcher.style.display = 'none';
+  }
+}
+
+document.getElementById('header-team-switcher').addEventListener('change', async (e) => {
+  const result = await api('POST', '/account/team/switch', { teamId: e.target.value });
+  if (result.error) {
+    alert('Error: ' + result.error);
+    return;
+  }
+  location.reload();
+});
 
 function showTeamResult(message, isError) {
   const resultEl = document.getElementById('team-result');
@@ -1510,6 +1578,7 @@ if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop
     if (signedIn) {
       refreshAndLoadReview();
       loadTeam(); // populates myRole before the Queue tab needs it for the Process/Remove buttons
+      loadHeaderRepo();
       loadAudit();
       startPolling();
       startLiveUpdates();
