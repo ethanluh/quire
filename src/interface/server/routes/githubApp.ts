@@ -182,7 +182,7 @@ export function githubAppRouter(
 			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
 			const responseRepos = userToken !== undefined ? await enrichWithUserToken(repos, userToken) : repos;
 
-			res.json({ repos: responseRepos, selected: binding.selectedRepo });
+			res.json({ repos: responseRepos, selected: binding.selectedRepo, sortingAvailable: userToken !== undefined });
 		} catch (err) {
 			next(err);
 		}
