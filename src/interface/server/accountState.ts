@@ -12,15 +12,18 @@ export interface AccountState {
 	preferences: StoredPreferences;
 }
 
-// Backfills selectedRepo/autoMergeOnAccept from `initial` whenever the caller's stored
-// preferences don't already have them — the case for an installation bound before
-// preferences.ts existed, where those fields still only live on the binding itself.
+// Backfills selectedRepo/autoMergeOnAccept/flagConflictsForFleet from `initial` whenever the
+// caller's stored preferences don't already have them — the case for an installation bound
+// before preferences.ts existed, where those fields still only live on the binding itself.
 export function createAccountState(initial: InstallationBinding | undefined, preferences: StoredPreferences = {}): AccountState {
 	const merged: StoredPreferences = {
 		...preferences,
 		...(preferences.selectedRepo === undefined && initial?.selectedRepo !== undefined ? { selectedRepo: initial.selectedRepo } : {}),
 		...(preferences.autoMergeOnAccept === undefined && initial?.autoMergeOnAccept !== undefined
 			? { autoMergeOnAccept: initial.autoMergeOnAccept }
+			: {}),
+		...(preferences.flagConflictsForFleet === undefined && initial?.flagConflictsForFleet !== undefined
+			? { flagConflictsForFleet: initial.flagConflictsForFleet }
 			: {}),
 	};
 	return { current: initial, preferences: merged };

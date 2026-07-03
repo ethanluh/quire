@@ -19,6 +19,9 @@ export interface InstallationBinding {
 	boundAt: string;
 	// Opt-in override of INV-5: when true, accept merges immediately instead of enqueuing.
 	autoMergeOnAccept?: boolean;
+	// Opt-in: post an unresolved merge conflict's detail as a plain PR comment for an
+	// external agent fleet to pick up (see preferences.ts).
+	flagConflictsForFleet?: boolean;
 }
 
 function isInstallationBinding(value: unknown): value is InstallationBinding {

@@ -18,6 +18,13 @@ export interface PostedReviewCardComment {
 	card: ReviewCard;
 }
 
+export interface PostedComment {
+	owner: string;
+	repo: string;
+	prNumber: number;
+	body: string;
+}
+
 interface StubPullRequest {
 	number: number;
 	url: string;
@@ -42,6 +49,7 @@ export class StubGitHubClient implements GitHubClient {
 	readonly closedPrs: string[] = [];
 	readonly revertedPrs: string[] = [];
 	readonly postedReviewCardComments: PostedReviewCardComment[] = [];
+	readonly postedComments: PostedComment[] = [];
 	readonly updateBranchCalls: string[] = [];
 	readonly commitResolvedFilesCalls: CommitResolvedFilesCall[] = [];
 	// One-shot: thrown on the next call, then cleared, so a test can simulate a single
@@ -125,6 +133,10 @@ export class StubGitHubClient implements GitHubClient {
 		card: ReviewCard,
 	): Promise<void> {
 		this.postedReviewCardComments.push({ owner, repo, prNumber, action, card });
+	}
+
+	async postComment(owner: string, repo: string, prNumber: number, body: string): Promise<void> {
+		this.postedComments.push({ owner, repo, prNumber, body });
 	}
 
 	async getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined> {
