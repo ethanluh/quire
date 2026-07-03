@@ -235,6 +235,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 
 			const localApp = express();
 			localApp.use(express.json());
+			localApp.use(stubMembership("owner"));
 			localApp.use("/queue", queueRouter(localQueue, state, decidedStore));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
@@ -279,6 +280,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 
 			const localApp = express();
 			localApp.use(express.json());
+			localApp.use(stubMembership("owner"));
 			localApp.use("/queue", queueRouter(localQueue, state, decidedStore));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
@@ -313,17 +315,19 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			return { baseUrl: `http://127.0.0.1:${address.port}`, server: localServer };
 		}
 
-		it.each<TeamRole>(["admin", "member"])("rejects %s from POST /process, retry, revert, and remove", async (role) => {
+		it.each<TeamRole>(["admin", "member"])("rejects %s from POST /process, retry, abort, revert, and remove", async (role) => {
 			await queue.enqueue(makeBundle("bundle-1"));
 			const { baseUrl: roleBaseUrl, server: roleServer } = await makeAppAs(role);
 
 			const process = await fetch(`${roleBaseUrl}/queue/process`, { method: "POST" });
 			const retry = await fetch(`${roleBaseUrl}/queue/bundle-1/retry`, { method: "POST" });
+			const abort = await fetch(`${roleBaseUrl}/queue/bundle-1/abort`, { method: "POST" });
 			const revert = await fetch(`${roleBaseUrl}/queue/bundle-1/prs/bundle-1-pr-1`, { method: "DELETE" });
 			const remove = await fetch(`${roleBaseUrl}/queue/bundle-1`, { method: "DELETE" });
 
 			expect(process.status).toBe(403);
 			expect(retry.status).toBe(403);
+			expect(abort.status).toBe(403);
 			expect(revert.status).toBe(403);
 			expect(remove.status).toBe(403);
 

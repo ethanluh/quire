@@ -512,6 +512,7 @@ describe("githubAppRouter", () => {
 			new StubLlmProvider(),
 			{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
 			"octocat",
 		);
 		// Deliberately not calling userTokenCache.set — no cached token for "octocat".
@@ -534,6 +535,7 @@ describe("githubAppRouter", () => {
 			new StubLlmProvider(),
 			{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
 			"octocat",
 		);
 		userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
