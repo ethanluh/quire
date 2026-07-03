@@ -1132,6 +1132,10 @@ installBtn.addEventListener('click', async () => {
   if (!signedIn) return;
   openSettingsModal();
   await loadAccount();
+  // A fresh page load always scrolls the modal to its top ("Preferences") — pull the
+  // GitHub connection section into view so the user lands on the result of what they
+  // just did instead of the section they weren't even looking at.
+  document.getElementById('account-status').scrollIntoView({ block: 'start' });
   if (result === 'error') {
     showAccountResult('GitHub connection failed: ' + (params.get('reason') || 'unknown error'), true);
   }
