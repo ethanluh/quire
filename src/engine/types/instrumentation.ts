@@ -25,10 +25,9 @@ export interface ConflictResolutionLog {
 }
 
 // One row per (PR, criterion) evaluated by the gate — not just the criterion that
-// ultimately decided the outcome — so Phase 0's keep-rate and per-criterion
-// trigger-rate calculations can be computed directly from the log. The true
-// false-positive rate additionally needs a human overturn decision, which this
-// log alone does not capture (see docs/instrumentation.md, "Gate decisions").
+// ultimately decided the outcome — so Phase 0's keep rate can be computed directly
+// from the log. The per-criterion false-positive rate additionally draws on the
+// audit store's overturnedAt field (see docs/instrumentation.md, "Gate decisions").
 export interface GateDecisionLog {
 	prId: string;
 	criterionName: string;

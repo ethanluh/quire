@@ -184,6 +184,21 @@
   .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
   .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
 
+  .audit-list { display: flex; flex-direction: column; gap: var(--space-2); }
+  .audit-entry {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .audit-entry .audit-meta { display: flex; flex-direction: column; gap: var(--space-1); }
+  .audit-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
+
   #toast {
     position: fixed; left: var(--space-4); right: var(--space-4); bottom: var(--space-4);
     background: var(--color-reject-wash); color: var(--color-reject); border: 1px solid var(--color-reject);
@@ -216,6 +231,7 @@
   <div class="tab active" data-tab="review">Review queue</div>
   <div class="tab" data-tab="shelf">Shelf</div>
   <div class="tab" data-tab="queue">Merge queue</div>
+  <div class="tab" data-tab="audit">Audit</div>
 </div>
 
 <div id="pane-review" class="pane active">
@@ -239,6 +255,12 @@
   </div>
   <button class="btn btn-accept" style="margin-top:16px" id="btn-process">Process next</button>
   <button class="btn btn-accept" style="margin-top:16px" id="btn-process-all">Process all</button>
+</div>
+
+<div id="pane-audit" class="pane">
+  <div class="audit-list" id="audit-list">
+    <div class="empty">No shadow-mode audit entries.</div>
+  </div>
 </div>
 
 <div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
@@ -360,6 +382,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
+    if (tab.dataset.tab === 'audit') loadAudit();
   });
 });
 
@@ -639,6 +662,31 @@ async function loadQueue() {
   </div>`).join('');
 }
 
+function auditEntryHtml(entry) {
+  const prLabel = `${escapeHtml(entry.pr.repoOwner)}/${escapeHtml(entry.pr.repoName)}#${entry.pr.number}`;
+  const action = entry.overturnedAt !== null
+    ? '<span class="badge badge-flagged">Overturned</span>'
+    : `<button class="btn btn-reject" onclick="overturnAudit('${escapeHtml(entry.id)}')">Mark as false positive</button>`;
+  return `<div class="audit-entry">
+    <div class="audit-meta">
+      <div>${escapeHtml(entry.criterionName)} &mdash; ${escapeHtml(entry.reason)}</div>
+      <div class="entry-id">${prLabel} &middot; ${escapeHtml(entry.addedAt)}</div>
+    </div>
+    ${action}
+  </div>`;
+}
+
+async function loadAudit() {
+  const entries = await api('GET', '/audit');
+  const el = document.getElementById('audit-list');
+  el.innerHTML = entries.length ? entries.map(auditEntryHtml).join('') : '<div class="empty">No shadow-mode audit entries.</div>';
+}
+
+async function overturnAudit(entryId) {
+  await api('POST', `/audit/${entryId}/overturn`);
+  loadAudit();
+}
+
 async function removeFromQueue(bundleId) {
   if (!confirm('Remove this bundle from the merge queue?')) return;
   await api('DELETE', `/queue/${bundleId}`);
@@ -732,6 +780,7 @@ clearAllBtn.addEventListener('click', async () => {
   loadReview();
   loadShelf();
   loadQueue();
+  loadAudit();
 });
 
 // --- Sign-in gate ---------------------------------------------------------
@@ -1131,6 +1180,7 @@ if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop
   checkSignedIn().then((signedIn) => {
     if (signedIn) {
       refreshAndLoadReview();
+      loadAudit();
       startPolling();
       startLiveUpdates();
     }
