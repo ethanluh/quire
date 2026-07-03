@@ -135,7 +135,7 @@
     background-image: var(--select-chevron);
     background-repeat: no-repeat;
     background-position: right var(--space-3) center;
-    background-size: 12px;
+    background-size: var(--space-3);
     padding-right: var(--space-8);
   }
   .account-panel .btn, .settings-section .btn { margin-top: var(--space-3); width: 100%; text-align: center; }
@@ -166,7 +166,7 @@
     font-family: var(--font-mono); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .repo-entry.selected { border-color: var(--color-brand); }
-  .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 64px; justify-content: center; }
+  .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 var(--space-16); justify-content: center; }
   .repo-group-header {
     font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--color-text-muted);
     text-transform: uppercase; letter-spacing: var(--tracking-wider); margin: var(--space-2) 0 0;
@@ -198,16 +198,21 @@
   nav.tabbar .tab.active { color: var(--color-brand); border-top-color: var(--color-brand); }
 
   .tab-badge {
-    position: absolute; top: -6px; right: -10px;
-    min-width: 20px; height: 20px; padding: 0 5px;
+    position: absolute; top: calc(-1 * var(--space-1)); right: calc(-1 * var(--space-2));
+    min-width: var(--space-5); height: var(--space-5); padding: 0 var(--space-1);
     border-radius: var(--radius-pill);
     background: var(--color-brand); color: #fff;
-    font-size: 12px; font-weight: var(--weight-semibold);
-    line-height: 20px; text-align: center;
+    font-size: var(--text-xs); font-weight: var(--weight-semibold);
+    line-height: var(--space-5); text-align: center;
   }
 
   #toast {
-    position: fixed; left: var(--space-4); right: var(--space-4); bottom: calc(78px + env(safe-area-inset-bottom));
+    /* --mobile-tabbar-height approximates nav.tabbar's rendered height (~70px) rounded
+       to the nearest grid value, so the clearance above it stays token-composed
+       instead of a bare magic number. */
+    --mobile-tabbar-height: calc(var(--space-16) + var(--space-2));
+    position: fixed; left: var(--space-4); right: var(--space-4);
+    bottom: calc(var(--mobile-tabbar-height) + var(--space-2) + env(safe-area-inset-bottom));
     background: var(--color-reject-wash); color: var(--color-reject); border: 1px solid var(--color-reject);
     border-radius: var(--radius-md); padding: var(--space-3); font-size: var(--text-sm); text-align: center;
     opacity: 0; pointer-events: none; transition: opacity var(--duration-base) var(--ease-standard); z-index: 100;
@@ -292,7 +297,7 @@
 
   <div id="pane-queue" class="pane">
     <div class="list" id="queue-list" style="flex:1"><div class="empty">Merge queue is empty.</div></div>
-    <button class="btn btn-accept" style="margin-top:14px" id="btn-process">Process next</button>
+    <button class="btn btn-accept" style="margin-top:var(--space-4)" id="btn-process">Process next</button>
   </div>
 
   </main>
