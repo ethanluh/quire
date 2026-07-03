@@ -26,6 +26,23 @@ export function buildInstallationOctokit(config: GitHubAppConfig, installationId
 	});
 }
 
+// Mints a raw token scoped to a single repo, read-only — used only for mounting a repo
+// read-only into a Managed Agents session (see deepConflictInvestigation.ts), which needs a
+// bare token string rather than a pre-configured Octokit instance. `createAppAuth` is called
+// directly here (not via Octokit's authStrategy, which never exposes the raw token) with
+// narrow `repositoryNames`/`permissions` so the minted token can't reach any other repo or
+// write anything, even though the parent installation's own grant may be broader.
+export async function mintScopedRepoToken(config: GitHubAppConfig, installationId: number, repoName: string): Promise<string> {
+	const auth = createAppAuth({ appId: config.appId, privateKey: config.privateKey });
+	const { token } = await auth({
+		type: "installation",
+		installationId,
+		repositoryNames: [repoName],
+		permissions: { contents: "read" },
+	});
+	return token;
+}
+
 // A plain user-authenticated client (the sign-in OAuth token, cached in-memory — see
 // userTokenCache.ts), used only for the handful of user-scoped calls an installation
 // client can't make (starred/pinned repos). Never used for anything ingestion-related.

@@ -103,7 +103,23 @@ function describeLowConfidenceHunk(hunk: ConflictHunk, resolution: SemanticHunkR
 	].join("\n");
 }
 
-export type ConflictResolutionOutcome = { status: "resolved" } | { status: "failed"; reason: string };
+// A hunk-level failure the fast resolver couldn't clear on its own, structured (not just
+// rendered to text) so a caller can hand it to a deeper resolution tier — see
+// deepConflictInvestigation.ts. Only populated for the "low-confidence semantic hunk" case;
+// structural conflicts, binary files, and forks have no hunk content a deeper investigation
+// could act on.
+export interface ConflictHunkEscalation {
+	path: string;
+	mode: string;
+	oursSha: string;
+	theirsSha: string;
+	mergeBaseSha: string | undefined;
+	lowConfidenceHunks: ReadonlyArray<{ hunk: ConflictHunk; resolution: SemanticHunkResolution }>;
+}
+
+export type ConflictResolutionOutcome =
+	| { status: "resolved" }
+	| { status: "failed"; reason: string; escalation?: ConflictHunkEscalation };
 
 // One full attempt: fetch the three trees, triage every touched path, resolve whatever
 // diff3 can on its own, commit if everything resolved that way. When a file survives diff3
@@ -172,12 +188,14 @@ export async function resolveMergeConflict(
 				// first one — a file with several ambiguous hunks should disclose all of them in
 				// one pass instead of making a human retry repeatedly to discover each in turn.
 				const lowConfidenceReports: string[] = [];
+				const lowConfidenceHunks: Array<{ hunk: ConflictHunk; resolution: SemanticHunkResolution }> = [];
 				for (let i = 0; i < semanticHunks.length; i++) {
 					const hunk = semanticHunks[i];
 					const resolution = semanticResolutions[i];
 					if (hunk === undefined || resolution === undefined) continue;
 					if (resolution.confidence === "low") {
 						lowConfidenceReports.push(describeLowConfidenceHunk(hunk, resolution));
+						lowConfidenceHunks.push({ hunk, resolution });
 						continue;
 					}
 					resolutions.set(hunk.index, resolution.resolution);
@@ -187,6 +205,14 @@ export async function resolveMergeConflict(
 					return {
 						status: "failed",
 						reason: `${plan.path}: could not confidently resolve ${lowConfidenceReports.length} conflicting hunk${plural ? "s" : ""}:\n${lowConfidenceReports.join("\n\n")}`,
+						escalation: {
+							path: plan.path,
+							mode: plan.mode,
+							oursSha: plan.oursSha,
+							theirsSha: plan.theirsSha,
+							mergeBaseSha: plan.mergeBaseSha,
+							lowConfidenceHunks,
+						},
 					};
 				}
 			}

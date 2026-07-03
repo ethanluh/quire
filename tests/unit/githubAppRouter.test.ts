@@ -199,6 +199,7 @@ describe("githubAppRouter", () => {
 			selectedRepo: undefined,
 			autoMergeOnAccept: false,
 			flagConflictsForFleet: false,
+			enableDeepConflictInvestigation: false,
 		});
 	});
 
@@ -813,10 +814,11 @@ const { accountPath } = setup(async () => []);
 			const { status, body } = await call(server, "POST", "/account/github/settings", {
 				autoMergeOnAccept: true,
 				flagConflictsForFleet: false,
+				enableDeepConflictInvestigation: false,
 			});
 
 			expect(status).toBe(200);
-			expect(body).toEqual({ autoMergeOnAccept: true, flagConflictsForFleet: false });
+			expect(body).toEqual({ autoMergeOnAccept: true, flagConflictsForFleet: false, enableDeepConflictInvestigation: false });
 
 			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
 			expect(persisted["autoMergeOnAccept"]).toBe(true);
@@ -830,6 +832,7 @@ const { accountPath } = setup(async () => []);
 			const { status } = await call(server, "POST", "/account/github/settings", {
 				autoMergeOnAccept: true,
 				flagConflictsForFleet: false,
+				enableDeepConflictInvestigation: false,
 			});
 
 			expect(status).toBe(400);
@@ -941,6 +944,7 @@ const { accountPath } = setup(async () => []);
 			selectedRepo: undefined,
 			autoMergeOnAccept: false,
 			flagConflictsForFleet: false,
+			enableDeepConflictInvestigation: false,
 		});
 	});
 

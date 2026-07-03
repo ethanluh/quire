@@ -30,6 +30,7 @@ const RepoIdentifierSchema = z.object({
 const SettingsSchema = z.object({
 	autoMergeOnAccept: z.boolean(),
 	flagConflictsForFleet: z.boolean(),
+	enableDeepConflictInvestigation: z.boolean(),
 });
 
 const INSTALL_STATE_COOKIE_NAME = "quire_install_state";
@@ -84,7 +85,8 @@ export function githubAppRouter(
 	}
 
 	router.get("/status", (_req, res) => {
-		const { installations, selectedRepo, autoMergeOnAccept, flagConflictsForFleet } = accountState.current;
+		const { installations, selectedRepo, autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation } =
+			accountState.current;
 		res.json({
 			connected: installations.length > 0,
 			installations: installations.map((i) => ({
@@ -96,6 +98,7 @@ export function githubAppRouter(
 			selectedRepo,
 			autoMergeOnAccept: autoMergeOnAccept ?? false,
 			flagConflictsForFleet: flagConflictsForFleet ?? false,
+			enableDeepConflictInvestigation: enableDeepConflictInvestigation ?? false,
 		});
 	});
 
@@ -106,11 +109,11 @@ export function githubAppRouter(
 				res.status(400).json({ error: "Install the GitHub App first" });
 				return;
 			}
-			const { autoMergeOnAccept, flagConflictsForFleet } = req.body as z.infer<typeof SettingsSchema>;
-			const updated: InstallationAccountState = { ...current, autoMergeOnAccept, flagConflictsForFleet };
+			const { autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation } = req.body as z.infer<typeof SettingsSchema>;
+			const updated: InstallationAccountState = { ...current, autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation };
 			accountState.current = updated;
 			await saveInstallation(accountPath, updated);
-			res.json({ autoMergeOnAccept, flagConflictsForFleet });
+			res.json({ autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation });
 		} catch (err) {
 			next(err);
 		}

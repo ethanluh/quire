@@ -1,7 +1,13 @@
 import { Router } from "express";
+import { z } from "zod";
 import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { ServerState } from "../state.js";
+import { validateBody } from "../middleware/validation.js";
+
+// Path taken via the request body, not a URL segment — a file path routinely contains
+// slashes, which a URL param can't carry reliably under Express 4's default path matching.
+const InvestigationPathSchema = z.object({ path: z.string().min(1) });
 
 export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore: DecidedPrStore): Router {
 	const router = Router();
@@ -59,6 +65,39 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 				return;
 			}
 			res.json({ status: "aborted", bundleId });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// Applies a Managed Agents decision packet's proposed resolution and requeues the bundle
+	// (see MergeQueue.acceptInvestigation) — never auto-applied regardless of the packet's own
+	// self-reported confidence; a human always accepts or rejects explicitly.
+	router.post("/:bundleId/investigation/accept", validateBody(InvestigationPathSchema), async (req, res, next) => {
+		try {
+			const bundleId = req.params["bundleId"] ?? "";
+			const { path } = req.body as z.infer<typeof InvestigationPathSchema>;
+			const updated = await queue.acceptInvestigation(bundleId, path);
+			if (updated === undefined) {
+				res.status(400).json({ error: `No awaiting-review investigation for ${path} on bundle ${bundleId}` });
+				return;
+			}
+			res.json({ status: "queued", bundleId });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	router.post("/:bundleId/investigation/reject", validateBody(InvestigationPathSchema), async (req, res, next) => {
+		try {
+			const bundleId = req.params["bundleId"] ?? "";
+			const { path } = req.body as z.infer<typeof InvestigationPathSchema>;
+			const updated = await queue.rejectInvestigation(bundleId, path);
+			if (updated === undefined) {
+				res.status(400).json({ error: `No awaiting-review investigation for ${path} on bundle ${bundleId}` });
+				return;
+			}
+			res.json({ status: "conflict", bundleId });
 		} catch (err) {
 			next(err);
 		}

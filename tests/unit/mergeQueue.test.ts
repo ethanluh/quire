@@ -3,9 +3,12 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import type { DeepInvestigationDeps } from "../../src/engine/queue/mergeQueue.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 import { StubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.js";
 import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
+import { StubManagedAgentsClient } from "../../src/engine/queue/stubManagedAgentsClient.js";
+import type { ManagedAgentsClient } from "../../src/engine/queue/managedAgentsClient.js";
 import type { Bundle, PullRequest, ReviewCard } from "../../src/engine/types/core.js";
 import type { ConflictTrees, MergeabilityResult, TreeEntry } from "../../src/engine/types/mergeability.js";
 
@@ -690,5 +693,146 @@ describe("MergeQueue.refreshQueuedBranches", () => {
 		await expect(queue.refreshQueuedBranches()).resolves.toBeUndefined();
 
 		expect(github.updateBranchCalls).toEqual(["org/repo/1", "org/repo2/2"]);
+	});
+});
+
+describe("MergeQueue deep conflict investigation", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	const agentRef = { agentId: "agent-1", agentVersion: 1, environmentId: "env-1" };
+
+	function deepInvestigationDeps(client: ManagedAgentsClient, shouldEnable = true): DeepInvestigationDeps {
+		return {
+			shouldEnable: () => shouldEnable,
+			getClient: () => client,
+			ensureAgent: async () => agentRef,
+			mintRepoToken: async () => "repo-token",
+		};
+	}
+
+	async function setupWithLowConfidenceConflict(deps: DeepInvestigationDeps | undefined): Promise<{ github: StubGitHubClient; queue: MergeQueue; pr: PullRequest }> {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"), undefined, undefined, deps);
+		await queue.load();
+		const pr = makePr();
+		const base = "line1\nline2";
+		const ours = "line1-ours\nline2";
+		const theirs = "line1-theirs\nline2";
+		github.setBlobContent("base-sha", base);
+		github.setBlobContent("ours-sha", ours);
+		github.setBlobContent("theirs-sha", theirs);
+		github.setConflictTrees(pr.repoOwner, pr.repoName, pr.number, makeConflictTrees("src/auth.ts", "base-sha", "ours-sha", "theirs-sha"));
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "dirty" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		return { github, queue, pr };
+	}
+
+	it("starts an investigation session and marks the bundle 'investigating' when enabled", async () => {
+		const client = new StubManagedAgentsClient();
+		const { queue } = await setupWithLowConfidenceConflict(deepInvestigationDeps(client));
+
+		const blocked = await queue.dequeueNext();
+
+		expect(blocked?.status).toBe("investigating");
+		expect(blocked?.investigations).toHaveLength(1);
+		expect(blocked?.investigations?.[0]).toMatchObject({ path: "src/auth.ts", status: "running" });
+		expect(client.createdSessions).toHaveLength(1);
+		expect(client.sentMessages).toHaveLength(1);
+	});
+
+	it("falls back to plain 'conflict' when the setting is off", async () => {
+		const client = new StubManagedAgentsClient();
+		const { queue } = await setupWithLowConfidenceConflict(deepInvestigationDeps(client, false));
+
+		const blocked = await queue.dequeueNext();
+
+		expect(blocked?.status).toBe("conflict");
+		expect(blocked?.investigations).toBeUndefined();
+		expect(client.createdSessions).toHaveLength(0);
+	});
+
+	it("falls back to plain 'conflict' when no deep-investigation deps are configured", async () => {
+		const { queue } = await setupWithLowConfidenceConflict(undefined);
+
+		const blocked = await queue.dequeueNext();
+
+		expect(blocked?.status).toBe("conflict");
+	});
+
+	it("pollInvestigations flips the bundle back to 'conflict' with the decision packet once the session finishes", async () => {
+		const client = new StubManagedAgentsClient();
+		const { queue } = await setupWithLowConfidenceConflict(deepInvestigationDeps(client));
+
+		const blocked = await queue.dequeueNext();
+		const sessionId = blocked?.investigations?.[0]?.sessionId ?? "";
+		client.setSessionStatus(sessionId, "idle");
+		const packet = {
+			rationale: "merged both call sites",
+			evidence: ["src/auth.ts:1"],
+			testsRun: [],
+			testResult: "unknown" as const,
+			confidence: "high" as const,
+			proposedResolution: "line1-merged\nline2",
+		};
+		client.setFinalAgentMessage(sessionId, JSON.stringify(packet));
+
+		await queue.pollInvestigations();
+
+		const entry = await queue.getEntry("bundle-1");
+		expect(entry?.status).toBe("conflict");
+		expect(entry?.investigations?.[0]).toMatchObject({ status: "awaitingReview", decisionPacket: packet });
+	});
+
+	it("acceptInvestigation applies the proposed resolution and requeues the bundle", async () => {
+		const client = new StubManagedAgentsClient();
+		const { github, queue } = await setupWithLowConfidenceConflict(deepInvestigationDeps(client));
+
+		const blocked = await queue.dequeueNext();
+		const sessionId = blocked?.investigations?.[0]?.sessionId ?? "";
+		client.setSessionStatus(sessionId, "idle");
+		client.setFinalAgentMessage(
+			sessionId,
+			JSON.stringify({
+				rationale: "r",
+				evidence: [],
+				testsRun: [],
+				testResult: "passed",
+				confidence: "high",
+				proposedResolution: "line1-merged\nline2",
+			}),
+		);
+		await queue.pollInvestigations();
+
+		const accepted = await queue.acceptInvestigation("bundle-1", "src/auth.ts");
+
+		expect(accepted?.status).toBe("queued");
+		expect(accepted?.investigations?.[0]?.status).toBe("accepted");
+		expect(github.commitResolvedFilesCalls).toHaveLength(1);
+		expect(github.commitResolvedFilesCalls[0]?.files).toEqual([{ path: "src/auth.ts", content: "line1-merged\nline2", mode: "100644" }]);
+	});
+
+	it("rejectInvestigation clears the packet without touching mergeability", async () => {
+		const client = new StubManagedAgentsClient();
+		const { github, queue } = await setupWithLowConfidenceConflict(deepInvestigationDeps(client));
+
+		const blocked = await queue.dequeueNext();
+		const sessionId = blocked?.investigations?.[0]?.sessionId ?? "";
+		client.setSessionStatus(sessionId, "idle");
+		client.setFinalAgentMessage(
+			sessionId,
+			JSON.stringify({ rationale: "r", evidence: [], testsRun: [], testResult: "unknown", confidence: "low", proposedResolution: "x" }),
+		);
+		await queue.pollInvestigations();
+
+		const rejected = await queue.rejectInvestigation("bundle-1", "src/auth.ts");
+
+		expect(rejected?.status).toBe("conflict");
+		expect(rejected?.investigations?.[0]?.status).toBe("rejected");
+		expect(github.commitResolvedFilesCalls).toHaveLength(0);
 	});
 });
