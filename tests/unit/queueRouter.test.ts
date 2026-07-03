@@ -120,7 +120,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 
 	it("clears decided status for a restored bundle's members", async () => {
 		await queue.enqueue(makeBundle("bundle-1"), makeCard("bundle-1"));
-		await decidedStore.markDecided(["bundle-1-pr-1"], "accept");
+		await decidedStore.markDecided(["bundle-1-pr-1"], "accept", { decidedBy: "tester", bundleId: "bundle-1" });
 
 		await fetch(`${baseUrl}/queue/bundle-1`, { method: "DELETE" });
 

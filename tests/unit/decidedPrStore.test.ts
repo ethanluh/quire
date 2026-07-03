@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "@jest/globals";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
@@ -25,7 +25,7 @@ describe("DecidedPrStore", () => {
 		const store = new DecidedPrStore(path);
 		await store.load();
 
-		await store.markDecided(["pr-1", "pr-2"], "reject");
+		await store.markDecided(["pr-1", "pr-2"], "reject", { decidedBy: "alice", bundleId: "bundle-1" });
 
 		expect(store.isDecided("pr-1")).toBe(true);
 		expect(store.isDecided("pr-2")).toBe(true);
@@ -41,8 +41,8 @@ describe("DecidedPrStore", () => {
 		const store = new DecidedPrStore(join(dir, "decided-prs.json"));
 		await store.load();
 
-		await store.markDecided(["pr-1"], "defer");
-		await store.markDecided(["pr-1"], "reject");
+		await store.markDecided(["pr-1"], "defer", { decidedBy: "alice", bundleId: "bundle-1" });
+		await store.markDecided(["pr-1"], "reject", { decidedBy: "alice", bundleId: "bundle-1" });
 
 		expect(store.isDecided("pr-1")).toBe(true);
 	});
@@ -51,7 +51,7 @@ describe("DecidedPrStore", () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-decided-"));
 		const store = new DecidedPrStore(join(dir, "decided-prs.json"));
 		await store.load();
-		await store.markDecided(["pr-1"], "defer");
+		await store.markDecided(["pr-1"], "defer", { decidedBy: "alice", bundleId: "bundle-1" });
 
 		await store.clearDecided("pr-1");
 
@@ -71,7 +71,7 @@ describe("DecidedPrStore", () => {
 		const path = join(dir, "decided-prs.json");
 		const store = new DecidedPrStore(path);
 		await store.load();
-		await store.markDecided(["pr-1", "pr-2"], "reject");
+		await store.markDecided(["pr-1", "pr-2"], "reject", { decidedBy: "alice", bundleId: "bundle-1" });
 
 		await store.clearAll();
 
@@ -81,6 +81,33 @@ describe("DecidedPrStore", () => {
 		const reloaded = new DecidedPrStore(path);
 		await reloaded.load();
 		expect(reloaded.isDecided("pr-1")).toBe(false);
+	});
+
+	it("persists and round-trips the decision audit fields", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-decided-"));
+		const path = join(dir, "decided-prs.json");
+		const store = new DecidedPrStore(path);
+		await store.load();
+
+		await store.markDecided(["pr-1"], "accept", {
+			decidedBy: "bob",
+			bundleId: "bundle-7",
+			wasAssignedTo: "alice",
+			overrodeAssignment: true,
+		});
+
+		const reloaded = new DecidedPrStore(path);
+		await reloaded.load();
+		expect(reloaded.isDecided("pr-1")).toBe(true);
+
+		const raw = JSON.parse(await readFile(path, "utf8")) as { entries: ReadonlyArray<Record<string, unknown>> };
+		const entry = raw.entries.find((e) => e["prId"] === "pr-1");
+		expect(entry).toMatchObject({
+			decidedBy: "bob",
+			bundleId: "bundle-7",
+			wasAssignedTo: "alice",
+			overrodeAssignment: true,
+		});
 	});
 
 	it("treats a corrupted state file as empty instead of throwing", async () => {

@@ -16,10 +16,14 @@ export class DecidedPrStore {
 		this.state = await loadState(this.statePath);
 	}
 
-	async markDecided(prIds: ReadonlyArray<string>, action: GestureAction): Promise<void> {
+	async markDecided(
+		prIds: ReadonlyArray<string>,
+		action: GestureAction,
+		context: { decidedBy: string; bundleId: string; wasAssignedTo?: string; overrodeAssignment?: boolean },
+	): Promise<void> {
 		const decidedAt = new Date().toISOString();
 		const remaining = this.state.entries.filter((e) => !prIds.includes(e.prId));
-		const added = prIds.map((prId) => ({ prId, action, decidedAt }));
+		const added = prIds.map((prId) => ({ prId, action, decidedAt, ...context }));
 		this.state = { entries: [...remaining, ...added] };
 		await saveState(this.statePath, this.state);
 	}

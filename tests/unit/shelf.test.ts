@@ -85,7 +85,7 @@ describe("shelfRouter", () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-shelf-"));
 		const { state, decidedStore } = setup();
 		await new Promise((resolve) => server.once("listening", resolve));
-		await decidedStore.markDecided(["pr-1", "pr-2"], "defer");
+		await decidedStore.markDecided(["pr-1", "pr-2"], "defer", { decidedBy: "tester", bundleId: "test-bundle" });
 		state.shelf.set("b-1", { card: makeCard("b-1"), memberPrIds: ["pr-1", "pr-2"] });
 
 		const { status, body } = await call("DELETE", "/shelf/b-1");

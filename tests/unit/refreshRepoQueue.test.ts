@@ -130,7 +130,7 @@ describe("refreshRepoQueue", () => {
 		provider.queueCompletion('["adds OTP login"]');
 		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
 		const deps = makeDeps({ client, provider });
-		await deps.decidedStore.markDecided(["pr-1"], "reject");
+		await deps.decidedStore.markDecided(["pr-1"], "reject", { decidedBy: "tester", bundleId: "test-bundle" });
 
 		const result = await refreshRepoQueue("octocat", "hello-world", deps);
 
