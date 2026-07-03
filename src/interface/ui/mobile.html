@@ -769,6 +769,23 @@ async function refreshAndLoadReview() {
   loadReview();
 }
 
+// Team switch/create/leave changes which tenant's data is active — every pane and settings
+// panel needs to re-fetch, but (unlike sign-out) the user is still mid-session, so do it in
+// place instead of location.reload()ing and blowing away "Settings is open" / an open modal
+// in general (the header team switcher is reachable while Settings is open too).
+async function refreshAfterTeamChange() {
+  delete lastRenderedJson.review;
+  delete lastRenderedJson.shelf;
+  delete lastRenderedJson.queue;
+  await refreshAndLoadReview();
+  await loadShelf();
+  await loadQueue();
+  await loadAudit();
+  await loadAccount();
+  await loadLlmAccount();
+  await loadTeam();
+}
+
 function renderStack() {
   updateReviewBadge();
   stackEl.innerHTML = '';
@@ -1416,7 +1433,7 @@ document.getElementById('header-team-switcher').addEventListener('change', async
     alert('Error: ' + result.error);
     return;
   }
-  location.reload();
+  await refreshAfterTeamChange();
 });
 
 function showTeamResult(message, isError) {
@@ -1432,7 +1449,7 @@ document.getElementById('team-switcher').addEventListener('change', async (e) =>
     showTeamResult('Error: ' + result.error, true);
     return;
   }
-  location.reload();
+  await refreshAfterTeamChange();
 });
 
 document.getElementById('btn-team-rename').addEventListener('click', async () => {
@@ -1469,7 +1486,7 @@ document.getElementById('btn-team-create').addEventListener('click', async () =>
     showTeamResult('Error: ' + result.error, true);
     return;
   }
-  location.reload();
+  await refreshAfterTeamChange();
 });
 
 document.getElementById('btn-team-leave').addEventListener('click', async () => {
@@ -1479,7 +1496,7 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
     showTeamResult('Error: ' + result.error, true);
     return;
   }
-  location.reload();
+  await refreshAfterTeamChange();
 });
 
 // An invite link is a top-level navigation from wherever it was shared, carrying
