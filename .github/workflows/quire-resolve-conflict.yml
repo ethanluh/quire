@@ -27,6 +27,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # claude-code-action authenticates via GitHub's OIDC provider, which requires this
+      # even though the job never uses the token directly.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
