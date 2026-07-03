@@ -8,6 +8,8 @@ import type { TenantSharedConfig } from "../../src/interface/server/tenant.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
+import type { OAuthDeps } from "../../src/engine/github/oauth.js";
+import { OAuthExchangeError } from "../../src/engine/github/oauth.js";
 import type { InstallationAccountState, InstallationBinding } from "../../src/engine/github/installation.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 
@@ -40,7 +42,17 @@ describe("TenantRegistry", () => {
 		if (dir) await rm(dir, { recursive: true, force: true });
 	});
 
-	function makeRegistry(): TenantRegistry {
+	function makeOAuth(refreshAccessToken: OAuthDeps["refreshAccessToken"]): OAuthDeps {
+		return {
+			config: { clientId: "client-id", clientSecret: "client-secret" },
+			buildAuthorizeUrl: () => "https://github.com/login/oauth/authorize",
+			exchangeCodeForToken: async () => ({ accessToken: "unused" }),
+			refreshAccessToken,
+			redirectUri: "http://localhost:3000/account/github/oauth/callback",
+		};
+	}
+
+	function makeRegistry(overrides: Partial<TenantSharedConfig> = {}): TenantRegistry {
 		const shared: TenantSharedConfig = {
 			dataDir: dir,
 			appConfig: { appId: "1", privateKey: "unused" },
@@ -51,6 +63,10 @@ describe("TenantRegistry", () => {
 			resolveDefaultLlmProvider: () => ({ provider: new StubLlmProvider(), description: "stub" }),
 			userTokenCache: createUserTokenCache(),
 			enrichWithUserToken: async (repos) => repos,
+			oauth: makeOAuth(async () => {
+				throw new OAuthExchangeError("no stored token expected in most tests");
+			}),
+			...overrides,
 		};
 		return new TenantRegistry(shared);
 	}

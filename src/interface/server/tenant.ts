@@ -15,6 +15,7 @@ import {
 	mintScopedRepoToken,
 } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
+import type { OAuthDeps } from "../../engine/github/oauth.js";
 import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../engine/github/repos.js";
 import type { RepoSummary } from "../../engine/github/repos.js";
 import type { UserTokenCache } from "../../engine/github/userTokenCache.js";
@@ -71,6 +72,10 @@ export interface TenantSharedConfig {
 	// every caller only ever looks up the current request's own signed-in login.
 	userTokenCache: UserTokenCache;
 	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>;
+	// Needed to silently mint a fresh user access token from a persisted refresh token on
+	// tenant load (see refreshUserTokenFromDisk in userToken.ts) — the same OAuth app config
+	// routes/account.ts uses for the initial exchange.
+	oauth: OAuthDeps;
 }
 
 // Everything that used to be a single process-wide singleton (accountState, the GitHub
@@ -240,6 +245,8 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 			shared.enrichWithUserToken,
 			listInstallationsForUser,
 			(installationId) => registry.isInstallationBoundToOtherTeam(installationId, teamId),
+			shared.dataDir,
+			shared.oauth,
 		),
 	);
 	router.use(

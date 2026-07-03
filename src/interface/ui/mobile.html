@@ -167,6 +167,11 @@
   }
   .repo-entry.selected { border-color: var(--color-brand); }
   .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 64px; justify-content: center; }
+  .repo-group-header {
+    font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--color-text-muted);
+    text-transform: uppercase; letter-spacing: var(--tracking-wider); margin: var(--space-2) 0 0;
+  }
+  .repo-group-header:first-child { margin-top: 0; }
   /* The blanket `.account-panel .btn { width: 100% }` rule above is meant for the
      connect/disconnect buttons; without this override it also stretches each repo
      row's "Select" button to fill the row, the bug this fixes. */
@@ -364,7 +369,7 @@
             Escalate unresolved merge conflicts to a Quire-hosted deep investigation (requires an Anthropic API key connected below)
           </label>
           <div id="sorting-notice" class="result-msg" style="display:none">
-            Starred/pinned sorting is unavailable until you reconnect GitHub (this happens after every server redeploy).
+            Starred/pinned sorting is unavailable — reconnect GitHub to restore it.
             <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
           </div>
           <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
@@ -1408,11 +1413,9 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name && selectedRepo.installationId === repo.installationId;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
-  const sourceBadge = loadedInstallations.length > 1 ? `<span class="badge badge-neutral">via ${escapeHtml(repo.accountLogin)}</span>` : '';
   const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name && repoSelectionTarget.installationId === repo.installationId;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
-    ${sourceBadge}
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isSelected
       ? '<span class="badge badge-clean">Selected</span>'
@@ -1435,8 +1438,17 @@ function renderRepoList() {
     listEl.innerHTML = '<div class="empty">No repos found for this account.</div>';
   } else if (!repos.length) {
     listEl.innerHTML = '<div class="empty">No repos match your search.</div>';
-  } else {
+  } else if (loadedInstallations.length <= 1) {
     listEl.innerHTML = repos.map((r) => repoHtml(r, loadedSelectedRepo)).join('');
+  } else {
+    listEl.innerHTML = loadedInstallations
+      .map((installation) => {
+        const groupRepos = repos.filter((r) => r.installationId === installation.installationId);
+        if (!groupRepos.length) return '';
+        return `<div class="repo-group-header">${escapeHtml(installation.accountLogin)}</div>`
+          + groupRepos.map((r) => repoHtml(r, loadedSelectedRepo)).join('');
+      })
+      .join('');
   }
 }
 

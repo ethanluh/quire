@@ -124,6 +124,7 @@ async function main(): Promise<void> {
 		resolveDefaultLlmProvider: () => resolveLlmProvider(process.env),
 		userTokenCache,
 		enrichWithUserToken,
+		oauth: oauthDeps,
 	};
 
 	// Every team gets its own isolated GitHub App installation, repo selection, PR queue,
@@ -171,7 +172,7 @@ async function main(): Promise<void> {
 	// before the global `session` middleware below applies to everything else.
 	app.use(
 		"/account/github",
-		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache),
+		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache, DATA_DIR),
 	);
 
 	app.use(session);
