@@ -8,7 +8,7 @@ import type { TenantSharedConfig } from "../../src/interface/server/tenant.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
-import type { InstallationBinding } from "../../src/engine/github/installation.js";
+import type { InstallationAccountState, InstallationBinding } from "../../src/engine/github/installation.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
@@ -24,6 +24,13 @@ function binding(overrides: Partial<InstallationBinding> = {}): InstallationBind
 		boundAt: "2026-06-30T00:00:00.000Z",
 		...overrides,
 	};
+}
+
+// Each tenant's accountState.current is a full InstallationAccountState (installations[]
+// plus the tenant-wide selectedRepo/autoMergeOnAccept/flagConflictsForFleet), not a single
+// InstallationBinding — see accountState.ts.
+function accountStateWith(...installations: ReadonlyArray<InstallationBinding>): InstallationAccountState {
+	return { installations };
 }
 
 describe("TenantRegistry", () => {
@@ -79,9 +86,9 @@ describe("TenantRegistry", () => {
 		const alice = await registry.getOrCreate("alice");
 		const bob = await registry.getOrCreate("bob");
 
-		alice.accountState.current = binding({ installationId: 111, accountLogin: "alice-org" });
+		alice.accountState.current = accountStateWith(binding({ installationId: 111, accountLogin: "alice-org" }));
 
-		expect(bob.accountState.current).toBeUndefined();
+		expect(bob.accountState.current.installations).toEqual([]);
 
 		// The in-memory mutation above never went through a route handler's saveInstallation
 		// call, so neither tenant's file exists yet — this just confirms bob's directory was
@@ -97,13 +104,28 @@ describe("TenantRegistry", () => {
 		// Simulate a prior process having bound an installation for alice by writing
 		// straight to disk, then verify a fresh registry only loads it for alice.
 		const { writeJsonFileAtomic } = await import("../../src/engine/jsonFile.js");
-		await writeJsonFileAtomic(join(dir, "users", "alice", "installation.json"), binding({ installationId: 222 }));
+		await writeJsonFileAtomic(join(dir, "users", "alice", "installation.json"), accountStateWith(binding({ installationId: 222 })));
 
 		const alice = await registry.getOrCreate("alice");
 		const bob = await registry.getOrCreate("bob");
 
-		expect(alice.accountState.current?.installationId).toBe(222);
-		expect(bob.accountState.current).toBeUndefined();
+		expect(alice.accountState.current.installations.map((i) => i.installationId)).toEqual([222]);
+		expect(bob.accountState.current.installations).toEqual([]);
+	});
+
+	it("one tenant can bind several installations, all showing up under that same tenant", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+		const registry = makeRegistry();
+
+		const alice = await registry.getOrCreate("alice");
+		alice.accountState.current = accountStateWith(
+			binding({ installationId: 111, accountLogin: "alice-personal" }),
+			binding({ installationId: 222, accountLogin: "alice-org", accountType: "Organization" }),
+		);
+
+		expect(alice.accountState.current.installations.map((i) => i.installationId)).toEqual([111, 222]);
+		expect(registry.findByInstallationId(111)?.login).toBe("alice");
+		expect(registry.findByInstallationId(222)?.login).toBe("alice");
 	});
 
 	it("findByInstallationId routes to the tenant that owns that installation, not any other", async () => {
@@ -112,8 +134,8 @@ describe("TenantRegistry", () => {
 
 		const alice = await registry.getOrCreate("alice");
 		const bob = await registry.getOrCreate("bob");
-		alice.accountState.current = binding({ installationId: 111 });
-		bob.accountState.current = binding({ installationId: 222 });
+		alice.accountState.current = accountStateWith(binding({ installationId: 111 }));
+		bob.accountState.current = accountStateWith(binding({ installationId: 222 }));
 
 		expect(registry.findByInstallationId(111)?.login).toBe("alice");
 		expect(registry.findByInstallationId(222)?.login).toBe("bob");
@@ -123,8 +145,8 @@ describe("TenantRegistry", () => {
 	it("hydrateExisting loads every tenant directory already on disk without a prior request", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 		const { writeJsonFileAtomic } = await import("../../src/engine/jsonFile.js");
-		await writeJsonFileAtomic(join(dir, "users", "alice", "installation.json"), binding({ installationId: 333 }));
-		await writeJsonFileAtomic(join(dir, "users", "bob", "installation.json"), binding({ installationId: 444 }));
+		await writeJsonFileAtomic(join(dir, "users", "alice", "installation.json"), accountStateWith(binding({ installationId: 333 })));
+		await writeJsonFileAtomic(join(dir, "users", "bob", "installation.json"), accountStateWith(binding({ installationId: 444 })));
 
 		const registry = makeRegistry();
 		await registry.hydrateExisting();
