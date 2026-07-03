@@ -22,7 +22,7 @@ describe("github preferences persistence", () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-preferences-"));
 		const path = join(dir, "nested", "preferences.json");
 		const preferences: StoredPreferences = {
-			selectedRepo: { owner: "acme-corp", name: "widgets" },
+			selectedRepo: { owner: "acme-corp", name: "widgets", installationId: 555 },
 			autoMergeOnAccept: true,
 		};
 

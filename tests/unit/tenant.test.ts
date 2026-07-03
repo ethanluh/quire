@@ -176,7 +176,7 @@ describe("TenantRegistry", () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 			const registry = makeRegistry();
 			const alpha = await registry.getOrCreate("alpha");
-			alpha.accountState.current = binding({ installationId: 555 });
+			alpha.accountState.current = accountStateWith(binding({ installationId: 555 }));
 
 			expect(registry.isInstallationBoundToOtherTeam(555, "alpha")).toBe(false);
 		});
@@ -186,7 +186,7 @@ describe("TenantRegistry", () => {
 			const registry = makeRegistry();
 			const alpha = await registry.getOrCreate("alpha");
 			await registry.getOrCreate("bravo");
-			alpha.accountState.current = binding({ installationId: 555 });
+			alpha.accountState.current = accountStateWith(binding({ installationId: 555 }));
 
 			expect(registry.isInstallationBoundToOtherTeam(555, "bravo")).toBe(true);
 		});

@@ -235,7 +235,7 @@ async function main(): Promise<void> {
 	const queueRefreshTimer = setInterval(() => {
 		for (const tenant of registry.all()) {
 			tenant.queue.refreshQueuedBranches().catch((err: unknown) => {
-				console.error(`Queue branch refresh failed for ${tenant.login}:`, err);
+				console.error(`Queue branch refresh failed for ${tenant.teamId}:`, err);
 			});
 		}
 	}, QUEUE_REFRESH_INTERVAL_MS);

@@ -376,7 +376,9 @@ describe("githubAppRouter", () => {
 			undefined,
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
 			undefined,
-			async (repos) => repos,
+			undefined,
+			async (repos: ReadonlyArray<RepoSummary>) => repos,
+			"owner",
 			() => true,
 		);
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -873,8 +875,11 @@ describe("githubAppRouter", () => {
 				async () => [],
 				new StubGitHubClient(),
 				new StubLlmProvider(),
-				{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+				{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
 				async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+				undefined,
+				undefined,
+				undefined,
 				role,
 			);
 			await new Promise((resolve) => server.once("listening", resolve));
