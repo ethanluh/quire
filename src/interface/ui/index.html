@@ -300,6 +300,7 @@
       <div id="installations-list"></div>
       <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
       <div id="account-connect-form">
+        <div id="connectable-installations" style="display:none"></div>
         <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
         <div class="account-connect-actions">
           <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
@@ -929,6 +930,48 @@ async function disconnectInstallation(installationId) {
   loadAccount();
 }
 
+function connectableInstallationHtml(installation) {
+  return `<div class="repo-entry">
+    <span class="badge badge-neutral">${escapeHtml(installation.accountType)}</span>
+    <span class="repo-name">${escapeHtml(installation.accountLogin)}</span>
+    <button class="btn btn-accept" onclick="connectInstallation(${installation.installationId})">Connect</button>
+  </div>`;
+}
+
+async function connectInstallation(installationId) {
+  const result = await api('POST', '/account/github/connect', { installationId });
+  if (result.error) {
+    showAccountResult('Error: ' + result.error, true);
+    return;
+  }
+  await loadAccount();
+  showAccountResult(`Connected to ${result.accountLogin}.`, false);
+}
+
+// Installations of the Quire GitHub App the signed-in user already has access to but
+// hasn't bound to this browser's data yet — e.g. a teammate installed it on the org
+// already, or this is a fresh data directory. Lets Settings offer a one-click "Connect"
+// instead of always sending the user through the full GitHub install wizard again.
+async function loadConnectableInstallations() {
+  const el = document.getElementById('connectable-installations');
+  const result = await api('GET', '/account/github/available-installations');
+  const installations = result.installations || [];
+  if (installations.length) {
+    el.innerHTML = '<p>Already installed — connect without leaving this page:</p>' + installations.map(connectableInstallationHtml).join('');
+    el.style.display = 'block';
+  } else if (result.needsReconnect) {
+    el.innerHTML = `<div class="result-msg">Reconnect GitHub to check for installations you already have access to.
+      <button class="btn btn-defer" id="btn-check-installations-reconnect">Reconnect GitHub</button></div>`;
+    el.style.display = 'block';
+    document.getElementById('btn-check-installations-reconnect').addEventListener('click', () => {
+      startOAuth(document.getElementById('btn-check-installations-reconnect'), document.getElementById('account-result'));
+    });
+  } else {
+    el.innerHTML = '';
+    el.style.display = 'none';
+  }
+}
+
 accountDisconnectAllBtn.addEventListener('click', async () => {
   if (!confirm('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.')) return;
   await api('POST', '/account/github/disconnect-all', undefined);
@@ -974,6 +1017,7 @@ async function loadAccount() {
     accountDisconnectAllBtn.style.display = 'none';
     repoPanel.style.display = 'none';
   }
+  loadConnectableInstallations();
 }
 
 function showAccountResult(message, isError) {

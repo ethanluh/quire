@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import type { InstallationAccountState, InstallationBinding } from "../../../engine/github/installation.js";
 import { saveInstallation, clearInstallation } from "../../../engine/github/installation.js";
-import type { InstallationAccount } from "../../../engine/github/installationClient.js";
+import type { AccessibleInstallation, InstallationAccount } from "../../../engine/github/installationClient.js";
 import { isInstallationRevoked } from "../../../engine/github/installationClient.js";
 import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import type { GitHubClient } from "../../../engine/github/client.js";
@@ -19,6 +19,10 @@ import { mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
 const SelectRepoSchema = z.object({
 	owner: z.string().min(1),
 	name: z.string().min(1),
+	installationId: z.number().int().positive(),
+});
+
+const ConnectInstallationSchema = z.object({
 	installationId: z.number().int().positive(),
 });
 
@@ -54,9 +58,39 @@ export function githubAppRouter(
 	secureCookies: boolean,
 	userTokenCache: UserTokenCache,
 	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>,
+	listInstallationsForUser: (accessToken: string) => Promise<ReadonlyArray<AccessibleInstallation>>,
 ): Router {
 	const router = Router();
 	const { accountState, accountPath, clientHolder } = refreshDeps;
+
+	// Upserts one installation's binding into the account-wide state and, if it happens to
+	// back the active selection, repoints the shared client — shared by the GitHub-redirect
+	// callback below and the redirect-free /connect route, which both end up binding an
+	// installationId the exact same way, just from different sources of trust (a fresh
+	// GitHub Setup-URL redirect vs. an installation the signed-in user already had access to).
+	function bindInstallation(installationId: number, account: InstallationAccount): InstallationAccountState {
+		const binding: InstallationBinding = {
+			installationId,
+			accountLogin: account.accountLogin,
+			accountType: account.accountType,
+			boundAt: new Date().toISOString(),
+		};
+		// Upsert by installationId: re-installing (or re-connecting) replaces that one
+		// binding's metadata without touching any other bound installation or the current
+		// selection.
+		const current = accountState.current;
+		const withoutExisting = current.installations.filter((i) => i.installationId !== installationId);
+		const updated: InstallationAccountState = { ...current, installations: [...withoutExisting, binding] };
+		accountState.current = updated;
+
+		// Only repoint the shared client if this (re)bind happens to be the one currently
+		// backing the active selection — a fresh, unrelated installation shouldn't disturb
+		// whatever's already being watched.
+		if (activeInstallation(updated)?.installationId === installationId) {
+			clientHolder.setClient(buildClient(installationId));
+		}
+		return updated;
+	}
 
 	interface RepoListCacheEntry {
 		expiresAt: number;
@@ -166,29 +200,57 @@ export function githubAppRouter(
 				throw err;
 			}
 
-			const binding: InstallationBinding = {
-				installationId,
-				accountLogin: account.accountLogin,
-				accountType: account.accountType,
-				boundAt: new Date().toISOString(),
-			};
-			// Upsert by installationId: re-installing (GitHub can redirect back through this
-			// same callback for an "update" action) replaces that one binding's metadata
-			// without touching any other bound installation or the current selection.
-			const current = accountState.current;
-			const withoutExisting = current.installations.filter((i) => i.installationId !== installationId);
-			const updated: InstallationAccountState = { ...current, installations: [...withoutExisting, binding] };
-			accountState.current = updated;
-
-			// Only repoint the shared client if this (re)install happens to be the one
-			// currently backing the active selection — a fresh, unrelated installation
-			// shouldn't disturb whatever's already being watched.
-			if (activeInstallation(updated)?.installationId === installationId) {
-				clientHolder.setClient(buildClient(installationId));
-			}
+			const updated = bindInstallation(installationId, account);
 			await saveInstallation(accountPath, updated);
 
 			res.redirect("/?account=connected");
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// Installations of this App that the signed-in user can already see on GitHub but
+	// hasn't bound to this tenant yet — lets Settings offer "Connect" instead of always
+	// funneling an already-installed user through the /install/start GitHub redirect.
+	// Needs the cached sign-in token (see userTokenCache.ts), so it degrades to "reconnect
+	// to check" rather than erroring when that token isn't cached (never signed in this
+	// process, or the token expired).
+	router.get("/available-installations", async (_req, res, next) => {
+		try {
+			const login = res.locals.login;
+			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
+			if (userToken === undefined) {
+				res.json({ installations: [], needsReconnect: true });
+				return;
+			}
+			const boundIds = new Set(accountState.current.installations.map((i) => i.installationId));
+			const accessible = await listInstallationsForUser(userToken);
+			res.json({ installations: accessible.filter((i) => !boundIds.has(i.installationId)), needsReconnect: false });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// Binds an installation the signed-in user already has access to (surfaced by
+	// /available-installations above) without sending them through GitHub's install
+	// redirect at all — re-verified here via getInstallationAccount rather than trusted
+	// from the client, since the browser only ever supplied an installationId.
+	router.post("/connect", validateBody(ConnectInstallationSchema), async (req, res, next) => {
+		try {
+			const { installationId } = req.body as z.infer<typeof ConnectInstallationSchema>;
+			let account: InstallationAccount;
+			try {
+				account = await getInstallationAccount(installationId);
+			} catch (err) {
+				if (isInstallationRevoked(err)) {
+					res.status(400).json({ error: "That installation is no longer accessible." });
+					return;
+				}
+				throw err;
+			}
+			const updated = bindInstallation(installationId, account);
+			await saveInstallation(accountPath, updated);
+			res.json({ connected: true, accountLogin: account.accountLogin, accountType: account.accountType });
 		} catch (err) {
 			next(err);
 		}

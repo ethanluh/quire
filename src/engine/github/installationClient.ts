@@ -87,3 +87,25 @@ export async function getInstallationAccount(
 		accountType: data.target_type === "User" ? "User" : "Organization",
 	};
 }
+
+export interface AccessibleInstallation extends InstallationAccount {
+	installationId: number;
+}
+
+// Lists installations of *this* App that the signed-in user can already see, using the
+// same cached sign-in token as buildUserOctokit — GitHub scopes the response to the App
+// tied to the token's client id, so no separate appSlug filtering is needed here. This is
+// what lets Settings offer "Connect" instead of funneling an already-installed user
+// through the "Install GitHub App" wizard again.
+export async function listInstallationsForUser(accessToken: string): Promise<ReadonlyArray<AccessibleInstallation>> {
+	const { data } = await buildUserOctokit(accessToken).rest.apps.listInstallationsForAuthenticatedUser();
+	return data.installations.map((installation) => {
+		const account = installation.account;
+		const accountLogin = account !== null && account !== undefined && "login" in account ? account.login : undefined;
+		return {
+			installationId: installation.id,
+			accountLogin: accountLogin ?? `installation-${installation.id}`,
+			accountType: installation.target_type === "User" ? "User" : "Organization",
+		};
+	});
+}

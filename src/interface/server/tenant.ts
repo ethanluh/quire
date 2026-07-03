@@ -10,6 +10,7 @@ import {
 	buildInstallationClient,
 	buildInstallationOctokit,
 	getInstallationAccount,
+	listInstallationsForUser,
 	mintScopedRepoToken,
 } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
@@ -231,6 +232,7 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 			shared.isProduction,
 			shared.userTokenCache,
 			shared.enrichWithUserToken,
+			listInstallationsForUser,
 		),
 	);
 	router.use(
