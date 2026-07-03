@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@jest/globals";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
-import { WORKFLOW_CONTENT, setUpDeclaredDirectionConvention } from "../../src/engine/github/repoSetup.js";
+import { WORKFLOW_CONTENT, checkDeclaredDirectionConvention, setUpDeclaredDirectionConvention } from "../../src/engine/github/repoSetup.js";
 
 const TEMPLATE_PATH = ".github/pull_request_template.md";
 const WORKFLOW_PATH = ".github/workflows/quire-declared-direction.yml";
@@ -81,5 +81,39 @@ describe("setUpDeclaredDirectionConvention", () => {
 		if (first.status === "created" && second.status === "pr-open") {
 			expect(second.prNumber).toBe(first.prNumber);
 		}
+	});
+});
+
+describe("checkDeclaredDirectionConvention", () => {
+	it("returns true when both the template and workflow already conform", async () => {
+		const client = new StubGitHubClient();
+		seedFullyConformingRepo(client);
+
+		await expect(checkDeclaredDirectionConvention(client, "acme-corp", "widgets")).resolves.toBe(true);
+	});
+
+	it("returns false when neither file exists", async () => {
+		const client = new StubGitHubClient();
+
+		await expect(checkDeclaredDirectionConvention(client, "acme-corp", "widgets")).resolves.toBe(false);
+	});
+
+	it("returns false when the workflow content is stale", async () => {
+		const client = new StubGitHubClient();
+		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, "name: an older version of the template\n");
+
+		await expect(checkDeclaredDirectionConvention(client, "acme-corp", "widgets")).resolves.toBe(false);
+	});
+
+	it("performs no mutation — a repo needing setup stays untouched after a check", async () => {
+		const client = new StubGitHubClient();
+
+		await checkDeclaredDirectionConvention(client, "acme-corp", "widgets");
+
+		const template = await client.getFileContent("acme-corp", "widgets", TEMPLATE_PATH);
+		const workflow = await client.getFileContent("acme-corp", "widgets", WORKFLOW_PATH);
+		expect(template).toBeUndefined();
+		expect(workflow).toBeUndefined();
 	});
 });

@@ -1140,6 +1140,10 @@ installBtn.addEventListener('click', async () => {
   if (!signedIn) return;
   openSettingsModal();
   await loadAccount();
+  // A fresh page load always scrolls the modal to its top ("Preferences") — pull the
+  // GitHub connection section into view so the user lands on the result of what they
+  // just did instead of the section they weren't even looking at.
+  document.getElementById('account-status').scrollIntoView({ block: 'start' });
   if (result === 'error') {
     showAccountResult('GitHub connection failed: ' + (params.get('reason') || 'unknown error'), true);
   }
@@ -1468,7 +1472,8 @@ async function selectRepo(owner, name, installationId) {
     showAccountResult(parts.join(' '), false);
     loadReview();
 
-    if (confirm(`Set up Quire's PR convention in ${owner}/${name}? This opens a pull request documenting the declared-direction marker in the repo's PR template and adding a CI check that enforces it.`)) {
+    const setupStatus = await api('POST', '/account/github/repos/setup-status', { owner, name });
+    if (!setupStatus.alreadySetUp && confirm(`Set up Quire's PR convention in ${owner}/${name}? This opens a pull request documenting the declared-direction marker in the repo's PR template and adding a CI check that enforces it.`)) {
       const setup = await api('POST', '/account/github/repos/setup', { owner, name });
       if (setup.error) {
         showAccountResult('Setup PR failed: ' + setup.error, true);

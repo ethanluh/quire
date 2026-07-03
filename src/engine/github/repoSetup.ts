@@ -54,6 +54,26 @@ function buildTemplateContent(existing: string | undefined): string {
 	return `${DECLARED_DIRECTION_SECTION}\n${existing}`;
 }
 
+// The PR template is a user-owned file Quire only appends a section to, so conformance there
+// just checks the section is present. The workflow file is wholly generated and owned by
+// Quire, so a stale copy needs to be treated as non-conforming and re-pushed — otherwise
+// re-running setup after a Quire upgrade can never repair it.
+function conforms(template: { content: string } | undefined, workflow: { content: string } | undefined): boolean {
+	const templateConforms = template !== undefined && template.content.includes(DECLARED_DIRECTION_SUBSTRING);
+	const workflowConforms = workflow !== undefined && workflow.content === WORKFLOW_CONTENT;
+	return templateConforms && workflowConforms;
+}
+
+// Read-only: lets a caller check whether a repo needs the setup PR before committing to
+// opening one, e.g. to skip a confirmation prompt when there's nothing to do.
+export async function checkDeclaredDirectionConvention(client: GitHubClient, owner: string, name: string): Promise<boolean> {
+	const [template, workflow] = await Promise.all([
+		client.getFileContent(owner, name, PR_TEMPLATE_PATH),
+		client.getFileContent(owner, name, WORKFLOW_PATH),
+	]);
+	return conforms(template, workflow);
+}
+
 export async function setUpDeclaredDirectionConvention(
 	client: GitHubClient,
 	owner: string,
@@ -64,14 +84,10 @@ export async function setUpDeclaredDirectionConvention(
 		client.getFileContent(owner, name, WORKFLOW_PATH),
 	]);
 
-	// The PR template is a user-owned file Quire only appends a section to, so conformance
-	// there just checks the section is present. The workflow file is wholly generated and
-	// owned by Quire, so a stale copy needs to be treated as non-conforming and re-pushed —
-	// otherwise re-running setup after a Quire upgrade can never repair it.
 	const templateConforms = template !== undefined && template.content.includes(DECLARED_DIRECTION_SUBSTRING);
 	const workflowConforms = workflow !== undefined && workflow.content === WORKFLOW_CONTENT;
 
-	if (templateConforms && workflowConforms) {
+	if (conforms(template, workflow)) {
 		return { status: "already-set-up" };
 	}
 
