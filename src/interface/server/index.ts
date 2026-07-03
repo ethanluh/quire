@@ -221,7 +221,7 @@ async function main(): Promise<void> {
 			"/webhooks/github",
 			express.raw({ type: "application/json" }),
 			verifyGithubSignature(webhookConfig.secret),
-			webhookRouter(refreshDeps),
+			webhookRouter(refreshDeps, queue, CONFLICT_LOG_PATH),
 		);
 		console.log("GitHub webhook receiver: enabled at /webhooks/github");
 	} else {
