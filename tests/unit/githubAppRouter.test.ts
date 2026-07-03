@@ -125,7 +125,7 @@ describe("githubAppRouter", () => {
 		enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>> = async (
 			repos,
 		) => repos,
-	): { accountPath: string; state: ServerState; refreshDeps: RefreshDeps; userTokenCache: UserTokenCache } {
+	): { accountPath: string; preferencesPath: string; state: ServerState; refreshDeps: RefreshDeps; userTokenCache: UserTokenCache } {
 		const accountPath = join(dir, "installation.json");
 		const holder = new GitHubClientHolder(client);
 		const state = createServerState();
@@ -139,9 +139,11 @@ describe("githubAppRouter", () => {
 			auditStore: new AuditStore(),
 			prCache: new PrEffectCache(),
 		};
+		const preferencesPath = join(dir, "preferences.json");
 		const refreshDeps: RefreshDeps = {
 			accountState,
 			accountPath,
+			preferencesPath,
 			clientHolder: holder,
 			appConfig: { appId: "1", privateKey: "unused" },
 			decidedStore,
@@ -171,7 +173,7 @@ describe("githubAppRouter", () => {
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
-		return { accountPath, state, refreshDeps, userTokenCache };
+		return { accountPath, preferencesPath, state, refreshDeps, userTokenCache };
 	}
 
 	it("reports not connected when no installation is bound", async () => {
@@ -182,7 +184,7 @@ describe("githubAppRouter", () => {
 		const { status, body } = await call(server, "GET", "/account/github/status");
 
 		expect(status).toBe(200);
-		expect(body).toEqual({ connected: false });
+		expect(body).toEqual({ connected: false, autoMergeOnAccept: false });
 	});
 
 	it("mints an installUrl pointing at the app's install page with a state param", async () => {
@@ -646,5 +648,66 @@ describe("githubAppRouter", () => {
 		expect(status).toBe(200);
 		expect(body).toEqual({ connected: false });
 		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+	});
+
+	it("keeps the selected repo and auto-merge setting available on /status after disconnect", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+			installationId: 555,
+			accountLogin: "acme-corp",
+			accountType: "Organization",
+			boundAt: "2026-06-30T00:00:00.000Z",
+			selectedRepo: { owner: "acme-corp", name: "widgets" },
+			autoMergeOnAccept: true,
+		});
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		await call(server, "POST", "/account/github/disconnect");
+		const { body } = await call(server, "GET", "/account/github/status");
+
+		expect(body).toEqual({
+			connected: false,
+			selectedRepo: { owner: "acme-corp", name: "widgets" },
+			autoMergeOnAccept: true,
+		});
+	});
+
+	it("restores the previously selected repo and auto-merge setting when reconnecting after a disconnect", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+			installationId: 555,
+			accountLogin: "acme-corp",
+			accountType: "Organization",
+			boundAt: "2026-06-30T00:00:00.000Z",
+			selectedRepo: { owner: "acme-corp", name: "widgets" },
+			autoMergeOnAccept: true,
+		});
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		await call(server, "POST", "/account/github/disconnect");
+
+		const start = await call(server, "POST", "/account/github/install/start");
+		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/install/callback?installation_id=555&state=${state}`,
+			cookiePair(start.setCookie),
+		);
+
+		expect(status).toBe(302);
+		expect(location).toBe("/?account=connected");
+
+		const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
+		expect(persisted["selectedRepo"]).toEqual({ owner: "acme-corp", name: "widgets" });
+		expect(persisted["autoMergeOnAccept"]).toBe(true);
+
+		const { body } = await call(server, "GET", "/account/github/status");
+		expect(body).toEqual(
+			expect.objectContaining({
+				connected: true,
+				selectedRepo: { owner: "acme-corp", name: "widgets" },
+				autoMergeOnAccept: true,
+			}),
+		);
 	});
 });

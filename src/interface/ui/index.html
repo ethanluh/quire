@@ -673,7 +673,9 @@ async function loadAccount() {
     document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
     loadRepos(status.selectedRepo);
   } else {
-    statusEl.textContent = 'Not connected.';
+    statusEl.textContent = status.selectedRepo
+      ? `Not connected. Will resume watching ${status.selectedRepo.owner}/${status.selectedRepo.name} once reconnected.`
+      : 'Not connected.';
     accountConnectForm.style.display = 'block';
     installBtn.disabled = false;
     accountDisconnectBtn.style.display = 'none';

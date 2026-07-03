@@ -70,6 +70,7 @@ describe("webhookRouter", () => {
 		const refreshDeps: RefreshDeps = {
 			accountState: createAccountState(ACCOUNT),
 			accountPath: join(dir, "installation.json"),
+			preferencesPath: join(dir, "preferences.json"),
 			clientHolder: new GitHubClientHolder(client),
 			appConfig: { appId: "1", privateKey: "unused" },
 			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),

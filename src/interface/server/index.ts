@@ -10,6 +10,7 @@ import type { GitHubClient } from "../../engine/github/client.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { loadInstallation } from "../../engine/github/installation.js";
+import { loadPreferences, savePreferences } from "../../engine/github/preferences.js";
 import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
 import { buildInstallationClient, buildInstallationOctokit, buildUserOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
@@ -65,6 +66,7 @@ const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjso
 const CONFLICT_LOG_PATH = join(DATA_DIR, "instrumentation/conflict-resolution.ndjson");
 const AUDIT_LOG_PATH = join(DATA_DIR, "instrumentation/audit.ndjson");
 const INSTALLATION_PATH = join(DATA_DIR, "installation.json");
+const PREFERENCES_PATH = join(DATA_DIR, "preferences.json");
 const LLM_ACCOUNT_PATH = join(DATA_DIR, "llm-account.json");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
@@ -147,7 +149,12 @@ async function main(): Promise<void> {
 
 	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
 	const installationBinding = await loadInstallation(INSTALLATION_PATH);
-	const accountState = createAccountState(installationBinding);
+	const preferences = await loadPreferences(PREFERENCES_PATH);
+	const accountState = createAccountState(installationBinding, preferences);
+	// Backfills preferences.json from an installation bound before it existed — persisted
+	// once here so the values survive even if the server restarts between now and the next
+	// /settings or /repos/select call (both of which keep the file in sync going forward).
+	await savePreferences(PREFERENCES_PATH, accountState.preferences);
 	const userTokenCache = createUserTokenCache();
 
 	const decidedStore = new DecidedPrStore(DECIDED_PRS_PATH);
@@ -196,6 +203,7 @@ async function main(): Promise<void> {
 	const refreshDeps: RefreshDeps = {
 		accountState,
 		accountPath: INSTALLATION_PATH,
+		preferencesPath: PREFERENCES_PATH,
 		clientHolder: github,
 		appConfig,
 		decidedStore,
