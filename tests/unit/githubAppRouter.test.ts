@@ -113,6 +113,19 @@ function cookiePair(setCookie: string | undefined): string {
 	return setCookie.split(";")[0] ?? "";
 }
 
+// Deliberately not `@octokit/request-error`'s `RequestError`: in production, this error comes
+// from a different, transitively-pinned copy of that package than any import here could resolve
+// to, so `instanceof` can never be relied on. This fake only replicates the `name`/`status`
+// shape the real error actually has, matching the duck-typed check `isInstallationRevoked` uses.
+class FakeHttpError extends Error {
+	readonly status: number;
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = "HttpError";
+		this.status = status;
+	}
+}
+
 describe("githubAppRouter", () => {
 	let dir: string;
 	let server: Server;
@@ -380,9 +393,7 @@ const { accountPath } = setup(async () => []);
 
 	it("redirects gracefully when the installation was revoked before the callback completes", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const revokedError = new RequestError("Not Found", 404, {
-			request: { method: "GET", url: "https://api.github.com/app/installations/555", headers: {}, body: undefined },
-		});
+		const revokedError = new FakeHttpError("Not Found", 404);
 		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, async () => {
 			throw revokedError;
 		});

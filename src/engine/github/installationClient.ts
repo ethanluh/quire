@@ -1,7 +1,6 @@
 import { Octokit } from "@octokit/rest";
 import { createAppAuth } from "@octokit/auth-app";
-import { RequestError } from "@octokit/request-error";
-import { OctokitGitHubClient } from "./octokitClient.js";
+import { OctokitGitHubClient, isHttpError } from "./octokitClient.js";
 
 export interface GitHubAppConfig {
 	appId: string;
@@ -16,7 +15,7 @@ export interface GitHubAppConfig {
 export class InstallationRevokedError extends Error {}
 
 export function isInstallationRevoked(err: unknown): boolean {
-	return err instanceof RequestError && (err.status === 401 || err.status === 404);
+	return isHttpError(err) && (err.status === 401 || err.status === 404);
 }
 
 export function buildInstallationOctokit(config: GitHubAppConfig, installationId: number): Octokit {
