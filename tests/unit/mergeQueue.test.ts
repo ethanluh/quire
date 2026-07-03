@@ -259,7 +259,7 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		const blocked = await queue.dequeueNext();
 
 		expect(blocked?.status).toBe("conflict");
-		expect(blocked?.conflict?.reason).toContain("could not confidently resolve a conflicting hunk");
+		expect(blocked?.conflict?.reason).toContain("could not confidently resolve 1 conflicting hunk");
 		expect(github.mergedPrs).toEqual([]);
 		expect(github.commitResolvedFilesCalls).toHaveLength(0);
 	});
