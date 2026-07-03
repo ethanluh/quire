@@ -494,7 +494,7 @@ function detailBodyHtml(detail, opts) {
       <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(opts.queueMeta.status)}</span>
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
-    ${opts.mergeStatus && opts.mergeStatus.conflict ? `<div class="residual">Conflict: ${escapeHtml(opts.mergeStatus.conflict.reason)} — detected ${escapeHtml(opts.mergeStatus.conflict.detectedAt)}. Automated resolution did not apply; retry to try again.</div>` : ''}
+    ${opts.mergeStatus && opts.mergeStatus.conflict ? `<div class="residual">Merge conflict detected ${escapeHtml(opts.mergeStatus.conflict.detectedAt)}. Automated resolution did not apply — see the conflicting PR's GitHub link below for details, or retry.</div>` : ''}
     <h4>Member PRs</h4>
     ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
   `;
@@ -807,7 +807,6 @@ async function loadQueue() {
     <div>
       <div>${escapeHtml(e.bundle.direction)}</div>
       <div class="entry-id">${escapeHtml(e.bundleId)}</div>
-      ${e.status === 'conflict' && e.conflict ? `<div class="residual">Conflict: ${escapeHtml(e.conflict.reason)} (detected ${escapeHtml(e.conflict.detectedAt)})</div>` : ''}
     </div>
     <div class="queue-entry-actions">
       <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
