@@ -28,6 +28,7 @@
   }
   header .subtitle { font-size: var(--text-sm); color: var(--color-text-muted); }
   header .btn-settings { margin-left: auto; }
+  header .btn-settings svg { margin-top: 1px; }
 
   .tabs { padding: var(--space-3) var(--space-6) 0; background: var(--color-surface-page); }
 
@@ -168,9 +169,14 @@
     padding: var(--space-1) var(--space-3);
     border-radius: var(--radius-pill);
   }
-  .status-queued  { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
-  .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
-  .status-landed  { background: var(--color-accept-wash); color: var(--color-accept); }
+  .status-queued   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .status-landing  { background: var(--color-flagged-wash); color: var(--color-flagged); }
+  .status-landed   { background: var(--color-accept-wash); color: var(--color-accept); }
+
+  .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
+  .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
+  .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
 </style>
 </head>
 <body>
@@ -178,7 +184,7 @@
   <h1>Quire</h1>
   <span class="subtitle">Direction triage for swarm PRs</span>
   <span class="subtitle" id="signed-in-as" style="display:none"></span>
-  <button class="btn btn-defer btn-settings" id="btn-settings" title="Settings" style="display:none">&#9881; Settings</button>
+  <button class="btn btn-defer btn-settings" id="btn-settings" title="Settings" style="display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> Settings</button>
 </header>
 
 <div class="modal-backdrop" id="signin-gate" style="display:none">
@@ -218,6 +224,7 @@
     <div class="empty">Merge queue is empty.</div>
   </div>
   <button class="btn btn-accept" style="margin-top:16px" id="btn-process">Process next</button>
+  <button class="btn btn-accept" style="margin-top:16px" id="btn-process-all">Process all</button>
 </div>
 
 <div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
@@ -226,8 +233,10 @@
 
     <div class="settings-section">
       <h4>Preferences</h4>
-      <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
-      <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
+      <div class="settings-btn-row">
+        <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+        <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -425,7 +434,16 @@ function prDriftBadges(prId, drift) {
   return badges.join('');
 }
 
-function prMemberListHtml(members, drift) {
+function prMergeStatusBadge(pr, mergeStatus) {
+  if (!mergeStatus) return '';
+  let status = 'pending';
+  if (mergeStatus.revertedPrIds.includes(pr.id)) status = 'reverted';
+  else if (mergeStatus.mergedPrIds.includes(pr.id)) status = 'merged';
+  else if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) status = 'conflict';
+  return `<span class="badge pr-status-${status}">Merge: ${escapeHtml(status)}</span>`;
+}
+
+function prMemberListHtml(members, drift, mergeStatus) {
   if (!members.length) return '<div class="empty">No member PRs.</div>';
   return '<div class="pr-member-list">' + members.map(pr => {
     const url = `https://github.com/${pr.repoOwner}/${pr.repoName}/pull/${pr.number}`;
@@ -435,6 +453,7 @@ function prMemberListHtml(members, drift) {
         <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)}</span>
       </div>
       <div class="pr-member-tags">
+        ${prMergeStatusBadge(pr, mergeStatus)}
         ${prDriftBadges(pr.id, drift)}
         ${ciStatusBadge(pr.ciStatus)}
         <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
@@ -459,7 +478,7 @@ function detailBodyHtml(detail, opts) {
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
     <h4>Member PRs</h4>
-    ${prMemberListHtml(detail.members || [], detail.drift)}
+    ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
   `;
 }
 
@@ -488,7 +507,11 @@ function showQueueDetail(bundleId) {
   if (!entry) return;
   openDetailModal(detailBodyHtml(
     { direction: entry.bundle.direction, effectSummary: entry.bundle.effectSummary, members: entry.bundle.members },
-    { queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt } },
+    {
+      queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt },
+      bundleId,
+      mergeStatus: { mergedPrIds: entry.mergedPrIds, revertedPrIds: entry.revertedPrIds, conflict: entry.conflict },
+    },
   ));
 }
 
@@ -500,6 +523,10 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && detailModalBackdrop.style.display !== 'none') closeDetailModal();
 });
 
+// Cache of the last-rendered JSON per pane so polling can skip a DOM rebuild
+// when nothing actually changed (avoids flicker/lost hover state on idle ticks).
+const lastRenderedJson = {};
+
 async function loadReview() {
   const status = await api('GET', '/account/github/status');
   const el = document.getElementById('card-list');
@@ -508,6 +535,9 @@ async function loadReview() {
     return;
   }
   const cards = await api('GET', '/bundles');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.review) return;
+  lastRenderedJson.review = json;
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, false)).join('') : '<div class="empty">No bundles in review queue.</div>';
 }
 
@@ -526,6 +556,9 @@ async function refreshAndLoadReview() {
 
 async function loadShelf() {
   const cards = await api('GET', '/shelf');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.shelf) return;
+  lastRenderedJson.shelf = json;
   const el = document.getElementById('shelf-list');
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, true)).join('') : '<div class="empty">Shelf is empty.</div>';
 }
@@ -533,6 +566,9 @@ async function loadShelf() {
 async function loadQueue() {
   const entries = await api('GET', '/queue');
   queueEntries = entries;
+  const json = JSON.stringify(entries);
+  if (json === lastRenderedJson.queue) return;
+  lastRenderedJson.queue = json;
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry">
@@ -572,6 +608,36 @@ document.getElementById('btn-process').addEventListener('click', async () => {
     return;
   }
   loadQueue();
+});
+
+document.getElementById('btn-process-all').addEventListener('click', async () => {
+  const pending = queueEntries.filter(e => e.status === 'queued' || e.status === 'landing').length;
+  if (!pending) return;
+  if (!confirm(`Process all ${pending} queued item(s) in the merge queue?`)) return;
+
+  const btn = document.getElementById('btn-process-all');
+  btn.disabled = true;
+  let landed = 0, conflicts = 0, processed = 0;
+
+  // dequeueNext() always moves an entry out of "queued"/"landing" on each call, so this
+  // is bounded by the queue size at the start — cap defensively in case that ever changes.
+  for (let i = 0; i < pending && i < queueEntries.length; i++) {
+    btn.textContent = `Processing… (${processed}/${pending})`;
+    const result = await api('POST', '/queue/process');
+    if (result.error) {
+      alert('Could not process queue: ' + result.error);
+      break;
+    }
+    if (result.status === 'empty') break;
+    processed++;
+    if (result.status === 'landed') landed++;
+    else if (result.status === 'conflict') conflicts++;
+    await loadQueue();
+  }
+
+  btn.textContent = 'Process all';
+  btn.disabled = false;
+  alert(`Processed ${processed}: ${landed} landed, ${conflicts} conflict(s).`);
 });
 
 const clearAllBtn = document.getElementById('btn-clear-all');
@@ -669,7 +735,9 @@ async function loadAccount() {
     document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
     loadRepos(status.selectedRepo);
   } else {
-    statusEl.textContent = 'Not connected.';
+    statusEl.textContent = status.selectedRepo
+      ? `Not connected. Will resume watching ${status.selectedRepo.owner}/${status.selectedRepo.name} once reconnected.`
+      : 'Not connected.';
     accountConnectForm.style.display = 'block';
     installBtn.disabled = false;
     accountDisconnectBtn.style.display = 'none';
@@ -793,8 +861,10 @@ llmDisconnectBtn.addEventListener('click', async () => {
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
-  const starredBadge = repo.starred ? '<span class="badge badge-clean badge-priority">★ Favorite</span>' : '';
-  const pinnedBadge = repo.pinned ? '<span class="badge badge-neutral badge-priority">📌 Pinned</span>' : '';
+  const starIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>';
+  const pinIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
+  const starredBadge = repo.starred ? `<span class="badge badge-clean badge-priority">${starIcon} Favorite</span>` : '';
+  const pinnedBadge = repo.pinned ? `<span class="badge badge-neutral badge-priority">${pinIcon} Pinned</span>` : '';
   const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
@@ -915,9 +985,48 @@ if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop
   location.replace('mobile.html');
 } else {
   checkSignedIn().then((signedIn) => {
-    if (signedIn) refreshAndLoadReview();
+    if (signedIn) {
+      refreshAndLoadReview();
+      startPolling();
+      startLiveUpdates();
+    }
   });
 }
+
+// Server state is already kept fresh by the GitHub webhook + reconciliation poll
+// (see routes/webhook.ts); these endpoints just read that in-memory state, so
+// polling them here is cheap and never itself calls the GitHub API.
+const POLL_INTERVAL_MS = 10000;
+let pollTimer = null;
+
+function pollActivePane() {
+  if (document.hidden) return;
+  const activeTab = document.querySelector('.tab.active');
+  if (!activeTab) return;
+  const pane = activeTab.dataset.tab;
+  if (pane === 'review') loadReview();
+  else if (pane === 'shelf') loadShelf();
+  else if (pane === 'queue') loadQueue();
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
+}
+
+// Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
+// a webhook or reconciliation pass changes state, so the active pane updates immediately
+// instead of waiting for the next poll tick. The interval above stays
+// running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
+// server's own reconciliation timer is a fallback for a missed webhook delivery.
+function startLiveUpdates() {
+  const source = new EventSource('/events');
+  source.onmessage = () => pollActivePane();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) pollActivePane();
+});
 document.getElementById('link-mobile').addEventListener('click', () => {
   localStorage.removeItem(VIEW_PREF_KEY);
 });

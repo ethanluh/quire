@@ -7,6 +7,7 @@ import { rawPRPayloadToIncomingPR } from "../../engine/github/toIncomingPR.js";
 import { normalizePR } from "../../engine/ingest/ingest.js";
 import type { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
 import type { AccountState } from "./accountState.js";
+import { notifyStateChanged } from "./changeEvents.js";
 import { ingestIntoQueue } from "./ingestIntoQueue.js";
 import type { IngestSummary, PipelineDeps } from "./ingestIntoQueue.js";
 import type { ServerState } from "./state.js";
@@ -21,6 +22,7 @@ export class AccountChangedError extends Error {}
 export interface RefreshDeps {
 	accountState: AccountState;
 	accountPath: string;
+	preferencesPath: string;
 	clientHolder: GitHubClientHolder;
 	appConfig: GitHubAppConfig | undefined;
 	decidedStore: DecidedPrStore;
@@ -116,7 +118,13 @@ export function enqueueRefresh(owner: string, name: string, deps: RefreshDeps): 
 	const previous = inFlight.get(key) ?? Promise.resolve();
 	const run = previous
 		.catch(() => undefined)
-		.then(() => refreshRepoQueue(owner, name, deps));
+		.then(() => refreshRepoQueue(owner, name, deps))
+		.then((result) => {
+			// Single choke point for both the webhook route and the reconciliation timer —
+			// tells any open SSE connection to re-fetch instead of waiting for its next poll tick.
+			notifyStateChanged();
+			return result;
+		});
 	inFlight.set(key, run);
 	run.finally(() => {
 		if (inFlight.get(key) === run) inFlight.delete(key);

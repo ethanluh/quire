@@ -2,7 +2,13 @@ import type { Octokit } from "@octokit/rest";
 import { RequestError } from "@octokit/request-error";
 import type { GestureAction, ReviewCard } from "../types/core.js";
 import { formatReviewCardComment } from "../review/comment.js";
-import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
+import type {
+	FoundOrCreatedPullRequest,
+	GitHubClient,
+	ListOpenPullRequestsResult,
+	RawPRPayload,
+	RepoFile,
+} from "./client.js";
 import { BinaryFileError } from "./client.js";
 import type { ConflictTrees, MergeabilityResult, MergeabilityState, ResolvedFile, TreeEntry } from "../types/mergeability.js";
 import { NotFastForwardError } from "../types/mergeability.js";
@@ -234,25 +240,27 @@ export class OctokitGitHubClient implements GitHubClient {
 		content: string,
 		message: string,
 	): Promise<void> {
-		const branchRef = `heads/${branch}`;
-		try {
-			await this.octokit.rest.git.getRef({ owner, repo, ref: branchRef });
-		} catch (err) {
-			if (!isNotFoundError(err)) throw err;
-			const defaultBranch = await this.getDefaultBranch(owner, repo);
-			const { data: defaultRef } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
-			await this.octokit.rest.git.createRef({ owner, repo, ref: `refs/${branchRef}`, sha: defaultRef.object.sha });
-		}
+		await withPermissionHint("create or update a file in a repo", async () => {
+			const branchRef = `heads/${branch}`;
+			try {
+				await this.octokit.rest.git.getRef({ owner, repo, ref: branchRef });
+			} catch (err) {
+				if (!isNotFoundError(err)) throw err;
+				const defaultBranch = await this.getDefaultBranch(owner, repo);
+				const { data: defaultRef } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` });
+				await this.octokit.rest.git.createRef({ owner, repo, ref: `refs/${branchRef}`, sha: defaultRef.object.sha });
+			}
 
-		const existing = await this.getFileContentAtRef(owner, repo, path, branch);
-		await this.octokit.rest.repos.createOrUpdateFileContents({
-			owner,
-			repo,
-			path,
-			message,
-			content: Buffer.from(content, "utf8").toString("base64"),
-			branch,
-			...(existing !== undefined ? { sha: existing.sha } : {}),
+			const existing = await this.getFileContentAtRef(owner, repo, path, branch);
+			await this.octokit.rest.repos.createOrUpdateFileContents({
+				owner,
+				repo,
+				path,
+				message,
+				content: Buffer.from(content, "utf8").toString("base64"),
+				branch,
+				...(existing !== undefined ? { sha: existing.sha } : {}),
+			});
 		});
 	}
 
@@ -261,26 +269,28 @@ export class OctokitGitHubClient implements GitHubClient {
 		repo: string,
 		params: { head: string; base: string; title: string; body: string },
 	): Promise<FoundOrCreatedPullRequest> {
-		const { data: openPrs } = await this.octokit.rest.pulls.list({
-			owner,
-			repo,
-			state: "open",
-			head: `${owner}:${params.head}`,
-		});
-		const found = openPrs[0];
-		if (found !== undefined) {
-			return { number: found.number, url: found.html_url, created: false };
-		}
+		return withPermissionHint("open a pull request", async () => {
+			const { data: openPrs } = await this.octokit.rest.pulls.list({
+				owner,
+				repo,
+				state: "open",
+				head: `${owner}:${params.head}`,
+			});
+			const found = openPrs[0];
+			if (found !== undefined) {
+				return { number: found.number, url: found.html_url, created: false };
+			}
 
-		const { data: created } = await this.octokit.rest.pulls.create({
-			owner,
-			repo,
-			head: params.head,
-			base: params.base,
-			title: params.title,
-			body: params.body,
+			const { data: created } = await this.octokit.rest.pulls.create({
+				owner,
+				repo,
+				head: params.head,
+				base: params.base,
+				title: params.title,
+				body: params.body,
+			});
+			return { number: created.number, url: created.html_url, created: true };
 		});
-		return { number: created.number, url: created.html_url, created: true };
 	}
 
 	private async getFileContentAtRef(
@@ -306,13 +316,18 @@ export class OctokitGitHubClient implements GitHubClient {
 		// Repos are nullable in GitHub's schema (deleted fork) — either a null head repo or
 		// one with a different id than the base means resolution can't write to it.
 		const isFork = pr.head.repo === null || pr.base.repo === null || pr.head.repo.id !== pr.base.repo.id;
+		// pr.base.sha is a cached pointer GitHub only refreshes when the PR itself is
+		// synchronized (e.g. a push to head) — it silently lags behind the base branch's
+		// real tip when other PRs land on it in the meantime. Read the live tip instead.
+		const baseSha = await this.getBranchTipSha(owner, repo, pr.base.ref);
 		return {
 			state: normalizeMergeableState(pr.draft === true, pr.mergeable_state ?? "unknown"),
 			isFork,
+			merged: pr.merged === true,
 			headBranch: pr.head.ref,
 			headSha: pr.head.sha,
 			baseBranch: pr.base.ref,
-			baseSha: pr.base.sha,
+			baseSha,
 		};
 	}
 
@@ -322,7 +337,9 @@ export class OctokitGitHubClient implements GitHubClient {
 
 	async getConflictTrees(owner: string, repo: string, prNumber: number): Promise<ConflictTrees> {
 		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-		const baseSha = pr.base.sha;
+		// See getMergeability's comment above — pr.base.sha can lag behind the base
+		// branch's real tip, which would make this diff against a stale "theirs".
+		const baseSha = await this.getBranchTipSha(owner, repo, pr.base.ref);
 		const headSha = pr.head.sha;
 
 		const { data: comparison } = await this.octokit.rest.repos.compareCommitsWithBasehead({
@@ -421,6 +438,11 @@ export class OctokitGitHubClient implements GitHubClient {
 			}
 			throw err;
 		}
+	}
+
+	private async getBranchTipSha(owner: string, repo: string, branch: string): Promise<string> {
+		const { data } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+		return data.object.sha;
 	}
 
 	private async getFlatTree(owner: string, repo: string, treeSha: string): Promise<ReadonlyMap<string, TreeEntry>> {

@@ -1,7 +1,39 @@
-import { describe, it, expect, jest } from "@jest/globals";
-import { planFileResolutions, resolveConflictedFile } from "../../src/engine/queue/conflictResolution.js";
-import { StubLlmProvider } from "../mocks/llmProvider.js";
-import type { ConflictTrees, TreeEntry } from "../../src/engine/types/mergeability.js";
+import { describe, it, expect } from "@jest/globals";
+import { planFileResolutions, resolveMergeConflict } from "../../src/engine/queue/conflictResolution.js";
+import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import { StubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.js";
+import type { PullRequest } from "../../src/engine/types/core.js";
+import type { ConflictTrees, MergeabilityResult, TreeEntry } from "../../src/engine/types/mergeability.js";
+
+function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
+	return {
+		id: "pr-1",
+		repoOwner: "org",
+		repoName: "repo",
+		number: 1,
+		headSha: "head-sha",
+		declaredDirection: "add passwordless auth",
+		diff: { raw: "", hunks: [] },
+		filesTouched: ["src/auth.ts"],
+		symbolsTouched: [],
+		testNamesChanged: [],
+		ciStatus: "success",
+		...overrides,
+	};
+}
+
+function makeMergeability(overrides: Partial<MergeabilityResult> = {}): MergeabilityResult {
+	return {
+		state: "dirty",
+		isFork: false,
+		merged: false,
+		headBranch: "feature",
+		headSha: "head-sha",
+		baseBranch: "main",
+		baseSha: "base-tip-sha",
+		...overrides,
+	};
+}
 
 function blob(sha: string, mode = "100644"): TreeEntry {
 	return { type: "blob", mode, sha };
@@ -105,82 +137,87 @@ describe("planFileResolutions", () => {
 	});
 });
 
-describe("resolveConflictedFile", () => {
-	it("resolves non-overlapping changes via diff3 alone, without calling the LLM", async () => {
+describe("resolveMergeConflict", () => {
+	function setUpConflict(github: StubGitHubClient, base: string, ours: string, theirs: string): void {
+		github.setBlobContent("base-sha", base);
+		github.setBlobContent("ours-sha", ours);
+		github.setBlobContent("theirs-sha", theirs);
+		github.setConflictTrees(
+			"org",
+			"repo",
+			1,
+			trees({
+				mergeBaseTree: new Map([["src/auth.ts", blob("base-sha")]]),
+				baseTree: new Map([["src/auth.ts", blob("theirs-sha")]]),
+				headTree: new Map([["src/auth.ts", blob("ours-sha")]]),
+			}),
+		);
+	}
+
+	it("resolves non-overlapping changes via diff3 alone", async () => {
+		const github = new StubGitHubClient();
+		setUpConflict(github, "line1\nline2\nline3", "line1-ours\nline2\nline3", "line1\nline2\nline3-theirs");
 		const provider = new StubLlmProvider();
-		const base = "line1\nline2\nline3";
-		const ours = "line1-ours\nline2\nline3";
-		const theirs = "line1\nline2\nline3-theirs";
 
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
+		const result = await resolveMergeConflict(makePr(), makeMergeability(), github, provider);
 
-		expect(result).toEqual({ status: "resolved", content: "line1-ours\nline2\nline3-theirs" });
+		expect(result).toEqual({ status: "resolved" });
 		expect(provider.calls).toHaveLength(0);
+		expect(github.commitResolvedFilesCalls[0]?.files).toEqual([
+			{ path: "src/auth.ts", content: "line1-ours\nline2\nline3-theirs", mode: "100644" },
+		]);
 	});
 
-	it("calls the LLM when diff3 can't auto-merge, and applies its fenced response", async () => {
+	it("resolves a mechanical hunk (whitespace-only divergence) without any LLM call", async () => {
+		const github = new StubGitHubClient();
+		setUpConflict(github, "line1\nline2\nline3", "line1\nline2-ours\nline3", "line1\nline2-ours \nline3");
 		const provider = new StubLlmProvider();
-		provider.queueCompletion("Here you go:\n```\nline1-merged\nline2\n```");
-		const base = "line1\nline2";
-		const ours = "line1-ours\nline2";
-		const theirs = "line1-theirs\nline2";
 
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
+		const result = await resolveMergeConflict(makePr(), makeMergeability(), github, provider);
 
-		expect(result).toEqual({ status: "resolved", content: "line1-merged\nline2" });
+		expect(result).toEqual({ status: "resolved" });
+		expect(provider.calls).toHaveLength(0);
+		expect(github.commitResolvedFilesCalls[0]?.files).toEqual([
+			{ path: "src/auth.ts", content: "line1\nline2-ours\nline3", mode: "100644" },
+		]);
+	});
+
+	it("resolves a semantic hunk via one batched LLM call at high confidence", async () => {
+		const github = new StubGitHubClient();
+		setUpConflict(github, "line1\nline2\nline3", "line1\nline2-A\nline3", "line1\nline2-B\nline3");
+		const provider = new StubLlmProvider();
+		provider.queueCompletion(JSON.stringify([{ hunk_id: 1, resolution: "line2-merged", confidence: "high" }]));
+
+		const result = await resolveMergeConflict(makePr(), makeMergeability(), github, provider);
+
+		expect(result).toEqual({ status: "resolved" });
 		expect(provider.calls).toHaveLength(1);
+		expect(github.commitResolvedFilesCalls[0]?.files).toEqual([
+			{ path: "src/auth.ts", content: "line1\nline2-merged\nline3", mode: "100644" },
+		]);
 	});
 
-	it("fails closed when the model declines with UNRESOLVED", async () => {
+	it("fails closed to the human queue when a semantic hunk resolves at low confidence", async () => {
+		const github = new StubGitHubClient();
+		setUpConflict(github, "line1\nline2\nline3", "line1\nline2-A\nline3", "line1\nline2-B\nline3");
 		const provider = new StubLlmProvider();
-		provider.queueCompletion("UNRESOLVED");
-		const base = "line1\nline2";
-		const ours = "line1-ours\nline2";
-		const theirs = "line1-theirs\nline2";
+		provider.queueCompletion(JSON.stringify([{ hunk_id: 1, resolution: "line2-merged", confidence: "low" }]));
 
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
+		const result = await resolveMergeConflict(makePr(), makeMergeability(), github, provider);
 
-		expect(result.status).toBe("unresolved");
-		if (result.status === "unresolved") expect(result.reason).toContain("declined");
+		expect(result.status).toBe("failed");
+		if (result.status === "failed") {
+			expect(result.reason).toContain("could not confidently resolve a conflicting hunk");
+		}
+		expect(github.commitResolvedFilesCalls).toHaveLength(0);
 	});
 
-	it("fails closed when the model's own output still contains conflict-marker lines", async () => {
+	it("bails when the head branch lives in a fork", async () => {
+		const github = new StubGitHubClient();
 		const provider = new StubLlmProvider();
-		provider.queueCompletion("```\n<<<<<<< PR (ours)\nline1-ours\n=======\nline1-theirs\n>>>>>>> main (theirs)\nline2\n```");
-		const base = "line1\nline2";
-		const ours = "line1-ours\nline2";
-		const theirs = "line1-theirs\nline2";
+		const result = await resolveMergeConflict(makePr(), makeMergeability({ isFork: true }), github, provider);
 
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
-
-		expect(result.status).toBe("unresolved");
-		if (result.status === "unresolved") expect(result.reason).toContain("conflict markers");
-	});
-
-	it("does not false-positive on a legitimate `=======` divider line when diff3 already resolved cleanly", async () => {
-		const provider = new StubLlmProvider();
-		const base = "a\nb";
-		const ours = "a\n=======\nb"; // ours added a literal 7-equals divider line, no overlap with theirs
-		const theirs = "a\nb-theirs";
-
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
-
-		// diff3 merges cleanly (no LLM involved) — the marker-line check only ever runs on
-		// content diff3 itself flagged as conflicted, so a clean merge is unaffected by it.
-		expect(result.status).toBe("resolved");
+		expect(result).toEqual({ status: "failed", reason: "head branch lives in a fork this installation can't push to" });
 		expect(provider.calls).toHaveLength(0);
-	});
-
-	it("fails closed when the LLM call itself throws", async () => {
-		const provider = new StubLlmProvider();
-		jest.spyOn(provider, "complete").mockRejectedValueOnce(new Error("rate limited"));
-		const base = "line1\nline2";
-		const ours = "line1-ours\nline2";
-		const theirs = "line1-theirs\nline2";
-
-		const result = await resolveConflictedFile("a.ts", base, ours, theirs, "add passwordless auth", provider);
-
-		expect(result.status).toBe("unresolved");
-		if (result.status === "unresolved") expect(result.reason).toContain("LLM call failed");
 	});
 });

@@ -1,9 +1,14 @@
 import { describe, it, expect } from "@jest/globals";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
-import { setUpDeclaredDirectionConvention } from "../../src/engine/github/repoSetup.js";
+import { WORKFLOW_CONTENT, setUpDeclaredDirectionConvention } from "../../src/engine/github/repoSetup.js";
 
 const TEMPLATE_PATH = ".github/pull_request_template.md";
 const WORKFLOW_PATH = ".github/workflows/quire-declared-direction.yml";
+
+function seedFullyConformingRepo(client: StubGitHubClient): void {
+	client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+	client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, WORKFLOW_CONTENT);
+}
 
 describe("setUpDeclaredDirectionConvention", () => {
 	it("opens a setup PR adding both the template section and the CI workflow when neither exists", async () => {
@@ -28,19 +33,37 @@ describe("setUpDeclaredDirectionConvention", () => {
 		expect(result.status).toBe("created");
 	});
 
-	it("reports already-set-up when the template already documents the marker and the workflow already exists", async () => {
+	it("reports already-set-up only once both files conform", async () => {
 		const client = new StubGitHubClient();
-		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
-		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, "name: existing workflow\n");
+		seedFullyConformingRepo(client);
 
 		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
 
 		expect(result).toEqual({ status: "already-set-up" });
 	});
 
-	it("still creates a PR when only the workflow is missing", async () => {
+	it("still creates a PR when the declared-direction workflow's content is stale (e.g. predates a fix)", async () => {
 		const client = new StubGitHubClient();
 		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, "name: an older version of the template\n");
+
+		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
+
+		expect(result.status).toBe("created");
+	});
+
+	it("still creates a PR when only the declared-direction workflow is missing", async () => {
+		const client = new StubGitHubClient();
+		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+
+		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
+
+		expect(result.status).toBe("created");
+	});
+
+	it("still creates a PR when only the PR template is missing", async () => {
+		const client = new StubGitHubClient();
+		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, WORKFLOW_CONTENT);
 
 		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
 

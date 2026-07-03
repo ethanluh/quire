@@ -179,6 +179,7 @@ export class StubGitHubClient implements GitHubClient {
 			this.mergeabilityFixtures.get(key) ?? {
 				state: "clean",
 				isFork: false,
+				merged: false,
 				headBranch: "head",
 				headSha: "head-sha",
 				baseBranch: "base",

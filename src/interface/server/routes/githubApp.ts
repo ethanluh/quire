@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import type { InstallationBinding } from "../../../engine/github/installation.js";
 import { saveInstallation, clearInstallation } from "../../../engine/github/installation.js";
+import { savePreferences } from "../../../engine/github/preferences.js";
 import type { GitHubAppConfig, InstallationAccount } from "../../../engine/github/installationClient.js";
 import { buildInstallationClient, isInstallationRevoked } from "../../../engine/github/installationClient.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
@@ -42,7 +43,7 @@ export function githubAppRouter(
 	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>,
 ): Router {
 	const router = Router();
-	const { accountState, accountPath, clientHolder } = refreshDeps;
+	const { accountState, accountPath, preferencesPath, clientHolder } = refreshDeps;
 
 	interface RepoListCacheEntry {
 		installationId: number;
@@ -54,7 +55,11 @@ export function githubAppRouter(
 	router.get("/status", (_req, res) => {
 		const binding = accountState.current;
 		if (binding === undefined) {
-			res.json({ connected: false });
+			res.json({
+				connected: false,
+				selectedRepo: accountState.preferences.selectedRepo,
+				autoMergeOnAccept: accountState.preferences.autoMergeOnAccept ?? false,
+			});
 			return;
 		}
 		res.json({
@@ -78,6 +83,8 @@ export function githubAppRouter(
 			const updated: InstallationBinding = { ...current, autoMergeOnAccept };
 			accountState.current = updated;
 			await saveInstallation(accountPath, updated);
+			accountState.preferences = { ...accountState.preferences, autoMergeOnAccept };
+			await savePreferences(preferencesPath, accountState.preferences);
 			res.json({ autoMergeOnAccept });
 		} catch (err) {
 			next(err);
@@ -136,6 +143,10 @@ export function githubAppRouter(
 				accountLogin: account.accountLogin,
 				accountType: account.accountType,
 				boundAt: new Date().toISOString(),
+				...(accountState.preferences.selectedRepo !== undefined ? { selectedRepo: accountState.preferences.selectedRepo } : {}),
+				...(accountState.preferences.autoMergeOnAccept !== undefined
+					? { autoMergeOnAccept: accountState.preferences.autoMergeOnAccept }
+					: {}),
 			};
 			accountState.current = binding;
 			clientHolder.setClient(buildInstallationClient(appConfig, installationId));
@@ -197,6 +208,8 @@ export function githubAppRouter(
 			const updated: InstallationBinding = { ...current, selectedRepo: { owner, name } };
 			accountState.current = updated;
 			await saveInstallation(accountPath, updated);
+			accountState.preferences = { ...accountState.preferences, selectedRepo: { owner, name } };
+			await savePreferences(preferencesPath, accountState.preferences);
 
 			res.json({ selected: updated.selectedRepo, ...summary });
 		} catch (err) {

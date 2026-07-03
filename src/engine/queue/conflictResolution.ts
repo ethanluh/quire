@@ -1,11 +1,18 @@
-import { merge as diff3Merge } from "node-diff3";
-import type { LlmProvider } from "../drift/effectList/provider.js";
-import { stripCodeFence } from "../drift/effectList/stripCodeFence.js";
 import type { PullRequest } from "../types/core.js";
 import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 import { NotFastForwardError } from "../types/mergeability.js";
 import type { GitHubClient } from "../github/client.js";
 import { BinaryFileError } from "../github/client.js";
+import type { LlmProvider } from "../drift/effectList/provider.js";
+import type { ConflictHunk } from "./conflictHunks.js";
+import {
+	classifyHunk,
+	extractConflictHunks,
+	extractConflictRegions,
+	reconstructContent,
+	resolveMechanicalHunk,
+} from "./conflictHunks.js";
+import { resolveSemanticHunks } from "./semanticHunkResolver.js";
 
 export type FileResolutionPlan =
 	| { path: string; kind: "takeOurs" }
@@ -74,73 +81,27 @@ export function planFileResolutions(trees: ConflictTrees): ReadonlyArray<FileRes
 	return plans;
 }
 
-export type FileConflictResolution = { status: "resolved"; content: string } | { status: "unresolved"; reason: string };
+const HUNK_PREVIEW_LINE_LENGTH = 60;
 
-// Line-anchored, not a substring match — a legitimate source file can contain `=======` as
-// a comment divider; only a full conflict-marker line counts.
-const CONFLICT_MARKER_LINE = /^<{7}(?: .*)?$|^={7}$|^>{7}(?: .*)?$/m;
-
-const SYSTEM_PROMPT = `You are resolving a git merge conflict in a single file. You will be given the file's
-content with git conflict markers (<<<<<<<, =======, >>>>>>>) showing two divergent
-versions, and the product direction the changed-side pull request is pursuing.
-Produce the fully resolved file content — the whole file, not just the conflicted
-region — that reasonably combines both sides' intent. Preserve everything outside the
-conflicted regions exactly as given.
-Output ONLY the resolved file in a single fenced code block, with no explanation.
-If you cannot confidently resolve this conflict without risking incorrect behavior, output
-exactly the single word UNRESOLVED and nothing else.`;
-
-// Runs the pure three-way merge first (node-diff3); only conflicted files reach the LLM.
-// Fail-closed throughout, mirroring drift/effectList/matcher.ts's convention: a failed LLM
-// call, an explicit "can't resolve," or leftover conflict-marker lines in the model's own
-// output are all treated as unresolved — never guessed at or partially applied.
-export async function resolveConflictedFile(
-	path: string,
-	mergeBaseContent: string,
-	oursContent: string,
-	theirsContent: string,
-	prDirection: string,
-	provider: LlmProvider,
-): Promise<FileConflictResolution> {
-	const merged = diff3Merge(oursContent, mergeBaseContent, theirsContent, {
-		stringSeparator: "\n",
-		label: { a: "PR (ours)", b: "main (theirs)" },
-	});
-	const mergedContent = merged.result.join("\n");
-	if (!merged.conflict) {
-		return { status: "resolved", content: mergedContent };
-	}
-
-	const userContent = `File: ${path}\nPR direction: "${prDirection}"\n\nConflicted file content:\n\`\`\`\n${mergedContent}\n\`\`\``;
-
-	let response: string;
-	try {
-		response = await provider.complete([
-			{ role: "system", content: SYSTEM_PROMPT },
-			{ role: "user", content: userContent },
-		]);
-	} catch (err) {
-		return { status: "unresolved", reason: `LLM call failed: ${err instanceof Error ? err.message : String(err)}` };
-	}
-
-	const stripped = stripCodeFence(response).trim();
-	if (stripped === "UNRESOLVED") {
-		return { status: "unresolved", reason: "model declined to resolve confidently" };
-	}
-	if (CONFLICT_MARKER_LINE.test(stripped)) {
-		return { status: "unresolved", reason: "resolved content still contained conflict markers" };
-	}
-	return { status: "resolved", content: stripped };
+// A short, human-scannable anchor for a hunk in a failure reason — enough for a reviewer to
+// find the right conflict marker in the file without re-diffing it by hand (see INV-6).
+function describeHunkSide(lines: ReadonlyArray<string>): string {
+	const first = lines[0] ?? "";
+	const truncated = first.length > HUNK_PREVIEW_LINE_LENGTH ? `${first.slice(0, HUNK_PREVIEW_LINE_LENGTH)}…` : first;
+	const suffix = lines.length > 1 ? ` (+${lines.length - 1} more line${lines.length > 2 ? "s" : ""})` : "";
+	return `"${truncated}"${suffix}`;
 }
 
-export interface ConflictResolutionOutcome {
-	resolved: boolean;
-	reason?: string;
-}
+export type ConflictResolutionOutcome = { status: "resolved" } | { status: "failed"; reason: string };
 
 // One full attempt: fetch the three trees, triage every touched path, resolve whatever
-// needs it, commit if everything resolved. Never loops or retries internally — the caller
-// (mergeQueue.ts) decides whether a failed attempt is worth trying again.
+// diff3 can on its own, commit if everything resolved that way. When a file survives diff3
+// with real conflict markers, extract the specific conflicting hunks and resolve those:
+// mechanical hunks (both sides agree modulo whitespace) resolve for free, semantic hunks go
+// through one batched LLM call, and any hunk the model isn't confident about fails the whole
+// attempt rather than guessing — per INV-6, surfaced to the human queue via the "failed"
+// status, same as every other unresolvable case in this function.
+// Never loops or retries internally — the caller (mergeQueue.ts) decides what happens next.
 export async function resolveMergeConflict(
 	pr: PullRequest,
 	mergeability: MergeabilityResult,
@@ -148,7 +109,7 @@ export async function resolveMergeConflict(
 	provider: LlmProvider,
 ): Promise<ConflictResolutionOutcome> {
 	if (mergeability.isFork) {
-		return { resolved: false, reason: "head branch lives in a fork this installation can't push to" };
+		return { status: "failed", reason: "head branch lives in a fork this installation can't push to" };
 	}
 
 	const trees = await github.getConflictTrees(pr.repoOwner, pr.repoName, pr.number);
@@ -159,7 +120,7 @@ export async function resolveMergeConflict(
 		if (plan.kind === "takeOurs") continue; // head already has the right content
 
 		if (plan.kind === "structuralConflict") {
-			return { resolved: false, reason: `${plan.path}: ${plan.reason}` };
+			return { status: "failed", reason: `${plan.path}: ${plan.reason}` };
 		}
 
 		try {
@@ -180,21 +141,43 @@ export async function resolveMergeConflict(
 				github.getBlobContent(pr.repoOwner, pr.repoName, plan.oursSha),
 				github.getBlobContent(pr.repoOwner, pr.repoName, plan.theirsSha),
 			]);
-			const resolution = await resolveConflictedFile(
-				plan.path,
-				mergeBaseContent,
-				oursContent,
-				theirsContent,
-				pr.declaredDirection,
-				provider,
-			);
-			if (resolution.status === "unresolved") {
-				return { resolved: false, reason: `${plan.path}: ${resolution.reason}` };
+			// A single diff3 pass gives both the conflict check and, if there's nothing to
+			// resolve, the clean merge itself — no separate "is there a conflict" call needed.
+			const regions = extractConflictRegions(oursContent, mergeBaseContent, theirsContent);
+			const hunks = extractConflictHunks(regions);
+			const resolutions = new Map<number, string>();
+			const semanticHunks: ConflictHunk[] = [];
+			for (const hunk of hunks) {
+				if (classifyHunk(hunk) === "mechanical") {
+					resolutions.set(hunk.index, resolveMechanicalHunk(hunk));
+				} else {
+					semanticHunks.push(hunk);
+				}
 			}
-			resolvedFiles.push({ path: plan.path, content: resolution.content, mode: plan.mode });
+
+			if (semanticHunks.length > 0) {
+				const semanticResolutions = await resolveSemanticHunks(semanticHunks, pr.declaredDirection, provider);
+				for (let i = 0; i < semanticHunks.length; i++) {
+					const hunk = semanticHunks[i];
+					const resolution = semanticResolutions[i];
+					if (hunk === undefined || resolution === undefined) continue;
+					if (resolution.confidence === "low") {
+						// Per INV-6, disclose which hunk beat the resolver, not just that one did —
+						// a bare "couldn't resolve" reason forces a human to re-diff the file by hand.
+						return {
+							status: "failed",
+							reason: `${plan.path}: could not confidently resolve a conflicting hunk (ours: ${describeHunkSide(hunk.oursLines)} vs theirs: ${describeHunkSide(hunk.theirsLines)})`,
+						};
+					}
+					resolutions.set(hunk.index, resolution.resolution);
+				}
+			}
+
+			resolvedFiles.push({ path: plan.path, content: reconstructContent(regions, resolutions), mode: plan.mode });
+			continue;
 		} catch (err) {
 			if (err instanceof BinaryFileError) {
-				return { resolved: false, reason: `${plan.path}: binary file conflict, cannot auto-resolve` };
+				return { status: "failed", reason: `${plan.path}: binary file conflict, cannot auto-resolve` };
 			}
 			throw err;
 		}
@@ -203,17 +186,17 @@ export async function resolveMergeConflict(
 	if (resolvedFiles.length === 0) {
 		// Nothing actually needed a content change — GitHub's "dirty" read was likely
 		// already stale. Let the caller re-poll mergeability and retry the merge itself.
-		return { resolved: true };
+		return { status: "resolved" };
 	}
 
 	try {
 		await github.commitResolvedFiles(pr.repoOwner, pr.repoName, pr.number, mergeability.baseSha, resolvedFiles);
 	} catch (err) {
 		if (err instanceof NotFastForwardError) {
-			return { resolved: false, reason: "head branch moved during conflict resolution" };
+			return { status: "failed", reason: "head branch moved during conflict resolution" };
 		}
 		throw err;
 	}
 
-	return { resolved: true };
+	return { status: "resolved" };
 }

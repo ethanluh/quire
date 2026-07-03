@@ -17,8 +17,8 @@ export interface MergeQueueEntry {
 	// leaving it stuck in "landing" forever.
 	mergedPrIds: ReadonlyArray<string>;
 	// Set when status is "conflict": a member PR couldn't be landed and automated
-	// resolution either didn't apply (branch protection, failing checks) or failed
-	// (genuine text conflict a model couldn't confidently resolve). Surfaces the reason
+	// resolution either didn't apply (branch protection, failing checks) or failed (a text
+	// conflict Quire's own hunk resolver couldn't confidently resolve). Surfaces the reason
 	// per INV-6 rather than leaving the bundle silently stuck; POST /queue/:bundleId/retry
 	// clears this to try again.
 	conflict?: { prId: string; reason: string; detectedAt: string };

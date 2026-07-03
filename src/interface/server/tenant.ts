@@ -6,6 +6,7 @@ import type { GitHubClient } from "../../engine/github/client.js";
 import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { loadInstallation } from "../../engine/github/installation.js";
+import { loadPreferences, savePreferences } from "../../engine/github/preferences.js";
 import { buildInstallationClient, buildInstallationOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
 import { listInstallationRepositories } from "../../engine/github/repos.js";
@@ -98,6 +99,7 @@ function sanitizeLogin(login: string): string {
 async function loadTenant(login: string, shared: TenantSharedConfig): Promise<TenantContext> {
 	const dir = join(shared.dataDir, "users", login);
 	const installationPath = join(dir, "installation.json");
+	const preferencesPath = join(dir, "preferences.json");
 	const llmAccountPath = join(dir, "llm-account.json");
 	const queuePath = join(dir, "queue.json");
 	const decidedPrsPath = join(dir, "decided-prs.json");
@@ -109,7 +111,14 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 	const auditLogPath = join(dir, "instrumentation/audit.ndjson");
 
 	const installationBinding = await loadInstallation(installationPath);
-	const accountState = createAccountState(installationBinding);
+	const preferences = await loadPreferences(preferencesPath);
+	const accountState = createAccountState(installationBinding, preferences);
+	// Backfills this tenant's preferences.json from an installation bound before it
+	// existed — persisted once here so the values survive even if the server restarts
+	// between now and the next /settings or /repos/select call (both of which keep the
+	// file in sync going forward). See index.ts's prior single-tenant version of this
+	// same backfill.
+	await savePreferences(preferencesPath, accountState.preferences);
 
 	const decidedStore = new DecidedPrStore(decidedPrsPath);
 	await decidedStore.load();
@@ -153,6 +162,7 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 	const refreshDeps: RefreshDeps = {
 		accountState,
 		accountPath: installationPath,
+		preferencesPath,
 		clientHolder,
 		appConfig: shared.appConfig,
 		decidedStore,

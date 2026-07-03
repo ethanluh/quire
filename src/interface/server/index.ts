@@ -18,6 +18,7 @@ import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
 import { createAllowlist } from "./allowlist.js";
 import { requireSession } from "./middleware/requireSession.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
+import { eventsRouter } from "./routes/events.js";
 import { accountRouter } from "./routes/account.js";
 import type { WebhookConfig } from "./routes/webhook.js";
 import { webhookRouter } from "./routes/webhook.js";
@@ -36,6 +37,8 @@ const DATA_DIR = process.env.QUIRE_DATA_DIR ?? join(process.cwd(), "data");
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const RECONCILE_INTERVAL_MS =
 	parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "20", 10) * 60 * 1000;
+const QUEUE_REFRESH_INTERVAL_MS =
+	parseInt(process.env["QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES"] ?? "5", 10) * 60 * 1000;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -172,6 +175,13 @@ async function main(): Promise<void> {
 	app.use(session);
 	app.use(resolveTenant(registry));
 
+	// Shared across every tenant on purpose: it carries no payload, just a "something
+	// changed, go re-fetch" wakeup (see changeEvents.ts), so there's no cross-tenant data
+	// leak in mounting one instance here instead of one per tenant router. See the
+	// known-gap note on notifyStateChanged()/changeEvents.ts below — this does mean one
+	// tenant's refresh currently wakes every open /events connection, tenant or not.
+	app.use("/events", eventsRouter());
+
 	// Every other route lives on the resolved tenant's own router (built once per tenant in
 	// tenant.ts from the exact same route factories this file used to wire up a single time
 	// at startup) — dispatching here instead of mounting one shared router per path is what
@@ -208,6 +218,20 @@ async function main(): Promise<void> {
 		}
 	}, RECONCILE_INTERVAL_MS);
 	reconcileTimer.unref();
+
+	// Keeps queued PRs from drifting far behind main while they wait their turn — a bundle
+	// stuck behind several others that land ahead of it would otherwise only get checked (and
+	// fast-forwarded) once dequeueNext() finally reaches it, by which point "behind" may have
+	// calcified into a real "dirty" conflict needing the in-process hunk resolver instead of a
+	// free merge. Iterates every known tenant's own queue, same as the reconcile timer above.
+	const queueRefreshTimer = setInterval(() => {
+		for (const tenant of registry.all()) {
+			tenant.queue.refreshQueuedBranches().catch((err: unknown) => {
+				console.error(`Queue branch refresh failed for ${tenant.login}:`, err);
+			});
+		}
+	}, QUEUE_REFRESH_INTERVAL_MS);
+	queueRefreshTimer.unref();
 
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);

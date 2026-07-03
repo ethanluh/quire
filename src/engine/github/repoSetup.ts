@@ -12,7 +12,9 @@ const DECLARED_DIRECTION_SECTION = `## Declared direction
 Quire ingests PRs by reading the \`declared-direction\` marker above. PRs missing it are silently skipped from the triage queue.
 `;
 
-const WORKFLOW_CONTENT = `name: Quire declared-direction check
+// Exported so tests can seed a repo whose committed copy already matches, and so an already
+// content-conforming repo is distinguishable from one carrying a stale, pre-fix version.
+export const WORKFLOW_CONTENT = `name: Quire declared-direction check
 
 on:
   pull_request:
@@ -62,8 +64,12 @@ export async function setUpDeclaredDirectionConvention(
 		client.getFileContent(owner, name, WORKFLOW_PATH),
 	]);
 
+	// The PR template is a user-owned file Quire only appends a section to, so conformance
+	// there just checks the section is present. The workflow file is wholly generated and
+	// owned by Quire, so a stale copy needs to be treated as non-conforming and re-pushed —
+	// otherwise re-running setup after a Quire upgrade can never repair it.
 	const templateConforms = template !== undefined && template.content.includes(DECLARED_DIRECTION_SUBSTRING);
-	const workflowConforms = workflow !== undefined;
+	const workflowConforms = workflow !== undefined && workflow.content === WORKFLOW_CONTENT;
 
 	if (templateConforms && workflowConforms) {
 		return { status: "already-set-up" };

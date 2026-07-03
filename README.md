@@ -57,6 +57,12 @@ Quire authenticates against GitHub as a GitHub App, not a personal access token.
    - **Webhook secret** — set your own value under "Webhook" → `GITHUB_APP_WEBHOOK_SECRET`.
 6. Fill in the resulting values in your `.env` (copied from `.env.example`), then from the running app's Settings (gear icon in the header) click "Install GitHub App" to bind an installation — this is what's persisted (per signed-in GitHub login, under `data/users/<login>/installation.json`) and used for API access, distinct from signing in. Each teammate who signs in gets their own installation, repo selection, and PR queue, fully isolated from every other signed-in login.
 
+## Conflict resolution
+
+When a bundled PR has a merge conflict, Quire resolves it in-process rather than dispatching anywhere: it fetches the three merge trees via the GitHub API, runs a real three-way merge (`node-diff3`), and for any file diff3 can't fully resolve, extracts the specific conflicting hunks (`src/engine/queue/conflictHunks.ts`). Hunks where both sides agree modulo whitespace resolve for free; the rest go through one batched call to Quire's own configured LLM account (`src/engine/queue/semanticHunkResolver.ts`) — the same account effect-list extraction already uses, so there's no separate key to provision for this. Any hunk the model isn't confident about fails the whole attempt, and the bundle surfaces as `"conflict"` in the merge queue (per INV-6) for a human to resolve manually or retry.
+
+A separate periodic pass (`QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES`, default 5) fast-forwards queued PRs that have merely fallen "behind" main — a free GitHub merge, no LLM involved — before it's their turn to actually land. Without it, a bundle stuck behind several others landing ahead of it only gets checked once `dequeueNext()` finally reaches it, by which point "behind" may have drifted into a real conflict that needs the Action above.
+
 ## Docs
 
 - [`docs/engineering-handoff.md`](docs/engineering-handoff.md) — full build spec: architecture, design invariants, drift-detection design, data model, phases, prior art, and success metrics.

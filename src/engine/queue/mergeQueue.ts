@@ -1,6 +1,6 @@
 import type { Bundle, PullRequest, ReviewCard } from "../types/core.js";
 import type { GitHubClient } from "../github/client.js";
-import type { LlmProvider } from "../drift/effectList/provider.js";
+import type { LlmProviderHolder } from "../drift/effectList/providerHolder.js";
 import type { MergeabilityResult, MergeabilityState } from "../types/mergeability.js";
 import type { MergeQueueEntry, QueueState } from "../types/queue.js";
 import { loadState, saveState } from "./persistence.js";
@@ -13,7 +13,7 @@ const MERGEABLE_STATES: ReadonlyArray<MergeabilityState> = ["clean", "hasHooks",
 // and the re-check after updateBranch()/commitResolvedFiles() poll on this same schedule.
 const DEFAULT_MERGEABILITY_POLL_DELAYS_MS: ReadonlyArray<number> = [1000, 2000, 4000, 4000, 4000];
 
-type MergeableCheck = { ok: true } | { ok: false; reason: string };
+type MergeableCheck = { ok: true; alreadyMerged?: boolean } | { ok: false; reason: string };
 
 export class MergeQueue {
 	private state: QueueState = { entries: [] };
@@ -21,7 +21,10 @@ export class MergeQueue {
 	constructor(
 		private readonly statePath: string,
 		private readonly github: GitHubClient,
-		private readonly llmProvider: LlmProvider,
+		// Snapshotted once per resolution attempt (see attemptResolution) rather than read
+		// through the holder on every call, so a mid-run account connect/disconnect can't
+		// split one attempt's batched hunk-resolution call across two different providers.
+		private readonly llmProviderHolder: LlmProviderHolder,
 		private readonly conflictLogPath: string,
 		private readonly mergeabilityPollDelaysMs: ReadonlyArray<number> = DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
 	) {}
@@ -32,6 +35,22 @@ export class MergeQueue {
 
 	private async persist(): Promise<void> {
 		await saveState(this.statePath, this.state);
+	}
+
+	// dequeueNext() and retryConflict() are each reachable from independent triggers (a
+	// human's manual "Process" click, autoMergeOnAccept, and the review UI's retry button)
+	// that don't coordinate with each other. Chaining every call through this lock serializes
+	// them onto `this.state` instead of letting two land concurrently and silently drop one
+	// side's update — mirrors refreshRepoQueue.ts's per-repo `inFlight` map, collapsed to a
+	// single chain since only one queue entry is ever actively processed at a time.
+	private lock: Promise<unknown> = Promise.resolve();
+	private withLock<T>(fn: () => Promise<T>): Promise<T> {
+		const run = this.lock.then(fn, fn);
+		this.lock = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
 	}
 
 	async enqueue(bundle: Bundle, card?: ReviewCard): Promise<void> {
@@ -56,6 +75,10 @@ export class MergeQueue {
 	}
 
 	async dequeueNext(): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.dequeueNextLocked());
+	}
+
+	private async dequeueNextLocked(): Promise<MergeQueueEntry | undefined> {
 		// Resume a bundle stuck in "landing" (e.g. the process crashed mid-merge) before
 		// picking up a fresh "queued" one, so a partial merge is never silently abandoned.
 		let entry = this.state.entries.find((e) => e.status === "landing");
@@ -85,7 +108,12 @@ export class MergeQueue {
 				return blocked;
 			}
 
-			await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+			// alreadyMerged means GitHub reports this PR merged (out of band, or a prior
+			// attempt that merged it but crashed before recording mergedPrIds) — calling
+			// mergePullRequest again would just 405 against an already-closed PR.
+			if (check.alreadyMerged !== true) {
+				await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+			}
 			entry = { ...entry, mergedPrIds: [...entry.mergedPrIds, pr.id] };
 			await this.setEntry(entry.bundleId, entry);
 		}
@@ -101,6 +129,11 @@ export class MergeQueue {
 	// resolution attempt at all.
 	private async ensureMergeable(bundleId: string, pr: PullRequest): Promise<MergeableCheck> {
 		let mergeability = await this.github.getMergeability(pr.repoOwner, pr.repoName, pr.number);
+		// Checked before anything looks at `state`: GitHub never computes mergeable_state for
+		// a closed/merged PR (it reports "unknown" forever), so without this a PR that's
+		// already merged — out of band, or by a prior attempt that crashed before persisting
+		// mergedPrIds — would poll out to a timeout and get misreported as a conflict.
+		if (mergeability.merged) return { ok: true, alreadyMerged: true };
 		if (mergeability.state === "unknownPending") {
 			mergeability = await this.pollMergeability(pr);
 		}
@@ -141,15 +174,16 @@ export class MergeQueue {
 		pr: PullRequest,
 		mergeability: MergeabilityResult,
 	): Promise<MergeableCheck> {
-		const result = await resolveMergeConflict(pr, mergeability, this.github, this.llmProvider);
+		const result = await resolveMergeConflict(pr, mergeability, this.github, this.llmProviderHolder.snapshot());
+
 		await logConflictResolution(
 			this.conflictLogPath,
 			bundleId,
 			pr.id,
-			result.resolved ? "resolved" : "unresolved",
-			result.reason,
+			result.status === "resolved" ? "resolved" : "unresolved",
+			result.status === "failed" ? result.reason : undefined,
 		);
-		if (!result.resolved) return { ok: false, reason: result.reason ?? "conflict resolution failed" };
+		if (result.status === "failed") return { ok: false, reason: result.reason };
 
 		// Give GitHub a moment to recompute mergeable_state after the new commit rather
 		// than immediately racing its own async recomputation with a merge attempt.
@@ -207,9 +241,13 @@ export class MergeQueue {
 		return entry;
 	}
 
-	// Clears a "conflict" entry back to "queued" so the next dequeueNext() tries again —
-	// used whether a human fixed the underlying issue manually or just wants a retry.
+	// Clears a "conflict" entry back to "queued" so the next dequeueNext() tries again — used
+	// whether a human fixed the underlying issue manually or just wants a retry.
 	async retryConflict(bundleId: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.retryConflictLocked(bundleId));
+	}
+
+	private async retryConflictLocked(bundleId: string): Promise<MergeQueueEntry | undefined> {
 		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "conflict");
 		if (entry === undefined) return undefined;
 		const { conflict: _conflict, ...rest } = entry;
@@ -221,5 +259,31 @@ export class MergeQueue {
 	async clear(): Promise<void> {
 		this.state = { entries: [] };
 		await this.persist();
+	}
+
+	// Best-effort: catches "behind" drift on queued PRs early via GitHub's free branch-update
+	// merge, before it's their turn in dequeueNext(). Without this, a bundle sitting behind
+	// several others that land ahead of it only gets checked once it's finally dequeued — by
+	// then main has moved further and what would have been a free fast-forward has calcified
+	// into a real "dirty" conflict needing the LLM Action. Read-only w.r.t. `this.state` (no
+	// setEntry/persist), so it deliberately doesn't go through withLock — it must not block
+	// dequeueNext()/retryConflict() for however long a pass over every queued PR takes, and a
+	// concurrent updateBranch() call from dequeueNext() picking the same PR is a harmless
+	// duplicate, not a correctness issue.
+	async refreshQueuedBranches(): Promise<void> {
+		const queued = this.state.entries.filter((e) => e.status === "queued");
+		for (const entry of queued) {
+			for (const pr of entry.bundle.members) {
+				try {
+					const mergeability = await this.github.getMergeability(pr.repoOwner, pr.repoName, pr.number);
+					if (mergeability.merged || mergeability.isFork || mergeability.state !== "behind") continue;
+					await this.github.updateBranch(pr.repoOwner, pr.repoName, pr.number);
+				} catch (err) {
+					// Best-effort — dequeueNext() re-discovers whatever state this PR is
+					// actually in (still behind, now dirty, or fine) and handles it normally.
+					console.error(`Queue refresh failed for ${pr.repoOwner}/${pr.repoName}#${pr.number}:`, err);
+				}
+			}
+		}
 	}
 }
