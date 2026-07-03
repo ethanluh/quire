@@ -355,4 +355,30 @@ export class MergeQueue {
 		this.state = { entries: [] };
 		await this.persist();
 	}
+
+	// Best-effort: catches "behind" drift on queued PRs early via GitHub's free branch-update
+	// merge, before it's their turn in dequeueNext(). Without this, a bundle sitting behind
+	// several others that land ahead of it only gets checked once it's finally dequeued — by
+	// then main has moved further and what would have been a free fast-forward has calcified
+	// into a real "dirty" conflict needing the LLM Action. Read-only w.r.t. `this.state` (no
+	// setEntry/persist), so it deliberately doesn't go through withLock — it must not block
+	// dequeueNext()/retryConflict() for however long a pass over every queued PR takes, and a
+	// concurrent updateBranch() call from dequeueNext() picking the same PR is a harmless
+	// duplicate, not a correctness issue.
+	async refreshQueuedBranches(): Promise<void> {
+		const queued = this.state.entries.filter((e) => e.status === "queued");
+		for (const entry of queued) {
+			for (const pr of entry.bundle.members) {
+				try {
+					const mergeability = await this.github.getMergeability(pr.repoOwner, pr.repoName, pr.number);
+					if (mergeability.merged || mergeability.isFork || mergeability.state !== "behind") continue;
+					await this.github.updateBranch(pr.repoOwner, pr.repoName, pr.number);
+				} catch (err) {
+					// Best-effort — dequeueNext() re-discovers whatever state this PR is
+					// actually in (still behind, now dirty, or fine) and handles it normally.
+					console.error(`Queue refresh failed for ${pr.repoOwner}/${pr.repoName}#${pr.number}:`, err);
+				}
+			}
+		}
+	}
 }
