@@ -57,6 +57,8 @@ function makeFakeOctokit(opts: {
 	pullsCreateRejects?: Error;
 	compareCommitsResult?: { merge_base_commit: { sha: string } };
 	treesBySha?: Record<string, ReadonlyArray<{ path: string; sha: string; mode: string; type: "blob" | "tree" | "commit" }>>;
+	createWorkflowDispatchRejects?: Error;
+	workflowRuns?: ReadonlyArray<{ id: number; created_at: string }>;
 }): {
 	octokit: Octokit;
 	merge: jest.Mock;
@@ -71,6 +73,8 @@ function makeFakeOctokit(opts: {
 	pullsCreate: jest.Mock;
 	compareCommitsWithBasehead: jest.Mock;
 	getTree: jest.Mock;
+	createWorkflowDispatch: jest.Mock;
+	listWorkflowRuns: jest.Mock;
 } {
 	const pr = opts.pr ?? makePrResponse("<!-- declared-direction: add passwordless auth -->");
 	const get = jest.fn(async (params: { mediaType?: { format: string } }) => {
@@ -127,6 +131,10 @@ function makeFakeOctokit(opts: {
 		const { tree_sha } = params as { tree_sha: string };
 		return { data: { tree: opts.treesBySha?.[tree_sha] ?? [] } };
 	});
+	const createWorkflowDispatch = opts.createWorkflowDispatchRejects
+		? jest.fn(async () => { throw opts.createWorkflowDispatchRejects; })
+		: jest.fn(async () => ({ data: undefined }));
+	const listWorkflowRuns = jest.fn(async () => ({ data: { workflow_runs: opts.workflowRuns ?? [] } }));
 
 	const paginate = jest.fn(async (method: (p: unknown) => Promise<{ data: unknown }>, params: unknown) => {
 		const res = await method(params);
@@ -140,6 +148,7 @@ function makeFakeOctokit(opts: {
 			repos: { getCombinedStatusForRef, get: reposGet, getContent, createOrUpdateFileContents, compareCommitsWithBasehead },
 			git: { getRef, createRef, getTree },
 			issues: { createComment },
+			actions: { createWorkflowDispatch, listWorkflowRuns },
 		},
 		paginate,
 		graphql,
@@ -159,6 +168,8 @@ function makeFakeOctokit(opts: {
 		pullsCreate,
 		compareCommitsWithBasehead,
 		getTree,
+		createWorkflowDispatch,
+		listWorkflowRuns,
 	};
 }
 
@@ -469,6 +480,31 @@ describe("OctokitGitHubClient", () => {
 			expect(getTree).toHaveBeenCalledWith(expect.objectContaining({ tree_sha: "default-sha" }));
 			expect(result.baseSha).toBe("default-sha");
 			expect(result.baseSha).not.toBe("stale-base-sha");
+		});
+	});
+
+	describe("dispatchConflictResolution", () => {
+		it("dispatches against the base branch, not the PR's head branch", async () => {
+			const { octokit, createWorkflowDispatch, listWorkflowRuns } = makeFakeOctokit({
+				workflowRuns: [{ id: 555, created_at: new Date(0).toISOString() }],
+			});
+			const client = new OctokitGitHubClient(octokit);
+			await client.dispatchConflictResolution("org", "repo", {
+				prNumber: 62,
+				headBranch: "claude/audit-overturn-tracking",
+				baseBranch: "main",
+				declaredDirection: "add overturn tracking",
+				callbackUrl: "https://quire.example/callbacks/action-resolution/bundle-1/resolution",
+				callbackToken: "token123",
+			});
+
+			// The head branch predates Quire's setup PR for plenty of real PRs, so its own
+			// copy of the workflow file may not declare workflow_dispatch at all — GitHub
+			// 422s in that case. The base branch is where the setup PR actually committed it.
+			expect(createWorkflowDispatch).toHaveBeenCalledWith(
+				expect.objectContaining({ ref: "main", inputs: expect.objectContaining({ head_branch: "claude/audit-overturn-tracking" }) }),
+			);
+			expect(listWorkflowRuns).toHaveBeenCalledWith(expect.objectContaining({ branch: "main" }));
 		});
 	});
 
