@@ -252,12 +252,27 @@ export class MergeQueue {
 		return entry;
 	}
 
-	// Clears a "conflict" entry back to "queued" so the next dequeueNext() tries again —
-	// used whether a human fixed the underlying issue manually or just wants a retry.
+	// Clears a "conflict" entry back to "queued" so the next dequeueNext() tries again — used
+	// whether a human fixed the underlying issue manually or just wants a retry. Also accepts
+	// "resolving": a human giving up on the dispatched Action before its callback or the poll
+	// timeout would otherwise notice, e.g. because they can already see from the linked run
+	// that it's thrashing. That manual override is logged the same way the poll timeout logs
+	// one, since it's the same "gave up waiting on the Action" outcome either way.
 	async retryConflict(bundleId: string): Promise<MergeQueueEntry | undefined> {
-		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "conflict");
+		const entry = this.state.entries.find(
+			(e) => e.bundleId === bundleId && (e.status === "conflict" || e.status === "resolving"),
+		);
 		if (entry === undefined) return undefined;
-		const { conflict: _conflict, ...rest } = entry;
+		if (entry.resolution !== undefined) {
+			await logConflictResolution(
+				this.conflictLogPath,
+				bundleId,
+				entry.resolution.prId,
+				"unresolved",
+				"manually retried before the conflict-resolution Action reported back",
+			);
+		}
+		const { conflict: _conflict, resolution: _resolution, ...rest } = entry;
 		const retried: MergeQueueEntry = { ...rest, status: "queued" };
 		await this.setEntry(bundleId, retried);
 		return retried;

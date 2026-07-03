@@ -432,4 +432,32 @@ describe("MergeQueue.retryConflict", () => {
 		expect(landed?.status).toBe("landed");
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
 	});
+
+	it("also accepts a bundle still \"resolving\", clearing the resolution and logging the manual override", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const conflictLogPath = join(dir, "conflict.ndjson");
+		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, conflictLogPath);
+		await queue.load();
+		const pr = makePr();
+		github.setBlobContent("base-sha", "line1\nline2");
+		github.setBlobContent("ours-sha", "line1-ours\nline2");
+		github.setBlobContent("theirs-sha", "line1-theirs\nline2");
+		github.setConflictTrees(pr.repoOwner, pr.repoName, pr.number, makeConflictTrees("src/auth.ts", "base-sha", "ours-sha", "theirs-sha"));
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "dirty" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		const resolving = await queue.dequeueNext();
+		expect(resolving?.status).toBe("resolving");
+
+		const retried = await queue.retryConflict("bundle-1");
+		expect(retried?.status).toBe("queued");
+		expect(retried?.resolution).toBeUndefined();
+
+		const logged = (await readFile(conflictLogPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+		expect(logged.at(-1)).toMatchObject({
+			prId: pr.id,
+			outcome: "unresolved",
+			reason: "manually retried before the conflict-resolution Action reported back",
+		});
+	});
 });
