@@ -14,6 +14,7 @@ interface PullRequestEvent {
 	repoOwner: string;
 	repoName: string;
 	pullRequestId: string;
+	installationId: number | undefined;
 }
 
 function parsePullRequestEvent(body: unknown): PullRequestEvent | undefined {
@@ -36,13 +37,25 @@ function parsePullRequestEvent(body: unknown): PullRequestEvent | undefined {
 	const prId = (pullRequest as Record<string, unknown>)["id"];
 	if (typeof prId !== "number") return undefined;
 
-	return { action, repoOwner: ownerLogin, repoName, pullRequestId: String(prId) };
+	// Present on every GitHub App delivery (this app has no other install type) — used to
+	// route the event to the tenant whose installation it belongs to, since deliveries for
+	// different tenants' installations arrive on this same shared endpoint.
+	const installation = record["installation"];
+	const installationIdRaw =
+		typeof installation === "object" && installation !== null ? (installation as Record<string, unknown>)["id"] : undefined;
+	const installationId = typeof installationIdRaw === "number" ? installationIdRaw : undefined;
+
+	return { action, repoOwner: ownerLogin, repoName, pullRequestId: String(prId), installationId };
 }
 
 // Mounted at /webhooks/github, guarded by verifyGithubSignature (HMAC, not localOnly — see
 // that middleware's comment) and a raw-body parser (see index.ts wiring). Not registered at
 // all unless a webhook secret is configured.
-export function webhookRouter(refreshDeps: RefreshDeps): Router {
+//
+// findRefreshDeps resolves the tenant that owns the delivery's installation — a single
+// GitHub App receives every tenant's webhook deliveries on this one endpoint, so there is
+// no longer one shared RefreshDeps to fall back on (see TenantRegistry.findByInstallationId).
+export function webhookRouter(findRefreshDeps: (installationId: number) => RefreshDeps | undefined): Router {
 	const router = Router();
 
 	router.post("/", (req, res) => {
@@ -65,9 +78,11 @@ export function webhookRouter(refreshDeps: RefreshDeps): Router {
 		}
 
 		const parsed = parsePullRequestEvent(payload);
-		const selected = refreshDeps.accountState.current?.selectedRepo;
+		const refreshDeps = parsed?.installationId !== undefined ? findRefreshDeps(parsed.installationId) : undefined;
+		const selected = refreshDeps?.accountState.current?.selectedRepo;
 		if (
 			parsed === undefined ||
+			refreshDeps === undefined ||
 			selected === undefined ||
 			selected.owner !== parsed.repoOwner ||
 			selected.name !== parsed.repoName ||
