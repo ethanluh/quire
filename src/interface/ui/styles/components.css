@@ -206,8 +206,9 @@ body {
 	padding: var(--space-6);
 }
 
-.detail-modal .modal-title,
-.settings-modal .modal-title {
+/* .settings-modal's title sits in .settings-header instead, which owns its
+   own margin-bottom — this only needs to cover .detail-modal now. */
+.detail-modal .modal-title {
 	margin-bottom: var(--space-5);
 }
 
@@ -260,8 +261,8 @@ body {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 32px;
-	height: 32px;
+	width: var(--space-8);
+	height: var(--space-8);
 	padding: 0;
 	flex: 0 0 auto;
 }
