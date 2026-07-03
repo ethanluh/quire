@@ -1,4 +1,5 @@
 import { parse } from "cookie";
+import { join } from "node:path";
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import type { Allowlist } from "../allowlist.js";
@@ -7,15 +8,12 @@ import { OAuthExchangeError } from "../../../engine/github/oauth.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
+import { saveUserToken, clearUserToken, DEFAULT_USER_TOKEN_TTL_MS } from "../../../engine/github/userToken.js";
 import { SESSION_COOKIE_NAME, SESSION_TTL_MS, createSession, verifySession } from "../session.js";
 import { cookieOptions, mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
 
 const OAUTH_STATE_COOKIE_NAME = "quire_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
-// Fallback when GitHub doesn't return expires_in (classic non-expiring user tokens) — long
-// enough to be useful for a session, short enough that a leaked in-memory entry doesn't
-// linger indefinitely.
-const DEFAULT_USER_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 // Where the OAuth callback sends the browser once it's done — GitHub's redirect is a
 // top-level navigation, so the result is reported via a query param on the app's own
@@ -29,13 +27,17 @@ function oauthResultRedirectUrl(status: "connected" | "error", reason: string | 
 // Identity first, API access second: "Sign in with GitHub" using the GitHub App's own
 // OAuth (protocol-identical to a standalone OAuth App's, just with no scope requested —
 // GitHub Apps take their user-to-server permissions from the App's own configuration, not
-// a scope param). The resulting token is used here to resolve who is signing in via
+// a scope param). The resulting access token is used here to resolve who is signing in via
 // verifyIdentity, then cached in-memory only (userTokenCache — never persisted to disk or
 // placed in the session cookie) purely so the repo picker can enrich with the user's
 // starred/pinned repos later; it is never used for anything ingestion-related. That access
 // comes from a separate installation binding (routes/githubApp.ts), which is why this
 // router still has no PAT-based /connect or any /repos*/disconnect routes — those belonged
 // to the old token-owns-API-access model this replaces.
+//
+// The refresh token GitHub returns alongside it is a different story: it IS persisted (see
+// userToken.ts), specifically so a server restart can silently mint a fresh access token
+// instead of forcing the user through this whole OAuth round-trip again on every redeploy.
 export function accountRouter(
 	oauth: OAuthDeps,
 	verifyIdentity: (token: string) => Promise<VerifiedTokenIdentity>,
@@ -44,8 +46,10 @@ export function accountRouter(
 	secureCookies: boolean,
 	requireSession: RequestHandler,
 	userTokenCache: UserTokenCache,
+	dataDir: string,
 ): Router {
 	const router = Router();
+	const userTokenPath = (login: string) => join(dataDir, "users", login, "github-user-token.json");
 
 	// GET, not POST: unlike the old dual-purpose flow, this has no side effect worth CSRF
 	// protection — it only mints a nonce and returns GitHub's own authorize URL. GitHub's
@@ -79,7 +83,11 @@ export function accountRouter(
 		}
 
 		try {
-			const { accessToken, tokenExpiresAt } = await oauth.exchangeCodeForToken(oauth.config, code, oauth.redirectUri);
+			const { accessToken, refreshToken, tokenExpiresAt } = await oauth.exchangeCodeForToken(
+				oauth.config,
+				code,
+				oauth.redirectUri,
+			);
 			const identity = await verifyIdentity(accessToken);
 
 			if (!allowlist.isAllowed(identity.login)) {
@@ -91,6 +99,9 @@ export function accountRouter(
 
 			const expiresAt = tokenExpiresAt !== undefined ? new Date(tokenExpiresAt).getTime() : Date.now() + DEFAULT_USER_TOKEN_TTL_MS;
 			userTokenCache.set(identity.login, { accessToken, expiresAt });
+			if (refreshToken !== undefined) {
+				await saveUserToken(userTokenPath(identity.login), { refreshToken });
+			}
 
 			res.cookie(SESSION_COOKIE_NAME, createSession(identity.login, sessionSecret), cookieOptions(secureCookies, SESSION_TTL_MS));
 			res.redirect(oauthResultRedirectUrl("connected", undefined));
@@ -111,10 +122,13 @@ export function accountRouter(
 		res.json({ login: res.locals.login });
 	});
 
-	router.post("/logout", (req, res) => {
+	router.post("/logout", async (req, res) => {
 		const token = parse(req.headers.cookie ?? "")[SESSION_COOKIE_NAME];
 		const payload = token !== undefined ? verifySession(token, sessionSecret) : undefined;
-		if (payload !== undefined) userTokenCache.clear(payload.login);
+		if (payload !== undefined) {
+			userTokenCache.clear(payload.login);
+			await clearUserToken(userTokenPath(payload.login));
+		}
 
 		res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
 		res.json({ loggedOut: true });

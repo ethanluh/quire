@@ -33,6 +33,9 @@ import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js"
 import type { UserTokenCache } from "../../src/engine/github/userTokenCache.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
+import { saveUserToken } from "../../src/engine/github/userToken.js";
+import { OAuthExchangeError } from "../../src/engine/github/oauth.js";
+import type { OAuthDeps } from "../../src/engine/github/oauth.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -165,7 +168,20 @@ describe("githubAppRouter", () => {
 		) => repos,
 		listInstallationsForUser: (accessToken: string) => Promise<ReadonlyArray<AccessibleInstallation>> = async () => [],
 		isInstallationBoundToAnotherTeam: ((installationId: number) => boolean) | undefined = undefined,
-	): { accountPath: string; state: ServerState; refreshDeps: RefreshDeps; userTokenCache: UserTokenCache } {
+		// Defaults to a no-op that always fails the exchange — fine for every test that never
+		// persists a github-user-token.json in the first place (refreshUserTokenFromDisk is a
+		// no-op with nothing on disk to load), and tests that DO care about the on-demand
+		// refresh path pass their own.
+		oauth: OAuthDeps = {
+			config: { clientId: "client-id", clientSecret: "client-secret" },
+			buildAuthorizeUrl: () => "https://github.com/login/oauth/authorize",
+			exchangeCodeForToken: async () => ({ accessToken: "unused" }),
+			refreshAccessToken: async () => {
+				throw new OAuthExchangeError("no stored token expected in this test");
+			},
+			redirectUri: "http://localhost:3000/account/github/oauth/callback",
+		},
+	): { accountPath: string; dataDir: string; state: ServerState; refreshDeps: RefreshDeps; userTokenCache: UserTokenCache } {
 		const accountPath = join(dir, "installation.json");
 		const holder = new GitHubClientHolder(client);
 		const state = createServerState();
@@ -214,11 +230,13 @@ describe("githubAppRouter", () => {
 				enrichWithUserToken,
 				listInstallationsForUser,
 				isInstallationBoundToAnotherTeam,
+				dir,
+				oauth,
 			),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
-		return { accountPath, state, refreshDeps, userTokenCache };
+		return { accountPath, dataDir: dir, state, refreshDeps, userTokenCache };
 	}
 
 	it("reports not connected when no installation is bound", async () => {
@@ -670,6 +688,44 @@ const { accountPath } = setup(async () => []);
 		);
 		userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
 		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(body["sortingAvailable"]).toBe(true);
+	});
+
+	it("silently refreshes from a persisted refresh token when no access token is cached, restoring sortingAvailable", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			repo({ fullName: "acme-corp/widgets", installationId: 555, accountLogin: "acme-corp" }),
+		];
+		const oauth: OAuthDeps = {
+			config: { clientId: "client-id", clientSecret: "client-secret" },
+			buildAuthorizeUrl: () => "https://github.com/login/oauth/authorize",
+			exchangeCodeForToken: async () => ({ accessToken: "unused" }),
+			refreshAccessToken: async (_config, refreshToken) => {
+				expect(refreshToken).toBe("refresh-1");
+				return { accessToken: "fresh-access-token" };
+			},
+			redirectUri: "http://localhost:3000/account/github/oauth/callback",
+		};
+		const { dataDir } = setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
+			undefined,
+			"octocat",
+			async (repos) => repos,
+			undefined,
+			undefined,
+			oauth,
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+		await saveUserToken(join(dataDir, "users", "octocat", "github-user-token.json"), { refreshToken: "refresh-1" });
 
 		const { status, body } = await call(server, "GET", "/account/github/repos");
 

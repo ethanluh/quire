@@ -1,9 +1,13 @@
 import { describe, it, expect, afterEach, jest } from "@jest/globals";
 import express from "express";
+import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import type { Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parse } from "cookie";
 import { accountRouter } from "../../src/interface/server/routes/account.js";
+import { loadUserToken } from "../../src/engine/github/userToken.js";
 import { requireSession } from "../../src/interface/server/middleware/requireSession.js";
 import { createAllowlist } from "../../src/interface/server/allowlist.js";
 import { InvalidTokenError } from "../../src/engine/github/verifyToken.js";
@@ -84,24 +88,30 @@ function makeOAuthDeps(
 
 describe("accountRouter (login-only)", () => {
 	let server: Server;
+	let dataDir: string;
 
 	afterEach(async () => {
 		if (server) await new Promise((resolve) => server.close(resolve));
+		if (dataDir) await rm(dataDir, { recursive: true, force: true });
 	});
 
 	let userTokenCache: UserTokenCache;
 
-	function setup(
+	async function setup(
 		verifyIdentity: (token: string) => Promise<VerifiedTokenIdentity>,
 		allowedLogins: string | undefined,
 		oauthDeps: OAuthDeps = makeOAuthDeps(),
-	): void {
+	): Promise<void> {
 		const allowlist = createAllowlist(allowedLogins);
 		const session = requireSession(SECRET, allowlist, false);
 		userTokenCache = createUserTokenCache();
+		dataDir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
 		const app = express();
 		app.use(express.json());
-		app.use("/account/github", accountRouter(oauthDeps, verifyIdentity, allowlist, SECRET, false, session, userTokenCache));
+		app.use(
+			"/account/github",
+			accountRouter(oauthDeps, verifyIdentity, allowlist, SECRET, false, session, userTokenCache, dataDir),
+		);
 		app.use(errorHandler);
 		server = app.listen(0);
 	}
@@ -121,7 +131,7 @@ describe("accountRouter (login-only)", () => {
 	}
 
 	it("mints a fresh state when no pending-state cookie is presented", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), undefined);
+		await setup(async () => ({ login: "octocat", scopes: [] }), undefined);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const first = await startOAuth();
@@ -131,7 +141,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("reuses the pending state when the same browser calls /oauth/start twice (double-click / second tab)", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
+		await setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const first = await startOAuth();
@@ -155,7 +165,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("does not let one browser's /oauth/start invalidate another's in-flight login", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
+		await setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		// Two independent browsers (cookie jars) both start a login around the same time.
@@ -175,7 +185,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("signs in via a valid code+state, setting a session cookie for an allowlisted login", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
+		await setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
 		await new Promise((resolve) => server.once("listening", resolve));
 		const { state, cookie } = await startOAuth();
 
@@ -194,7 +204,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("caches the OAuth access token in-memory, keyed by login, on a successful sign-in", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), "octocat", makeOAuthDeps(async () => ({ accessToken: "oauth-access-token" })));
+		await setup(async () => ({ login: "octocat", scopes: [] }), "octocat", makeOAuthDeps(async () => ({ accessToken: "oauth-access-token" })));
 		await new Promise((resolve) => server.once("listening", resolve));
 		const { state, cookie } = await startOAuth();
 
@@ -203,8 +213,34 @@ describe("accountRouter (login-only)", () => {
 		expect(userTokenCache.get("octocat")).toBe("oauth-access-token");
 	});
 
+	it("persists a returned refresh token to disk so a restart can silently recover it", async () => {
+		await setup(
+			async () => ({ login: "octocat", scopes: [] }),
+			"octocat",
+			makeOAuthDeps(async () => ({ accessToken: "oauth-access-token", refreshToken: "refresh-1" })),
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+		const { state, cookie } = await startOAuth();
+
+		await callRedirect(server, `/account/github/oauth/callback?code=good-code&state=${state}`, cookie);
+
+		const stored = await loadUserToken(join(dataDir, "users", "octocat", "github-user-token.json"));
+		expect(stored).toEqual({ refreshToken: "refresh-1" });
+	});
+
+	it("doesn't persist anything when GitHub returns no refresh token (token expiration not enabled)", async () => {
+		await setup(async () => ({ login: "octocat", scopes: [] }), "octocat", makeOAuthDeps(async () => ({ accessToken: "oauth-access-token" })));
+		await new Promise((resolve) => server.once("listening", resolve));
+		const { state, cookie } = await startOAuth();
+
+		await callRedirect(server, `/account/github/oauth/callback?code=good-code&state=${state}`, cookie);
+
+		const stored = await loadUserToken(join(dataDir, "users", "octocat", "github-user-token.json"));
+		expect(stored).toBeUndefined();
+	});
+
 	it("rejects a login not on the allowlist, without setting a session cookie", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), "someone-else");
+		await setup(async () => ({ login: "octocat", scopes: [] }), "someone-else");
 		await new Promise((resolve) => server.once("listening", resolve));
 		const { state, cookie } = await startOAuth();
 
@@ -221,7 +257,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("rejects a callback whose state doesn't match the pending one", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), undefined);
+		await setup(async () => ({ login: "octocat", scopes: [] }), undefined);
 		await new Promise((resolve) => server.once("listening", resolve));
 		const { cookie } = await startOAuth();
 
@@ -236,7 +272,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("rejects a callback with no pending state cookie at all", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), undefined);
+		await setup(async () => ({ login: "octocat", scopes: [] }), undefined);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const { status, location } = await callRedirect(server, "/account/github/oauth/callback?code=x&state=anything");
@@ -249,7 +285,7 @@ describe("accountRouter (login-only)", () => {
 		const exchangeCodeForToken = jest.fn(async () => {
 			throw new OAuthExchangeError("bad_verification_code");
 		});
-		setup(async () => ({ login: "octocat", scopes: [] }), undefined, makeOAuthDeps(exchangeCodeForToken));
+		await setup(async () => ({ login: "octocat", scopes: [] }), undefined, makeOAuthDeps(exchangeCodeForToken));
 		await new Promise((resolve) => server.once("listening", resolve));
 		const { state, cookie } = await startOAuth();
 
@@ -264,7 +300,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("surfaces a post-exchange InvalidTokenError as an error redirect", async () => {
-		setup(
+		await setup(
 			async () => {
 				throw new InvalidTokenError("GitHub rejected this token");
 			},
@@ -284,7 +320,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("GET /session reports the logged-in login when a valid cookie is presented", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
+		await setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
 		await new Promise((resolve) => server.once("listening", resolve));
 		const { state, cookie } = await startOAuth();
 		const { setCookies } = await callRedirect(
@@ -301,7 +337,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("GET /session returns 401 without a session cookie", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), undefined);
+		await setup(async () => ({ login: "octocat", scopes: [] }), undefined);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const { status } = await call(server, "GET", "/account/github/session");
@@ -310,7 +346,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("POST /logout clears the session cookie", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), undefined);
+		await setup(async () => ({ login: "octocat", scopes: [] }), undefined);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const { status, setCookie } = await call(server, "POST", "/account/github/logout");
@@ -320,7 +356,7 @@ describe("accountRouter (login-only)", () => {
 	});
 
 	it("POST /logout clears the cached user token for the signed-in login", async () => {
-		setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
+		await setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
 		await new Promise((resolve) => server.once("listening", resolve));
 		const { state, cookie } = await startOAuth();
 		const { setCookies } = await callRedirect(
@@ -334,5 +370,27 @@ describe("accountRouter (login-only)", () => {
 		await call(server, "POST", "/account/github/logout", sessionCookieValue.split(";")[0]);
 
 		expect(userTokenCache.get("octocat")).toBeUndefined();
+	});
+
+	it("POST /logout clears the persisted refresh token for the signed-in login", async () => {
+		await setup(
+			async () => ({ login: "octocat", scopes: [] }),
+			"octocat",
+			makeOAuthDeps(async () => ({ accessToken: "oauth-access-token", refreshToken: "refresh-1" })),
+		);
+		await new Promise((resolve) => server.once("listening", resolve));
+		const { state, cookie } = await startOAuth();
+		const { setCookies } = await callRedirect(
+			server,
+			`/account/github/oauth/callback?code=good&state=${state}`,
+			cookie,
+		);
+		const sessionCookieValue = findCookie(setCookies, SESSION_COOKIE_NAME) ?? "";
+		const tokenPath = join(dataDir, "users", "octocat", "github-user-token.json");
+		expect(await loadUserToken(tokenPath)).toBeDefined();
+
+		await call(server, "POST", "/account/github/logout", sessionCookieValue.split(";")[0]);
+
+		expect(await loadUserToken(tokenPath)).toBeUndefined();
 	});
 });

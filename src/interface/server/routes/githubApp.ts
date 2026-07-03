@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { Router } from "express";
 import { z } from "zod";
 import type { InstallationAccountState, InstallationBinding } from "../../../engine/github/installation.js";
@@ -6,9 +7,11 @@ import type { AccessibleInstallation, InstallationAccount } from "../../../engin
 import { isInstallationRevoked } from "../../../engine/github/installationClient.js";
 import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import type { GitHubClient } from "../../../engine/github/client.js";
+import type { OAuthDeps } from "../../../engine/github/oauth.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
 import { setUpDeclaredDirectionConvention } from "../../../engine/github/repoSetup.js";
 import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
+import { refreshUserTokenFromDisk } from "../../../engine/github/userToken.js";
 import { settleWithConcurrency } from "../../../engine/util/concurrency.js";
 import { activeInstallation } from "../accountState.js";
 import { clearRepoFromQueue, enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
@@ -64,10 +67,17 @@ export function githubAppRouter(
 	// team already has bound, so findByInstallationId's lookup in tenant.ts never has to
 	// pick a winner between two teams claiming the same installation. Undefined in
 	// single-tenant contexts/tests, where there's only ever one team to begin with.
-	isInstallationBoundToAnotherTeam?: (installationId: number) => boolean,
+	isInstallationBoundToAnotherTeam: ((installationId: number) => boolean) | undefined,
+	// A team's router can field requests from any of its member logins, so the persisted
+	// refresh token lives at a per-login path (mirroring routes/account.ts's own
+	// userTokenPath), computed per-request from the signed-in login rather than baked in
+	// once at router-construction time the way accountPath/queuePath etc. are.
+	dataDir: string,
+	oauth: OAuthDeps,
 ): Router {
 	const router = Router();
 	const { accountState, accountPath, clientHolder } = refreshDeps;
+	const userTokenPath = (login: string) => join(dataDir, "users", login, "github-user-token.json");
 
 	// Upserts one installation's binding into the account-wide state and, if it happens to
 	// back the active selection, repoints the shared client — shared by the GitHub-redirect
@@ -228,10 +238,13 @@ export function githubAppRouter(
 	// funneling an already-installed user through the /install/start GitHub redirect.
 	// Needs the cached sign-in token (see userTokenCache.ts), so it degrades to "reconnect
 	// to check" rather than erroring when that token isn't cached (never signed in this
-	// process, or the token expired).
+	// process, or the token expired) and a persisted refresh token can't silently repopulate it.
 	router.get("/available-installations", async (_req, res, next) => {
 		try {
 			const login = res.locals.login;
+			if (login !== undefined && userTokenCache.get(login) === undefined) {
+				await refreshUserTokenFromDisk(login, userTokenPath(login), oauth, userTokenCache);
+			}
 			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
 			if (userToken === undefined) {
 				res.json({ installations: [], needsReconnect: true });
@@ -295,6 +308,12 @@ export function githubAppRouter(
 			// expired). Applied once over the merged, concatenated list from every
 			// installation, after the multi-installation fan-out above.
 			const login = res.locals.login;
+			// A cache miss here isn't necessarily "never signed in" — it's just as likely the
+			// in-memory access token expired mid-session while a still-good refresh token sits
+			// on disk, so try that silent path before falling back to unsorted.
+			if (login !== undefined && userTokenCache.get(login) === undefined) {
+				await refreshUserTokenFromDisk(login, userTokenPath(login), oauth, userTokenCache);
+			}
 			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
 			const responseRepos = userToken !== undefined ? await enrichWithUserToken(repos, userToken) : repos;
 
