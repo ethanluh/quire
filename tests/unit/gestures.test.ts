@@ -17,6 +17,7 @@ import type { AccountState } from "../../src/interface/server/accountState.js";
 import type { InstallationAccountState } from "../../src/engine/github/installation.js";
 import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import type { Bundle, GestureAction, ReviewCard } from "../../src/engine/types/core.js";
+import type { MergeQueueEntry, MergeQueueEntryStatus } from "../../src/engine/types/queue.js";
 
 class RejectingGitHubClient extends StubGitHubClient {
 	override async postReviewCardComment(
@@ -64,6 +65,25 @@ function makeAccount(overrides: { autoMergeOnAccept?: boolean } = {}): Installat
 		installations: [{ installationId: 1, accountLogin: "test-user", accountType: "User", boundAt: new Date(0).toISOString() }],
 		...overrides,
 	};
+}
+
+// Auto-merge now runs as a fire-and-forget background call (see gestures.ts), so a test can't
+// just await the gesture response to observe its outcome — it has to poll queue state instead.
+async function waitForEntryStatus(
+	queue: MergeQueue,
+	bundleId: string,
+	status: MergeQueueEntryStatus,
+	timeoutMs = 1000,
+): Promise<MergeQueueEntry> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const entry = await queue.getEntry(bundleId);
+		if (entry?.status === status) return entry;
+		if (Date.now() > deadline) {
+			throw new Error(`Timed out waiting for bundle ${bundleId} to reach status "${status}" (last: ${entry?.status})`);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
 }
 
 function makeCard(bundleId: string): ReviewCard {
@@ -141,15 +161,21 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(decidedStore.isDecided("b-1-pr-1")).toBe(true);
 	});
 
-	it("merges immediately on accept when autoMergeOnAccept is enabled", async () => {
+	it("auto-merges an accepted bundle in the background when autoMergeOnAccept is enabled", async () => {
 		accountState.current = makeAccount({ autoMergeOnAccept: true });
 		state.bundles.set("b-1b", makeBundle("b-1b"));
 		state.cards.set("b-1b", makeCard("b-1b"));
 
 		const res = await gesture("b-1b", "accept");
 
+		// The response must not block on the merge itself — same shape as the
+		// non-auto-merge path — so the bundle shows up in the queue instantly.
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ status: "landed", bundleId: "b-1b" });
+		expect(await res.json()).toEqual({ status: "queued", bundleId: "b-1b" });
+
+		// The merge still happens, just in the background.
+		const landed = await waitForEntryStatus(queue, "b-1b", "landed");
+		expect(landed.status).toBe("landed");
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
 	});
 
