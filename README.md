@@ -34,6 +34,35 @@ The value proposition rests on a single bargain: the human stops checking correc
 
 ---
 
+## GitHub App setup
+
+Quire authenticates against GitHub as a GitHub App, not a personal access token. You need one registered before `npm run dev` will start — it refuses to boot without the env vars below (see `.env.example` for the full, authoritative list of vars and inline notes on which ones are dev-only vs. required for a public deployment).
+
+1. **Create the App** at [github.com/settings/apps/new](https://github.com/settings/apps/new) (use an org's settings page instead of your personal one if you want the App owned by an org).
+2. **Permissions** — under "Repository permissions", grant:
+   - **Pull requests**: Read & write (reading PRs/diffs; write is needed to merge a landed bundle, close a rejected PR, and mark a draft ready for review before merging)
+   - **Contents**: Read & write (reading diffs; write is needed to create the merge commit and the revert commit)
+   - **Issues**: Read & write (Quire posts a review-card comment on every gesture — accept, defer, or reject — via the Issues API, which PR comments go through)
+   - **Metadata**: Read-only (mandatory default, selected automatically)
+
+   If you upgrade an already-installed App's permissions later, GitHub requires the installation to accept the new permission set before write calls will succeed — for a personal install that's a one-click prompt on the app's page or in your notifications; for an org install, an org owner must approve it.
+3. **Webhook** — check "Active" and subscribe to the **Pull request** event (covers opened/synchronize/closed, which drive Quire's queue updates between reconcile polls). The Webhook URL must be a real address GitHub's servers can reach — for local dev, leave this blank or point it at a tunnel (e.g. `ngrok http 3000` → `https://<subdomain>.ngrok.io/webhooks/github`); without it Quire falls back to polling only (`QUIRE_RECONCILE_INTERVAL_MINUTES`).
+4. **URLs**:
+   - **Callback URL** (OAuth, used for sign-in): `http://localhost:<PORT>/account/github/oauth/callback` in dev, or `https://<your-domain>/account/github/oauth/callback` in production.
+   - **Setup URL** (App install flow): same domain, needs to be reachable by GitHub — only works once you're tunneling or deployed, same constraint as the webhook.
+5. **Where to find each credential** after creating the App, all on the App's own settings page (`github.com/settings/apps/<your-app-slug>`):
+   - **App ID** and **App slug** — top of the page → `GITHUB_APP_ID`, `GITHUB_APP_SLUG`.
+   - **Client ID** and **Client secret** (generate one) — under "OAuth credentials on this GitHub App" → `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`. These authenticate *sign-in* only ("Sign in with GitHub") — they're never used to call the GitHub API.
+   - **Private key** — generate and download the `.pem` under "Private keys", then base64-encode it into a single line: `base64 -i your-app.private-key.pem | tr -d '\n'` (macOS/BSD), or `base64 -w0 your-app.private-key.pem` (Linux) → `GITHUB_APP_PRIVATE_KEY_BASE64`. This key, together with the App ID, is the *installation* credential Quire uses for actual GitHub API calls (reading PRs, diffs) — a separate concern from the OAuth client id/secret above.
+   - **Webhook secret** — set your own value under "Webhook" → `GITHUB_APP_WEBHOOK_SECRET`.
+6. Fill in the resulting values in your `.env` (copied from `.env.example`), then from the running app's Settings (gear icon in the header) click "Install GitHub App" to bind an installation — this is what's persisted (per signed-in GitHub login, under `data/users/<login>/installation.json`) and used for API access, distinct from signing in. Each teammate who signs in gets their own installation, repo selection, and PR queue, fully isolated from every other signed-in login.
+
+## Conflict resolution
+
+When a bundled PR has a merge conflict, Quire resolves it in-process rather than dispatching anywhere: it fetches the three merge trees via the GitHub API, runs a real three-way merge (`node-diff3`), and for any file diff3 can't fully resolve, extracts the specific conflicting hunks (`src/engine/queue/conflictHunks.ts`). Hunks where both sides agree modulo whitespace resolve for free; the rest go through one batched call to Quire's own configured LLM account (`src/engine/queue/semanticHunkResolver.ts`) — the same account effect-list extraction already uses, so there's no separate key to provision for this. Any hunk the model isn't confident about fails the whole attempt, and the bundle surfaces as `"conflict"` in the merge queue (per INV-6) for a human to resolve manually or retry.
+
+A separate periodic pass (`QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES`, default 5) fast-forwards queued PRs that have merely fallen "behind" main — a free GitHub merge, no LLM involved — before it's their turn to actually land. Without it, a bundle stuck behind several others landing ahead of it only gets checked once `dequeueNext()` finally reaches it, by which point "behind" may have drifted into a real conflict that needs the Action above.
+
 ## Docs
 
 - [`docs/engineering-handoff.md`](docs/engineering-handoff.md) — full build spec: architecture, design invariants, drift-detection design, data model, phases, prior art, and success metrics.

@@ -14,6 +14,16 @@ export interface HumanFinding {
 	notes: string;
 }
 
+// One row per member PR the merge queue found not mergeable — whether or not automated
+// resolution was even attempted (blocked/unstable states never reach an attempt at all).
+export interface ConflictResolutionLog {
+	bundleId: string;
+	prId: string;
+	outcome: "resolved" | "unresolved";
+	reason?: string;
+	recordedAt: string;
+}
+
 // One row per (PR, criterion) evaluated by the gate — not just the criterion that
 // ultimately decided the outcome — so Phase 0's keep rate can be computed directly
 // from the log. The per-criterion false-positive rate additionally draws on the

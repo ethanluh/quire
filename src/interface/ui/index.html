@@ -27,8 +27,8 @@
     color: var(--color-text-primary);
   }
   header .subtitle { font-size: var(--text-sm); color: var(--color-text-muted); }
-  header .btn-theme { margin-left: auto; }
-  header a.btn { text-decoration: none; }
+  header .btn-settings { margin-left: auto; }
+  header .btn-settings svg { margin-top: 1px; }
 
   .tabs { padding: var(--space-3) var(--space-6) 0; background: var(--color-surface-page); }
 
@@ -66,7 +66,8 @@
 
   .account-panel p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
   .account-connect-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-  .account-panel input {
+  .account-panel input, .account-panel select,
+  .modal-backdrop input, .modal-backdrop select {
     width: 100%;
     max-width: 480px;
     background: var(--color-surface-overlay);
@@ -77,7 +78,20 @@
     font-size: var(--text-sm);
     padding: var(--space-2) var(--space-3);
   }
-  .account-panel input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .account-panel input:focus-visible, .account-panel select:focus-visible,
+  .modal-backdrop input:focus-visible, .modal-backdrop select:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .account-panel select, .modal-backdrop select {
+    margin-bottom: var(--space-3);
+    appearance: none;
+    -webkit-appearance: none;
+    font-family: var(--font-body);
+    background-image: var(--select-chevron);
+    background-repeat: no-repeat;
+    background-position: right var(--space-3) center;
+    background-size: 12px;
+    padding-right: var(--space-8);
+  }
+  .account-panel + .account-panel { margin-top: var(--space-6); }
   .account-status {
     display: flex;
     align-items: center;
@@ -97,6 +111,16 @@
     margin: 0 0 var(--space-3);
   }
   .automation-status { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
+  .auto-merge-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-3);
+    cursor: pointer;
+  }
+  .auto-merge-toggle input { width: auto; max-width: none; margin: 0; }
   .repo-search { margin-bottom: var(--space-3); }
   .repo-list { display: flex; flex-direction: column; gap: var(--space-2); max-height: 320px; overflow-y: auto; }
   .repo-entry {
@@ -118,22 +142,8 @@
   }
   .repo-entry.selected { border-color: var(--color-brand); }
   .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 64px; justify-content: center; }
+  .repo-entry .badge-priority { font-size: var(--text-xs); flex: 0 0 auto; white-space: nowrap; }
 
-  .ingest-form p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
-  .ingest-form textarea {
-    width: 100%;
-    height: 220px;
-    background: var(--color-surface-overlay);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    color: var(--color-text-primary);
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    padding: var(--space-3);
-    resize: vertical;
-  }
-  .ingest-form textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-  .ingest-form .btn-ingest { margin-top: var(--space-3); }
   .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
   .result-msg.error { color: var(--color-reject); }
 
@@ -151,15 +161,22 @@
     align-items: center;
   }
   .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
+  .queue-entry-actions { display: flex; align-items: center; gap: var(--space-2); }
+  .queue-entry-actions .btn { padding: var(--space-1) var(--space-3); }
 
   .status-badge {
     font-size: var(--text-xs);
     padding: var(--space-1) var(--space-3);
     border-radius: var(--radius-pill);
   }
-  .status-queued  { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
-  .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
-  .status-landed  { background: var(--color-accept-wash); color: var(--color-accept); }
+  .status-queued   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .status-landing  { background: var(--color-flagged-wash); color: var(--color-flagged); }
+  .status-landed   { background: var(--color-accept-wash); color: var(--color-accept); }
+
+  .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
+  .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
+  .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
+  .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
 
   .audit-list { display: flex; flex-direction: column; gap: var(--space-2); }
   .audit-entry {
@@ -181,18 +198,26 @@
 <header>
   <h1>Quire</h1>
   <span class="subtitle">Direction triage for swarm PRs</span>
-  <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
-  <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
-  <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
+  <span class="subtitle" id="signed-in-as" style="display:none"></span>
+  <button class="btn btn-defer btn-settings" id="btn-settings" title="Settings" style="display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg> Settings</button>
 </header>
+
+<div class="modal-backdrop" id="signin-gate" style="display:none">
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="signin-title">
+    <h3 class="modal-title" id="signin-title">Sign in to Quire</h3>
+    <p>Sign in with your GitHub account to continue.</p>
+    <div id="signin-result" class="result-msg error" style="display:none"></div>
+    <div class="modal-actions">
+      <button class="btn btn-accept" id="btn-signin">Sign in with GitHub</button>
+    </div>
+  </div>
+</div>
 
 <div class="tabs">
   <div class="tab active" data-tab="review">Review queue</div>
   <div class="tab" data-tab="shelf">Shelf</div>
   <div class="tab" data-tab="queue">Merge queue</div>
-  <div class="tab" data-tab="ingest">Ingest</div>
   <div class="tab" data-tab="audit">Audit</div>
-  <div class="tab" data-tab="account">Account</div>
 </div>
 
 <div id="pane-review" class="pane active">
@@ -215,15 +240,7 @@
     <div class="empty">Merge queue is empty.</div>
   </div>
   <button class="btn btn-accept" style="margin-top:16px" id="btn-process">Process next</button>
-</div>
-
-<div id="pane-ingest" class="pane">
-  <div class="ingest-form">
-    <p>Paste a PR payload (or array of payloads) as JSON:</p>
-    <textarea id="ingest-payload" placeholder='{"id":"pr-1","repoOwner":"org","repoName":"repo","number":1,"declaredDirection":"add passwordless auth","diff":{"raw":"...","hunks":[]},"ciStatus":"success"}'></textarea>
-    <button class="btn btn-defer btn-ingest" id="btn-ingest">Ingest</button>
-    <div id="ingest-result" class="result-msg" style="display:none"></div>
-  </div>
+  <button class="btn btn-accept" style="margin-top:16px" id="btn-process-all">Process all</button>
 </div>
 
 <div id="pane-audit" class="pane">
@@ -232,40 +249,92 @@
   </div>
 </div>
 
-<div id="pane-account" class="pane">
-  <div class="account-panel">
-    <div class="account-status" id="account-status">Checking connection&hellip;</div>
-    <div id="account-reconnect-banner" class="result-msg error" style="display:none">
-      Your GitHub connection expired and couldn't refresh automatically — reconnect to resume automatic PR ingestion.
-    </div>
-    <div id="account-connect-form">
-      <p>Connect a GitHub account so Quire can merge and revert PRs on its behalf.</p>
-      <div class="account-connect-actions">
-        <button class="btn btn-accept" id="btn-account-connect-pat">Auth via PAT</button>
-        <button class="btn btn-defer" style="display:none" id="btn-account-connect-oauth">Sign in with GitHub</button>
+<div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
+  <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <h3 class="modal-title" id="settings-modal-title">Settings</h3>
+
+    <div class="settings-section">
+      <h4>Preferences</h4>
+      <div class="settings-btn-row">
+        <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+        <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
       </div>
     </div>
-    <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
-    <div id="account-result" class="result-msg" style="display:none"></div>
 
-    <div class="repo-panel" id="repo-panel" style="display:none">
-      <h3>Repository to work on</h3>
-      <div class="automation-status" id="automation-status" style="display:none"></div>
-      <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
-      <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
+    <div class="settings-section">
+      <h4>Session</h4>
+      <button class="btn btn-defer" id="btn-signout">Sign out</button>
+    </div>
+
+    <div class="settings-section account-panel">
+      <h4>GitHub connection</h4>
+      <div class="account-status" id="account-status">Checking connection&hellip;</div>
+      <div id="account-connect-form">
+        <p>Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
+        <div class="account-connect-actions">
+          <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
+        </div>
+      </div>
+      <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
+      <div id="account-result" class="result-msg" style="display:none"></div>
+
+      <div class="repo-panel" id="repo-panel" style="display:none">
+        <h3>Repository to work on</h3>
+        <div class="automation-status" id="automation-status" style="display:none"></div>
+        <label class="auto-merge-toggle">
+          <input type="checkbox" id="chk-auto-merge">
+          Automatically merge accepted bundles (skips the manual "Process next" step)
+        </label>
+        <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
+        <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
+      </div>
+    </div>
+
+    <div class="settings-section account-panel">
+      <h4>LLM provider</h4>
+      <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles. Falls back to <code>.env</code> configuration (or a stub with no real extraction) when disconnected.</p>
+      <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
+      <div id="llm-connect-form">
+        <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
+      </div>
+      <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
+      <div id="llm-account-result" class="result-msg" style="display:none"></div>
+    </div>
+
+    <div class="settings-section">
+      <h4>Danger zone</h4>
+      <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-settings-modal-close">Close</button>
     </div>
   </div>
 </div>
 
-<div class="modal-backdrop" id="pat-modal-backdrop" style="display:none">
-  <div class="card" role="dialog" aria-modal="true" aria-labelledby="pat-modal-title">
-    <h3 class="modal-title" id="pat-modal-title">Connect with a personal access token</h3>
-    <p>Paste a <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">personal access token</a> with repo access.</p>
-    <input type="password" id="account-token" placeholder="ghp_..." autocomplete="off">
-    <div id="pat-modal-result" class="result-msg" style="display:none"></div>
+<div class="modal-backdrop" id="llm-modal-backdrop" style="display:none">
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="llm-modal-title">
+    <h3 class="modal-title" id="llm-modal-title">Connect an LLM API key</h3>
+    <p>Stored locally in Quire's data directory; used only for calls to the provider you choose.</p>
+    <select id="llm-provider-select">
+      <option value="anthropic">Anthropic</option>
+      <option value="gemini">Gemini</option>
+    </select>
+    <input type="password" id="llm-api-key" placeholder="API key" autocomplete="off">
+    <div id="llm-modal-result" class="result-msg" style="display:none"></div>
     <div class="modal-actions">
-      <button class="btn btn-defer" id="btn-pat-modal-cancel">Cancel</button>
-      <button class="btn btn-accept" id="btn-account-connect">Connect</button>
+      <button class="btn btn-defer" id="btn-llm-modal-cancel">Cancel</button>
+      <button class="btn btn-accept" id="btn-llm-modal-connect">Connect</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="detail-modal-backdrop" style="display:none">
+  <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
+    <h3 class="modal-title" id="detail-modal-title">Bundle detail</h3>
+    <div id="detail-modal-body"><div class="empty">Loading&hellip;</div></div>
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-detail-modal-close">Close</button>
     </div>
   </div>
 </div>
@@ -282,14 +351,35 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
     if (tab.dataset.tab === 'audit') loadAudit();
-    if (tab.dataset.tab === 'account') loadAccount();
   });
 });
 
-async function api(method, path, body, extraHeaders) {
-  const opts = { method, headers: { 'Content-Type': 'application/json', ...(extraHeaders || {}) } };
+const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
+function openSettingsModal() {
+  settingsModalBackdrop.style.display = 'flex';
+  loadAccount();
+  loadLlmAccount();
+}
+function closeSettingsModal() {
+  settingsModalBackdrop.style.display = 'none';
+}
+document.getElementById('btn-settings').addEventListener('click', openSettingsModal);
+document.getElementById('btn-settings-modal-close').addEventListener('click', closeSettingsModal);
+settingsModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === settingsModalBackdrop) closeSettingsModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && settingsModalBackdrop.style.display !== 'none') closeSettingsModal();
+});
+
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body !== undefined) opts.body = JSON.stringify(body);
   const r = await fetch(path, opts);
+  if (r.status === 401) {
+    showSigninGate();
+    return { error: 'Sign in required' };
+  }
   return r.json();
 }
 
@@ -307,12 +397,14 @@ function driftBadge(drift) {
   return '<span class="badge badge-flagged">Drift flagged</span>';
 }
 
-function renderSignals(drift) {
+function renderSignals(drift, members) {
   if (drift.status !== 'flagged') return '';
   const items = drift.signals.map(s => {
-    if (s.kind === 'effectList') return `Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
-    if (s.kind === 'footprintAnomaly') return `Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
-    return escapeHtml(s.description);
+    const pr = members && members.find(m => m.id === s.prId);
+    const prefix = pr ? `[${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}] ` : '';
+    if (s.kind === 'effectList') return `${prefix}Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
+    if (s.kind === 'footprintAnomaly') return `${prefix}Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
+    return `${prefix}${escapeHtml(s.description)}`;
   });
   return `<div class="drift-signals"><strong>Drift signals (noted, not an error)</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
 }
@@ -320,9 +412,10 @@ function renderSignals(drift) {
 function cardHtml(card, shelfMode) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
   const bundleId = escapeHtml(card.bundleId);
+  const detailsBtn = `<button class="btn" onclick="showBundleDetail('${bundleId}')">Details</button>`;
   const gestures = shelfMode
-    ? `<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
-    : `<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept</button>
+    ? `${detailsBtn}<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
+    : `${detailsBtn}<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept</button>
        <button class="btn btn-defer"  onclick="gesture('${bundleId}','defer')">Defer</button>
        <button class="btn btn-reject" onclick="gesture('${bundleId}','reject')">Reject</button>`;
   return `<div class="card" id="card-${bundleId}">
@@ -337,25 +430,177 @@ function cardHtml(card, shelfMode) {
   </div>`;
 }
 
+// --- Bundle detail modal ---
+const detailModalBackdrop = document.getElementById('detail-modal-backdrop');
+const detailModalBody = document.getElementById('detail-modal-body');
+let queueEntries = [];
+
+function ciStatusBadge(status) {
+  const cls = status === 'success' ? 'badge-clean' : status === 'failure' ? 'badge-flagged' : 'badge-neutral';
+  return `<span class="badge ${cls}">CI: ${escapeHtml(status)}</span>`;
+}
+
+function prDriftBadges(prId, drift) {
+  if (!drift || drift.status !== 'flagged') return '';
+  const signals = drift.signals.filter(s => s.prId === prId);
+  const footprintCount = signals.filter(s => s.kind === 'footprintAnomaly').length;
+  const behavioralCount = signals.filter(s => s.kind === 'behavioralDelta').length;
+  const effectCount = signals.filter(s => s.kind === 'effectList').length;
+  const badges = [];
+  // footprintAnomaly/behavioralDelta are grounded in static analysis or confirmed
+  // behavior, not an LLM judgment call — treated as the more severe tier (red).
+  // effectList is the matcher's best-effort read on declared vs. actual effects,
+  // more prone to false positives — the existing "flagged" tier (amber).
+  if (footprintCount > 0) badges.push(`<span class="badge badge-critical">Footprint: ${footprintCount}</span>`);
+  if (behavioralCount > 0) badges.push(`<span class="badge badge-critical">Behavioral: ${behavioralCount}</span>`);
+  if (effectCount > 0) badges.push(`<span class="badge badge-flagged">Effects: ${effectCount}</span>`);
+  return badges.join('');
+}
+
+function prMergeStatusBadge(pr, mergeStatus) {
+  if (!mergeStatus) return '';
+  let status = 'pending';
+  if (mergeStatus.revertedPrIds.includes(pr.id)) status = 'reverted';
+  else if (mergeStatus.mergedPrIds.includes(pr.id)) status = 'merged';
+  else if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) status = 'conflict';
+  return `<span class="badge pr-status-${status}">Merge: ${escapeHtml(status)}</span>`;
+}
+
+function prMemberListHtml(members, drift, mergeStatus) {
+  if (!members.length) return '<div class="empty">No member PRs.</div>';
+  return '<div class="pr-member-list">' + members.map(pr => {
+    const url = `https://github.com/${pr.repoOwner}/${pr.repoName}/pull/${pr.number}`;
+    return `<div class="pr-member-row">
+      <div class="pr-member-info">
+        <a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}</a>
+        <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)}</span>
+      </div>
+      <div class="pr-member-tags">
+        ${prMergeStatusBadge(pr, mergeStatus)}
+        ${prDriftBadges(pr.id, drift)}
+        ${ciStatusBadge(pr.ciStatus)}
+        <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function detailBodyHtml(detail, opts) {
+  opts = opts || {};
+  return `
+    <div class="card-direction">${escapeHtml(detail.directionSummary || detail.direction || '')}</div>
+    ${detail.effectSummary ? `<p class="residual">${escapeHtml(detail.effectSummary)}</p>` : ''}
+    ${detail.blastRadius !== undefined ? `<div class="card-meta">
+      <span class="badge badge-neutral">Blast radius: ${detail.blastRadius} files</span>
+      ${driftBadge(detail.drift)} ${(detail.flags || []).map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('')}
+    </div>` : ''}
+    ${detail.drift ? renderSignals(detail.drift, detail.members) : ''}
+    ${detail.residualDisclosure ? `<div class="residual">${escapeHtml(detail.residualDisclosure)}</div>` : ''}
+    ${opts.queueMeta ? `<div class="card-meta">
+      <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(opts.queueMeta.status)}</span>
+      <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
+    </div>` : ''}
+    <h4>Member PRs</h4>
+    ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
+  `;
+}
+
+function openDetailModal(html) {
+  detailModalBody.innerHTML = html;
+  detailModalBackdrop.style.display = 'flex';
+}
+
+function closeDetailModal() {
+  detailModalBackdrop.style.display = 'none';
+}
+
+async function showBundleDetail(bundleId) {
+  openDetailModal('<div class="empty">Loading&hellip;</div>');
+  const res = await fetch(`/bundles/${bundleId}`);
+  if (res.status === 404) {
+    detailModalBody.innerHTML = '<div class="empty">This bundle is no longer available (it may have just been actioned).</div>';
+    return;
+  }
+  const detail = await res.json();
+  detailModalBody.innerHTML = detailBodyHtml(detail);
+}
+
+function showQueueDetail(bundleId) {
+  const entry = queueEntries.find(e => e.bundleId === bundleId);
+  if (!entry) return;
+  openDetailModal(detailBodyHtml(
+    { direction: entry.bundle.direction, effectSummary: entry.bundle.effectSummary, members: entry.bundle.members },
+    {
+      queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt },
+      bundleId,
+      mergeStatus: { mergedPrIds: entry.mergedPrIds, revertedPrIds: entry.revertedPrIds, conflict: entry.conflict },
+    },
+  ));
+}
+
+document.getElementById('btn-detail-modal-close').addEventListener('click', closeDetailModal);
+detailModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === detailModalBackdrop) closeDetailModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && detailModalBackdrop.style.display !== 'none') closeDetailModal();
+});
+
+// Cache of the last-rendered JSON per pane so polling can skip a DOM rebuild
+// when nothing actually changed (avoids flicker/lost hover state on idle ticks).
+const lastRenderedJson = {};
+
 async function loadReview() {
-  const cards = await api('GET', '/bundles');
+  const status = await api('GET', '/account/github/status');
   const el = document.getElementById('card-list');
+  if (!status.connected) {
+    el.innerHTML = '<div class="empty">Connect a GitHub account to see the review queue.</div>';
+    return;
+  }
+  const cards = await api('GET', '/bundles');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.review) return;
+  lastRenderedJson.review = json;
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, false)).join('') : '<div class="empty">No bundles in review queue.</div>';
+}
+
+// Pulls the selected repo's current PRs from GitHub before rendering, so a fresh page
+// load/reload reflects reality instead of whatever's been cached in server memory since
+// the last webhook or reconcile tick. Best-effort: a failed refresh still falls back to
+// rendering whatever's already there.
+async function refreshAndLoadReview() {
+  try {
+    await api('POST', '/account/github/repos/refresh', undefined);
+  } catch (err) {
+    console.error('PR refresh failed', err);
+  }
+  loadReview();
 }
 
 async function loadShelf() {
   const cards = await api('GET', '/shelf');
+  const json = JSON.stringify(cards);
+  if (json === lastRenderedJson.shelf) return;
+  lastRenderedJson.shelf = json;
   const el = document.getElementById('shelf-list');
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, true)).join('') : '<div class="empty">Shelf is empty.</div>';
 }
 
 async function loadQueue() {
   const entries = await api('GET', '/queue');
+  queueEntries = entries;
+  const json = JSON.stringify(entries);
+  if (json === lastRenderedJson.queue) return;
+  lastRenderedJson.queue = json;
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
   el.innerHTML = entries.map(e => `<div class="queue-entry">
     <div><div>${escapeHtml(e.bundle.direction)}</div><div class="entry-id">${escapeHtml(e.bundleId)}</div></div>
-    <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+    <div class="queue-entry-actions">
+      <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+      <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
+      ${e.status === 'queued' ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
+    </div>
   </div>`).join('');
 }
 
@@ -384,6 +629,13 @@ async function overturnAudit(entryId) {
   loadAudit();
 }
 
+async function removeFromQueue(bundleId) {
+  if (!confirm('Remove this bundle from the merge queue?')) return;
+  await api('DELETE', `/queue/${bundleId}`);
+  loadQueue();
+  loadReview();
+}
+
 async function gesture(bundleId, action) {
   await api('POST', `/bundles/${bundleId}/gesture`, { action });
   loadReview();
@@ -398,36 +650,49 @@ async function promote(bundleId) {
 }
 
 document.getElementById('btn-process').addEventListener('click', async () => {
-  await api('POST', '/queue/process');
+  const result = await api('POST', '/queue/process');
+  if (result.error) {
+    alert('Could not process queue: ' + result.error);
+    return;
+  }
   loadQueue();
 });
 
-document.getElementById('btn-ingest').addEventListener('click', async () => {
-  const raw = document.getElementById('ingest-payload').value.trim();
-  const el = document.getElementById('ingest-result');
-  try {
-    const body = JSON.parse(raw);
-    const result = await api('POST', '/prs/ingest', body);
-    el.textContent = `Ingested: ${result.bundlesCreated} bundle(s) created.`;
-    el.className = 'result-msg';
-    el.style.display = 'block';
-    loadReview();
-  } catch (e) {
-    el.textContent = 'Error: ' + e.message;
-    el.className = 'result-msg error';
-    el.style.display = 'block';
+document.getElementById('btn-process-all').addEventListener('click', async () => {
+  const pending = queueEntries.filter(e => e.status === 'queued' || e.status === 'landing').length;
+  if (!pending) return;
+  if (!confirm(`Process all ${pending} queued item(s) in the merge queue?`)) return;
+
+  const btn = document.getElementById('btn-process-all');
+  btn.disabled = true;
+  let landed = 0, conflicts = 0, processed = 0;
+
+  // dequeueNext() always moves an entry out of "queued"/"landing" on each call, so this
+  // is bounded by the queue size at the start — cap defensively in case that ever changes.
+  for (let i = 0; i < pending && i < queueEntries.length; i++) {
+    btn.textContent = `Processing… (${processed}/${pending})`;
+    const result = await api('POST', '/queue/process');
+    if (result.error) {
+      alert('Could not process queue: ' + result.error);
+      break;
+    }
+    if (result.status === 'empty') break;
+    processed++;
+    if (result.status === 'landed') landed++;
+    else if (result.status === 'conflict') conflicts++;
+    await loadQueue();
   }
+
+  btn.textContent = 'Process all';
+  btn.disabled = false;
+  alert(`Processed ${processed}: ${landed} landed, ${conflicts} conflict(s).`);
 });
 
-const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 const clearAllBtn = document.getElementById('btn-clear-all');
-if (LOCAL_HOSTNAMES.has(location.hostname)) {
-  clearAllBtn.style.display = 'inline-block';
-}
+clearAllBtn.style.display = 'inline-block';
 clearAllBtn.addEventListener('click', async () => {
   if (!confirm('Clear all stored content (bundles, shelf, merge queue, audit log)? This cannot be undone.')) return;
-  // Custom header forces a CORS preflight, so a cross-origin page can't trigger this via a bare fetch().
-  const result = await api('POST', '/admin/reset', undefined, { 'X-Quire-Admin': '1' });
+  const result = await api('POST', '/admin/reset', undefined);
   if (result.error) {
     alert('Could not clear data: ' + result.error);
     return;
@@ -438,18 +703,62 @@ clearAllBtn.addEventListener('click', async () => {
   loadAudit();
 });
 
-// Connecting/disconnecting hits localhost-only, admin-header-gated endpoints, so the
-// controls are hidden when the UI isn't being served to the machine running Quire —
-// same treatment as the clear-all button above.
-const isLocalUi = LOCAL_HOSTNAMES.has(location.hostname);
+// --- Sign-in gate ---------------------------------------------------------
+// The API itself enforces the session requirement; this gate is a UX
+// convenience so the app doesn't just sit there showing empty/error states
+// before the user has ever signed in.
+const signinGate = document.getElementById('signin-gate');
+const signedInAsEl = document.getElementById('signed-in-as');
+const signoutBtn = document.getElementById('btn-signout');
+const settingsBtn = document.getElementById('btn-settings');
+
+function showSigninGate() {
+  signinGate.style.display = 'flex';
+  signedInAsEl.style.display = 'none';
+  settingsBtn.style.display = 'none';
+}
+
+function hideSigninGate(login) {
+  signinGate.style.display = 'none';
+  signedInAsEl.textContent = `Signed in as ${login}`;
+  signedInAsEl.style.display = 'inline';
+  settingsBtn.style.display = 'inline-block';
+}
+
+document.getElementById('btn-signin').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-signin');
+  btn.disabled = true;
+  const result = await fetch('/account/github/oauth/start').then((r) => r.json());
+  if (result.error) {
+    const el = document.getElementById('signin-result');
+    el.textContent = 'Error: ' + result.error;
+    el.style.display = 'block';
+    btn.disabled = false;
+    return;
+  }
+  location.href = result.authorizeUrl;
+});
+
+signoutBtn.addEventListener('click', async () => {
+  await fetch('/account/github/logout', { method: 'POST' });
+  location.reload();
+});
+
+async function checkSignedIn() {
+  const res = await fetch('/account/github/session');
+  if (res.status === 401) {
+    showSigninGate();
+    return false;
+  }
+  const { login } = await res.json();
+  hideSigninGate(login);
+  return true;
+}
+
 const accountConnectForm = document.getElementById('account-connect-form');
 const accountDisconnectBtn = document.getElementById('btn-account-disconnect');
-
 const repoPanel = document.getElementById('repo-panel');
-const oauthConnectBtn = document.getElementById('btn-account-connect-oauth');
-const patModalBackdrop = document.getElementById('pat-modal-backdrop');
-const patConnectBtn = document.getElementById('btn-account-connect-pat');
-const patModalCancelBtn = document.getElementById('btn-pat-modal-cancel');
+const installBtn = document.getElementById('btn-account-install');
 
 function renderAutomationStatus(selectedRepo) {
   const el = document.getElementById('automation-status');
@@ -458,37 +767,28 @@ function renderAutomationStatus(selectedRepo) {
     return;
   }
   el.style.display = 'block';
-  el.textContent = selectedRepo.webhookId !== undefined && selectedRepo.webhookId !== null
-    ? 'Webhooks active — new and updated PRs are ingested automatically.'
-    : 'Polling for new PRs periodically (no webhook registered for this repo).';
+  el.textContent = 'Watching for new and updated PRs (via webhook, falling back to periodic polling).';
 }
 
 async function loadAccount() {
   const statusEl = document.getElementById('account-status');
   const resultEl = document.getElementById('account-result');
-  const reconnectBanner = document.getElementById('account-reconnect-banner');
   resultEl.style.display = 'none';
   const status = await api('GET', '/account/github/status');
-  reconnectBanner.style.display = status.needsReconnect ? 'block' : 'none';
   if (status.connected) {
-    statusEl.innerHTML = `Connected as <span class="login">${escapeHtml(status.login)}</span>`;
+    statusEl.innerHTML = `Connected to <span class="login">${escapeHtml(status.accountLogin)}</span>`;
     accountConnectForm.style.display = 'none';
-    accountDisconnectBtn.style.display = isLocalUi ? 'inline-block' : 'none';
-    closePatModal();
-    if (isLocalUi) {
-      repoPanel.style.display = 'block';
-      renderAutomationStatus(status.selectedRepo);
-      loadRepos(status.selectedRepo);
-    } else {
-      repoPanel.style.display = 'none';
-    }
+    accountDisconnectBtn.style.display = 'inline-block';
+    repoPanel.style.display = 'block';
+    renderAutomationStatus(status.selectedRepo);
+    document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
+    loadRepos(status.selectedRepo);
   } else {
-    statusEl.textContent = isLocalUi
-      ? 'Not connected.'
-      : 'Not connected. Connecting is only available from the machine running Quire.';
-    accountConnectForm.style.display = isLocalUi ? 'block' : 'none';
-    oauthConnectBtn.style.display = isLocalUi && status.oauthAvailable ? 'inline-block' : 'none';
-    oauthConnectBtn.disabled = false;
+    statusEl.textContent = status.selectedRepo
+      ? `Not connected. Will resume watching ${status.selectedRepo.owner}/${status.selectedRepo.name} once reconnected.`
+      : 'Not connected.';
+    accountConnectForm.style.display = 'block';
+    installBtn.disabled = false;
     accountDisconnectBtn.style.display = 'none';
     repoPanel.style.display = 'none';
   }
@@ -501,67 +801,35 @@ function showAccountResult(message, isError) {
   resultEl.style.display = 'block';
 }
 
-function openPatModal() {
-  const tokenInput = document.getElementById('account-token');
-  document.getElementById('pat-modal-result').style.display = 'none';
-  tokenInput.value = '';
-  patModalBackdrop.style.display = 'flex';
-  tokenInput.focus();
-}
-
-function closePatModal() {
-  patModalBackdrop.style.display = 'none';
-}
-
-patConnectBtn.addEventListener('click', openPatModal);
-patModalCancelBtn.addEventListener('click', closePatModal);
-patModalBackdrop.addEventListener('click', (event) => {
-  if (event.target === patModalBackdrop) closePatModal();
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && patModalBackdrop.style.display !== 'none') closePatModal();
+document.getElementById('chk-auto-merge').addEventListener('change', async (e) => {
+  await api('POST', '/account/github/settings', { autoMergeOnAccept: e.target.checked });
 });
 
-document.getElementById('btn-account-connect').addEventListener('click', async () => {
-  const tokenInput = document.getElementById('account-token');
-  const token = tokenInput.value.trim();
-  if (!token) return;
-  const result = await api('POST', '/account/github/connect', { token }, { 'X-Quire-Admin': '1' });
-  if (result.error) {
-    const resultEl = document.getElementById('pat-modal-result');
-    resultEl.textContent = 'Error: ' + result.error;
-    resultEl.className = 'result-msg error';
-    resultEl.style.display = 'block';
-    return;
-  }
-  tokenInput.value = '';
-  closePatModal();
-  loadAccount();
-});
-
-oauthConnectBtn.addEventListener('click', async () => {
-  // Disabled for the round trip to /oauth/start so a fast double-click can't fire it
+installBtn.addEventListener('click', async () => {
+  // Disabled for the round trip to /install/start so a fast double-click can't fire it
   // twice before location.href navigates away — the server is idempotent either way,
   // but there's no reason to rely on that alone.
-  oauthConnectBtn.disabled = true;
-  const result = await api('POST', '/account/github/oauth/start', undefined, { 'X-Quire-Admin': '1' });
+  installBtn.disabled = true;
+  const result = await api('POST', '/account/github/install/start', undefined);
   if (result.error) {
     showAccountResult('Error: ' + result.error, true);
-    oauthConnectBtn.disabled = false;
+    installBtn.disabled = false;
     return;
   }
-  location.href = result.authorizeUrl;
+  location.href = result.installUrl;
 });
 
-// The OAuth callback redirects back here with ?account=connected|error once GitHub's
-// consent screen is done, since the whole flow is a top-level navigation away and back
-// (not a popup) — pick that signal up on load, then drop it from the URL.
-(async function handleOAuthRedirect() {
+// Both the sign-in OAuth callback and the App install callback redirect back here with
+// ?account=connected|error, since each is a top-level navigation away and back (not a
+// popup) — pick that signal up on load, then drop it from the URL.
+(async function handleAccountRedirect() {
   const params = new URLSearchParams(location.search);
   const result = params.get('account');
   if (!result) return;
   history.replaceState(null, '', location.pathname);
-  showTab('account');
+  const signedIn = await checkSignedIn();
+  if (!signedIn) return;
+  openSettingsModal();
   await loadAccount();
   if (result === 'error') {
     showAccountResult('GitHub connection failed: ' + (params.get('reason') || 'unknown error'), true);
@@ -569,25 +837,99 @@ oauthConnectBtn.addEventListener('click', async () => {
 })();
 
 accountDisconnectBtn.addEventListener('click', async () => {
-  if (!confirm('Disconnect the connected GitHub account?')) return;
-  await api('POST', '/account/github/disconnect', undefined, { 'X-Quire-Admin': '1' });
+  if (!confirm('Disconnect the installed GitHub App?')) return;
+  await api('POST', '/account/github/disconnect', undefined);
   loadAccount();
+});
+
+const llmConnectBtn = document.getElementById('btn-llm-connect');
+const llmDisconnectBtn = document.getElementById('btn-llm-disconnect');
+const llmModalBackdrop = document.getElementById('llm-modal-backdrop');
+const llmModalCancelBtn = document.getElementById('btn-llm-modal-cancel');
+
+async function loadLlmAccount() {
+  const statusEl = document.getElementById('llm-account-status');
+  const resultEl = document.getElementById('llm-account-result');
+  resultEl.style.display = 'none';
+  const status = await api('GET', '/account/llm/status');
+  if (status.connected) {
+    statusEl.textContent = `Connected to ${status.provider}`;
+    document.getElementById('llm-connect-form').style.display = 'none';
+    llmDisconnectBtn.style.display = 'inline-block';
+  } else {
+    statusEl.textContent = 'Not connected. Falling back to environment configuration.';
+    document.getElementById('llm-connect-form').style.display = 'block';
+    llmDisconnectBtn.style.display = 'none';
+  }
+}
+
+function openLlmModal() {
+  document.getElementById('llm-api-key').value = '';
+  document.getElementById('llm-modal-result').style.display = 'none';
+  llmModalBackdrop.style.display = 'flex';
+  document.getElementById('llm-api-key').focus();
+}
+
+function closeLlmModal() {
+  llmModalBackdrop.style.display = 'none';
+}
+
+llmConnectBtn.addEventListener('click', openLlmModal);
+llmModalCancelBtn.addEventListener('click', closeLlmModal);
+llmModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === llmModalBackdrop) closeLlmModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && llmModalBackdrop.style.display !== 'none') closeLlmModal();
+});
+
+document.getElementById('btn-llm-modal-connect').addEventListener('click', async () => {
+  const provider = document.getElementById('llm-provider-select').value;
+  const apiKeyInput = document.getElementById('llm-api-key');
+  const apiKey = apiKeyInput.value.trim();
+  if (!apiKey) return;
+  const result = await api('POST', '/account/llm/connect', { provider, apiKey });
+  if (result.error) {
+    const resultEl = document.getElementById('llm-modal-result');
+    resultEl.textContent = 'Error: ' + result.error;
+    resultEl.className = 'result-msg error';
+    resultEl.style.display = 'block';
+    return;
+  }
+  apiKeyInput.value = '';
+  closeLlmModal();
+  loadLlmAccount();
+});
+
+llmDisconnectBtn.addEventListener('click', async () => {
+  if (!confirm('Disconnect the connected LLM API key?')) return;
+  await api('POST', '/account/llm/disconnect', undefined);
+  loadLlmAccount();
 });
 
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
+  const starIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>';
+  const pinIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
+  const starredBadge = repo.starred ? `<span class="badge badge-clean badge-priority">${starIcon} Favorite</span>` : '';
+  const pinnedBadge = repo.pinned ? `<span class="badge badge-neutral badge-priority">${pinIcon} Pinned</span>` : '';
+  const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
+    ${starredBadge}
+    ${pinnedBadge}
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isSelected
       ? '<span class="badge badge-clean">Selected</span>'
-      : `<button class="btn btn-defer" onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">Select</button>`}
+      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">${isTarget ? 'Selecting…' : 'Select'}</button>`}
   </div>`;
 }
 
 let loadedRepos = [];
 let loadedSelectedRepo = null;
+let repoSelectionInProgress = false;
+let repoSelectionTarget = null;
 
 function renderRepoList() {
   const listEl = document.getElementById('repo-list');
@@ -606,7 +948,7 @@ function renderRepoList() {
 
 async function loadRepos(selectedRepo) {
   const listEl = document.getElementById('repo-list');
-  const result = await api('GET', '/account/github/repos', undefined, { 'X-Quire-Admin': '1' });
+  const result = await api('GET', '/account/github/repos', undefined);
   if (result.error) {
     listEl.innerHTML = `<div class="empty">${escapeHtml(result.error)}</div>`;
     return;
@@ -619,31 +961,52 @@ async function loadRepos(selectedRepo) {
 document.getElementById('repo-search').addEventListener('input', renderRepoList);
 
 async function selectRepo(owner, name) {
-  const result = await api('POST', '/account/github/repos/select', { owner, name }, { 'X-Quire-Admin': '1' });
-  if (result.error) {
-    showAccountResult('Error: ' + result.error, true);
-    return;
+  repoSelectionInProgress = true;
+  repoSelectionTarget = { owner, name };
+  renderRepoList();
+  showAccountResult(`Selecting ${owner}/${name} — fetching and ingesting pull requests…`, false);
+  try {
+    const result = await api('POST', '/account/github/repos/select', { owner, name });
+    if (result.error) {
+      showAccountResult('Error: ' + result.error, true);
+      return;
+    }
+    const skipped = result.skipped || [];
+    const parts = [`Selected ${owner}/${name}.`, `${result.bundlesCreated || 0} bundle(s) created.`];
+    if (skipped.length) {
+      // Most commonly: the PR body has no <!-- declared-direction: ... --> marker
+      // (INV-1's fail-closed case) — surfaced so an empty/short queue isn't a silent mystery.
+      parts.push(`${skipped.length} PR(s) could not be ingested (e.g. missing declared-direction marker) and were skipped.`);
+    }
+    if (result.webhookRegistered) {
+      parts.push('Webhook registered — new PRs will be ingested automatically.');
+    } else if (result.webhookError) {
+      parts.push(`Webhook registration failed (${result.webhookError}) — falling back to periodic polling.`);
+    } else if (result.webhookDisabledReason) {
+      parts.push('Webhooks not configured — falling back to periodic polling.');
+    }
+    // loadAccount() resets account-result's visibility as part of its normal refresh, so the
+    // message has to be shown after it settles, not before (same ordering as the OAuth
+    // redirect handler above).
+    await loadAccount();
+    showAccountResult(parts.join(' '), false);
+    loadReview();
+
+    if (confirm(`Set up Quire's PR convention in ${owner}/${name}? This opens a pull request documenting the declared-direction marker in the repo's PR template and adding a CI check that enforces it.`)) {
+      const setup = await api('POST', '/account/github/repos/setup', { owner, name });
+      if (setup.error) {
+        showAccountResult('Setup PR failed: ' + setup.error, true);
+      } else if (setup.status === 'already-set-up') {
+        showAccountResult('Repo is already set up for Quire.', false);
+      } else {
+        showAccountResult(`Setup PR ${setup.status === 'created' ? 'opened' : 'already open'}: ${setup.prUrl}`, false);
+      }
+    }
+  } finally {
+    repoSelectionInProgress = false;
+    repoSelectionTarget = null;
+    renderRepoList();
   }
-  const skipped = result.skipped || [];
-  const parts = [`Selected ${owner}/${name}.`, `${result.bundlesCreated || 0} bundle(s) created.`];
-  if (skipped.length) {
-    // Most commonly: the PR body has no <!-- declared-direction: ... --> marker
-    // (INV-1's fail-closed case) — surfaced so an empty/short queue isn't a silent mystery.
-    parts.push(`${skipped.length} PR(s) could not be ingested (e.g. missing declared-direction marker) and were skipped.`);
-  }
-  if (result.webhookRegistered) {
-    parts.push('Webhook registered — new PRs will be ingested automatically.');
-  } else if (result.webhookError) {
-    parts.push(`Webhook registration failed (${result.webhookError}) — falling back to periodic polling.`);
-  } else if (result.webhookDisabledReason) {
-    parts.push('Webhooks not configured — falling back to periodic polling.');
-  }
-  // loadAccount() resets account-result's visibility as part of its normal refresh, so the
-  // message has to be shown after it settles, not before (same ordering as the OAuth
-  // redirect handler above).
-  await loadAccount();
-  showAccountResult(parts.join(' '), false);
-  loadReview();
 }
 
 // Theme: "paper" (light, default) and "ink" (dark) — same tokens, see styles/tokens.css.
@@ -670,8 +1033,50 @@ if (location.search.includes('desktop=1')) {
 if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop') {
   location.replace('mobile.html');
 } else {
-  loadReview();
+  checkSignedIn().then((signedIn) => {
+    if (signedIn) {
+      refreshAndLoadReview();
+      loadAudit();
+      startPolling();
+      startLiveUpdates();
+    }
+  });
 }
+
+// Server state is already kept fresh by the GitHub webhook + reconciliation poll
+// (see routes/webhook.ts); these endpoints just read that in-memory state, so
+// polling them here is cheap and never itself calls the GitHub API.
+const POLL_INTERVAL_MS = 10000;
+let pollTimer = null;
+
+function pollActivePane() {
+  if (document.hidden) return;
+  const activeTab = document.querySelector('.tab.active');
+  if (!activeTab) return;
+  const pane = activeTab.dataset.tab;
+  if (pane === 'review') loadReview();
+  else if (pane === 'shelf') loadShelf();
+  else if (pane === 'queue') loadQueue();
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
+}
+
+// Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
+// a webhook or reconciliation pass changes state, so the active pane updates immediately
+// instead of waiting for the next poll tick. The interval above stays
+// running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
+// server's own reconciliation timer is a fallback for a missed webhook delivery.
+function startLiveUpdates() {
+  const source = new EventSource('/events');
+  source.onmessage = () => pollActivePane();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) pollActivePane();
+});
 document.getElementById('link-mobile').addEventListener('click', () => {
   localStorage.removeItem(VIEW_PREF_KEY);
 });

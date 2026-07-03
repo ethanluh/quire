@@ -4,34 +4,49 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc && npm run build:copy-ui",
+		"build:copy-ui": "rm -rf dist/src/interface/ui && mkdir -p dist/src/interface/ui && cp -r src/interface/ui/. dist/src/interface/ui/",
+		"start": "node dist/src/interface/server/index.js",
 		"dev": "tsx --env-file-if-exists=.env src/interface/server/index.ts",
 		"test": "node --experimental-vm-modules node_modules/.bin/jest --forceExit",
 		"lint": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@octokit/auth-app": "^6.0.3",
+		"@octokit/request-error": "^7.1.0",
+		"@octokit/rest": "^20.0.0",
+		"cookie": "^0.6.0",
 		"express": "^4.18.0",
-		"zod": "^3.22.0",
-		"@octokit/rest": "^20.0.0"
+		"node-diff3": "^3.2.1",
+		"zod": "^3.22.0"
 	},
 	"devDependencies": {
+		"@jest/globals": "^29.0.0",
+		"@types/cookie": "^0.6.0",
 		"@types/express": "^4.17.0",
 		"@types/node": "^20.0.0",
-		"tsx": "^4.0.0",
-		"typescript": "^5.4.0",
 		"jest": "^29.0.0",
-		"@jest/globals": "^29.0.0",
-		"ts-jest": "^29.0.0"
+		"ts-jest": "^29.0.0",
+		"tsx": "^4.0.0",
+		"typescript": "^5.4.0"
 	},
 	"jest": {
 		"preset": "ts-jest/presets/default-esm",
 		"testEnvironment": "node",
-		"extensionsToTreatAsEsm": [".ts"],
+		"extensionsToTreatAsEsm": [
+			".ts"
+		],
 		"moduleNameMapper": {
 			"^(\\.{1,2}/.*)\\.js$": "$1"
 		},
 		"transform": {
-			"^.+\\.tsx?$": ["ts-jest", { "useESM": true }]
-		}
+			"^.+\\.tsx?$": [
+				"ts-jest",
+				{
+					"useESM": true
+				}
+			]
+		},
+		"testPathIgnorePatterns": ["/node_modules/", "/dist/"]
 	}
 }

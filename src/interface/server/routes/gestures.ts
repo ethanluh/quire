@@ -5,6 +5,7 @@ import type { GitHubClient } from "../../../engine/github/client.js";
 import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { Bundle, GestureAction, ReviewCard } from "../../../engine/types/core.js";
 import type { ServerState } from "../state.js";
+import type { AccountState } from "../accountState.js";
 import { logDefer } from "../../../engine/instrumentation/logger.js";
 import { validateBody } from "../middleware/validation.js";
 
@@ -35,6 +36,7 @@ export function gesturesRouter(
 	deferLogPath: string,
 	github: GitHubClient,
 	decidedStore: DecidedPrStore,
+	accountState: AccountState,
 ): Router {
 	const router = Router({ mergeParams: true });
 
@@ -56,13 +58,24 @@ export function gesturesRouter(
 				const memberPrIds = bundle.members.map((m) => m.id);
 
 				if (action === "accept") {
-					await queue.enqueue(bundle); // enqueues, does not merge (INV-5)
+					await queue.enqueue(bundle, card); // enqueues, does not merge (INV-5, unless autoMergeOnAccept)
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action);
 					postCardToMembers(github, action, bundle, card);
+					if (accountState.current?.autoMergeOnAccept === true) {
+						const landed = await queue.dequeueNext();
+						res.json({ status: landed?.status ?? "queued", bundleId: landed?.bundleId ?? bundleId });
+						return;
+					}
 					res.json({ status: "queued", bundleId });
 				} else if (action === "reject") {
+					// Close each member PR on GitHub before touching local state, so a GitHub-side
+					// failure leaves the bundle in the review queue for retry instead of the
+					// verdict being silently lost while the PR stays open forever.
+					for (const pr of bundle.members) {
+						await github.closePullRequest(pr.repoOwner, pr.repoName, pr.number);
+					}
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action);
@@ -70,7 +83,7 @@ export function gesturesRouter(
 					res.json({ status: "rejected", bundleId });
 				} else {
 					// defer
-					state.shelf.set(bundleId, { card, memberPrIds });
+					state.shelf.set(bundleId, { card, bundle, memberPrIds });
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action);
 					await logDefer(deferLogPath, bundleId, card);

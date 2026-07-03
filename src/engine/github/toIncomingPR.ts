@@ -8,6 +8,7 @@ export function rawPRPayloadToIncomingPR(pr: RawPRPayload): IncomingPR {
 		repoOwner: pr.owner,
 		repoName: pr.repo,
 		number: pr.number,
+		headSha: pr.headSha,
 		declaredDirection: pr.declaredDirection,
 		diff: { raw: pr.diff, hunks: parseUnifiedDiff(pr.diff) },
 		filesTouched: [...pr.filesTouched],

@@ -1,8 +1,8 @@
 import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "./provider.js";
 import { fetchWithRetry } from "./httpRetry.js";
 
-export const DEFAULT_MODEL = "gemini-2.0-flash";
-const DEFAULT_EMBEDDING_MODEL = "text-embedding-004";
+export const DEFAULT_MODEL = "gemma-4-31b-it";
+const DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001";
 const DEFAULT_MAX_TOKENS = 1024;
 
 export interface GeminiProviderConfig {
@@ -13,7 +13,11 @@ export interface GeminiProviderConfig {
 }
 
 interface GeminiGenerateContentResponse {
-	candidates?: ReadonlyArray<{ content?: { parts?: ReadonlyArray<{ text?: string }> } }>;
+	// Thinking-capable models (e.g. gemma-4-*) prepend a reasoning-trace part with
+	// `thought: true` ahead of the actual answer part. It must be excluded when
+	// building the returned text — callers (extractor.ts, matcher.ts) parse that
+	// text as JSON, and the reasoning trace isn't JSON.
+	candidates?: ReadonlyArray<{ content?: { parts?: ReadonlyArray<{ text?: string; thought?: boolean }> } }>;
 }
 
 interface GeminiEmbedContentResponse {
@@ -35,6 +39,16 @@ export class GeminiLlmProvider implements LlmProvider {
 	get calls(): ReadonlyArray<LlmCall> {
 		return this._calls;
 	}
+
+	// Combines both sub-models into one identity: a change to either the completion
+	// model or the embedding model must invalidate cached effects/embeddings, since
+	// either one changing means cached output no longer reflects what this provider
+	// would currently produce.
+	get modelKey(): string {
+		return `gemini:${this.model}+${this.embeddingModel}`;
+	}
+
+	readonly supportsEmbeddings = true;
 
 	async complete(messages: ReadonlyArray<LlmMessage>, opts?: LlmCallOptions): Promise<string> {
 		const system = messages.find((m) => m.role === "system")?.content;
@@ -61,7 +75,11 @@ export class GeminiLlmProvider implements LlmProvider {
 		);
 
 		const data = (await res.json()) as GeminiGenerateContentResponse;
-		const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+		const text =
+			data.candidates?.[0]?.content?.parts
+				?.filter((p) => !p.thought)
+				.map((p) => p.text ?? "")
+				.join("") ?? "";
 		this._calls.push({ messages, response: text });
 		return text;
 	}

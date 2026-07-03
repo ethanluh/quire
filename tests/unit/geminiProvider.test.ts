@@ -25,6 +25,11 @@ describe("GeminiLlmProvider", () => {
 		jest.restoreAllMocks();
 	});
 
+	it("declares that it has a real embeddings endpoint", () => {
+		const provider = new GeminiLlmProvider({ apiKey: "gemini-test" });
+		expect(provider.supportsEmbeddings).toBe(true);
+	});
+
 	describe("complete", () => {
 		it("moves the system message to systemInstruction and maps assistant -> model", async () => {
 			const fetchMock = mockFetchOnce(200, {
@@ -40,7 +45,7 @@ describe("GeminiLlmProvider", () => {
 
 			expect(result).toBe('["adds OTP login"]');
 			expect(requestUrl(fetchMock)).toBe(
-				"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=gemini-test",
+				"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent?key=gemini-test",
 			);
 			const body = requestBody(fetchMock);
 			expect(body["systemInstruction"]).toEqual({ parts: [{ text: "You are a code analyst." }] });
@@ -65,6 +70,26 @@ describe("GeminiLlmProvider", () => {
 			const provider = new GeminiLlmProvider({ apiKey: "bad-key" });
 
 			await expect(provider.complete([{ role: "user", content: "hi" }])).rejects.toThrow(/403/);
+		});
+
+		it("strips thinking-trace parts (thought: true) from the returned text", async () => {
+			mockFetchOnce(200, {
+				candidates: [
+					{
+						content: {
+							parts: [
+								{ text: "reasoning about the diff...", thought: true },
+								{ text: '["adds OTP login"]' },
+							],
+						},
+					},
+				],
+			});
+			const provider = new GeminiLlmProvider({ apiKey: "gemini-test" });
+
+			const result = await provider.complete([{ role: "user", content: "hi" }]);
+
+			expect(result).toBe('["adds OTP login"]');
 		});
 
 		it("respects a custom baseUrl and model", async () => {
@@ -92,7 +117,7 @@ describe("GeminiLlmProvider", () => {
 
 			expect(vec).toEqual([0.1, 0.2, 0.3]);
 			expect(requestUrl(fetchMock)).toBe(
-				"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=gemini-test",
+				"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=gemini-test",
 			);
 		});
 

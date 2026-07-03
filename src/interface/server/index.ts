@@ -1,35 +1,47 @@
+import { randomBytes } from "node:crypto";
 import express from "express";
-import { Octokit } from "@octokit/rest";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadAuditStore } from "../../engine/gate/auditStore.js";
 import { MergeQueue } from "../../engine/queue/mergeQueue.js";
 import { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
+import { PrEffectCache } from "../../engine/cache/prCache.js";
 import type { GitHubClient } from "../../engine/github/client.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
-import { OctokitGitHubClient } from "../../engine/github/octokitClient.js";
 import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
-import { loadAccount } from "../../engine/github/account.js";
+import { loadInstallation } from "../../engine/github/installation.js";
+import { loadPreferences, savePreferences } from "../../engine/github/preferences.js";
+import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
+import { buildInstallationClient, buildInstallationOctokit, buildUserOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
+import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
+import { InstallationRevokedError } from "../../engine/github/installationClient.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
-import { listRepositories } from "../../engine/github/repos.js";
-import { resolveLlmProvider } from "./resolveLlmProvider.js";
+import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../engine/github/repos.js";
+import { resolveLlmProvider, buildLlmProviderFromAccount } from "./resolveLlmProvider.js";
+import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.js";
+import { loadAccount as loadLlmAccount } from "../../engine/llm/account.js";
+import { createLlmAccountState } from "./llmAccountState.js";
+import { llmAccountRouter } from "./routes/llmAccount.js";
 import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken } from "../../engine/github/oauth.js";
 import type { OAuthDeps } from "../../engine/github/oauth.js";
-import { NeedsReconnectError } from "../../engine/github/tokenRefresh.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { createServerState } from "./state.js";
 import { createAccountState } from "./accountState.js";
 import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
 import type { RefreshDeps } from "./refreshRepoQueue.js";
+import { createAllowlist } from "./allowlist.js";
+import { requireSession } from "./middleware/requireSession.js";
 import { prsRouter } from "./routes/prs.js";
 import { bundlesRouter } from "./routes/bundles.js";
 import { gesturesRouter } from "./routes/gestures.js";
 import { queueRouter } from "./routes/queue.js";
 import { shelfRouter } from "./routes/shelf.js";
+import { eventsRouter } from "./routes/events.js";
 import { auditRouter } from "./routes/audit.js";
 import { adminRouter } from "./routes/admin.js";
-import { githubAccountRouter } from "./routes/account.js";
-import type { WebhookConfig } from "./routes/account.js";
+import { accountRouter } from "./routes/account.js";
+import { githubAppRouter } from "./routes/githubApp.js";
+import type { WebhookConfig } from "./routes/webhook.js";
 import { webhookRouter } from "./routes/webhook.js";
 import { verifyGithubSignature } from "./middleware/webhookSignature.js";
 import { errorHandler } from "./middleware/errors.js";
@@ -38,21 +50,32 @@ import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
 import type { PipelineDeps } from "./ingestIntoQueue.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "../../../data");
+// Not derived from __dirname: the compiled dist/ output nests one level deeper than the
+// source (dist/src/interface/server vs. src/interface/server), so a fixed "../../../data"
+// walk lands in the wrong place in production. process.cwd() is stable across `npm run dev`
+// and `npm start` (both invoked from the project root); QUIRE_DATA_DIR lets a deploy mount
+// its persistent volume anywhere.
+const DATA_DIR = process.env.QUIRE_DATA_DIR ?? join(process.cwd(), "data");
 const QUEUE_PATH = join(DATA_DIR, "queue.json");
 const DECIDED_PRS_PATH = join(DATA_DIR, "decided-prs.json");
+const PR_CACHE_PATH = join(DATA_DIR, "pr-cache.json");
 const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
 const GATE_LOG_PATH = join(DATA_DIR, "instrumentation/gate-decisions.ndjson");
 const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjson");
-// A mutable state file, not an NDJSON instrumentation log (unlike the three paths
-// above) — audit entries need in-place updates (overturn), which NDJSON can't do —
-// so it lives alongside queue.json/decided-prs.json instead of under instrumentation/.
+const CONFLICT_LOG_PATH = join(DATA_DIR, "instrumentation/conflict-resolution.ndjson");
+// A mutable state file, not an NDJSON instrumentation log (unlike the paths above) —
+// audit entries need in-place updates (overturn), which NDJSON can't do — so it lives
+// alongside queue.json/decided-prs.json instead of under instrumentation/.
 const AUDIT_STATE_PATH = join(DATA_DIR, "audit.json");
-const ACCOUNT_PATH = join(DATA_DIR, "github-account.json");
+const INSTALLATION_PATH = join(DATA_DIR, "installation.json");
+const PREFERENCES_PATH = join(DATA_DIR, "preferences.json");
+const LLM_ACCOUNT_PATH = join(DATA_DIR, "llm-account.json");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const RECONCILE_INTERVAL_MS =
 	parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "20", 10) * 60 * 1000;
+const QUEUE_REFRESH_INTERVAL_MS =
+	parseInt(process.env["QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES"] ?? "5", 10) * 60 * 1000;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -65,60 +88,98 @@ const pipelineConfig: PipelineConfig = {
 	bundle: { similarityThreshold: 0.75 },
 };
 
+function requireEnv(name: string): string {
+	const value = process.env[name];
+	if (value === undefined || value === "") {
+		throw new Error(
+			`Missing required environment variable ${name}. Quire's GitHub integration is a GitHub App now — ` +
+				"see .env.example and README.md's GitHub App setup section for how to register one and fill these in.",
+		);
+	}
+	return value;
+}
+
 async function main(): Promise<void> {
 	const app = express();
 
-	const githubToken = process.env["GITHUB_TOKEN"];
-	const webhookSecret = process.env["GITHUB_WEBHOOK_SECRET"];
-	const publicUrl = process.env["QUIRE_PUBLIC_URL"];
+	// `KEY=` (present but empty) in a .env file sets process.env.KEY to "", not undefined —
+	// normalize that to undefined here so every fallback below (`??`) actually triggers.
+	const rawPublicUrl = process.env["QUIRE_PUBLIC_URL"];
+	const publicUrl = rawPublicUrl !== undefined && rawPublicUrl !== "" ? rawPublicUrl : undefined;
+	const isProduction = publicUrl !== undefined && publicUrl.startsWith("https://");
+
+	let sessionSecret = process.env["QUIRE_SESSION_SECRET"];
+	if (sessionSecret === undefined || sessionSecret === "") {
+		sessionSecret = randomBytes(32).toString("hex");
+		console.warn(
+			"QUIRE_SESSION_SECRET not set — generated a random one for this process. " +
+				"Every existing session will be invalidated on restart. Set it explicitly once hosted " +
+				"(e.g. `openssl rand -hex 32`).",
+		);
+	}
+	const allowedLogins = process.env["QUIRE_ALLOWED_GITHUB_LOGINS"];
+	const allowlist = createAllowlist(allowedLogins);
+	if (allowedLogins === undefined || allowedLogins === "") {
+		console.warn("QUIRE_ALLOWED_GITHUB_LOGINS not set — any GitHub account can sign in. Set this before hosting.");
+	}
+
+	const appConfig: GitHubAppConfig = {
+		appId: requireEnv("GITHUB_APP_ID"),
+		privateKey: Buffer.from(requireEnv("GITHUB_APP_PRIVATE_KEY_BASE64"), "base64").toString("utf8"),
+	};
+	const appSlug = requireEnv("GITHUB_APP_SLUG");
+	const oauthDeps: OAuthDeps = {
+		config: { clientId: requireEnv("GITHUB_APP_CLIENT_ID"), clientSecret: requireEnv("GITHUB_APP_CLIENT_SECRET") },
+		buildAuthorizeUrl,
+		exchangeCodeForToken,
+		refreshAccessToken,
+		redirectUri: `${publicUrl ?? `http://localhost:${PORT}`}/account/github/oauth/callback`,
+	};
+
+	const webhookSecret = process.env["GITHUB_APP_WEBHOOK_SECRET"];
 	const webhookConfig: WebhookConfig | undefined =
-		webhookSecret !== undefined && webhookSecret !== "" && publicUrl !== undefined && publicUrl !== ""
+		webhookSecret !== undefined && webhookSecret !== "" && publicUrl !== undefined
 			? { publicUrl, secret: webhookSecret }
 			: undefined;
 
 	const auditStore = await loadAuditStore(AUDIT_STATE_PATH);
-	const connectedAccount = await loadAccount(ACCOUNT_PATH);
-	const accountState = createAccountState(connectedAccount);
+	const installationBinding = await loadInstallation(INSTALLATION_PATH);
+	const preferences = await loadPreferences(PREFERENCES_PATH);
+	const accountState = createAccountState(installationBinding, preferences);
+	// Backfills preferences.json from an installation bound before it existed — persisted
+	// once here so the values survive even if the server restarts between now and the next
+	// /settings or /repos/select call (both of which keep the file in sync going forward).
+	await savePreferences(PREFERENCES_PATH, accountState.preferences);
+	const userTokenCache = createUserTokenCache();
 
 	const decidedStore = new DecidedPrStore(DECIDED_PRS_PATH);
 	await decidedStore.load();
 
-	const oauthClientId = process.env["GITHUB_OAUTH_CLIENT_ID"];
-	const oauthClientSecret = process.env["GITHUB_OAUTH_CLIENT_SECRET"];
-	let oauthDeps: OAuthDeps | undefined;
-	if (oauthClientId !== undefined && oauthClientId !== "" && oauthClientSecret !== undefined && oauthClientSecret !== "") {
-		const redirectUri = `http://localhost:${PORT}/account/github/oauth/callback`;
-		oauthDeps = {
-			config: { clientId: oauthClientId, clientSecret: oauthClientSecret },
-			buildAuthorizeUrl,
-			exchangeCodeForToken,
-			refreshAccessToken,
-			redirectUri,
-		};
-		console.log(`GitHub OAuth: enabled (callback URL must be registered as ${redirectUri})`);
-	} else {
-		console.log("GitHub OAuth: disabled (GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET not set)");
-	}
+	const prCache = new PrEffectCache(PR_CACHE_PATH);
+	await prCache.load();
 
-	// A connected account (set up through the UI) takes priority over GITHUB_TOKEN,
-	// since it's the more recent, more deliberate choice of credential.
 	let initialClient: GitHubClient;
-	if (connectedAccount !== undefined) {
-		initialClient = new OctokitGitHubClient(new Octokit({ auth: connectedAccount.token }));
-		console.log(`GitHub client: octokit (connected as ${connectedAccount.login})`);
-	} else if (githubToken !== undefined && githubToken !== "") {
-		initialClient = new OctokitGitHubClient(new Octokit({ auth: githubToken }));
-		console.log("GitHub client: octokit (GITHUB_TOKEN set)");
+	if (installationBinding !== undefined) {
+		initialClient = buildInstallationClient(appConfig, installationBinding.installationId);
+		console.log(`GitHub client: installation (bound to ${installationBinding.accountLogin})`);
 	} else {
 		initialClient = new StubGitHubClient();
-		console.log("GitHub client: stub (no connected account, GITHUB_TOKEN not set)");
+		console.log("GitHub client: stub (no GitHub App installation bound yet)");
 	}
 	const github = new GitHubClientHolder(initialClient);
-	const queue = new MergeQueue(QUEUE_PATH, github);
+
+	// An LLM account connected through the UI takes priority over env-based resolution.
+	// Resolved before MergeQueue below, which needs a provider for conflict resolution.
+	const connectedLlmAccount = await loadLlmAccount(LLM_ACCOUNT_PATH);
+	const llmAccountState = createLlmAccountState(connectedLlmAccount);
+	const { provider: initialLlmProvider, description } =
+		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : resolveLlmProvider(process.env);
+	console.log(`LLM provider: ${description}`);
+	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
+
+	const queue = new MergeQueue(QUEUE_PATH, github, llmProviderHolder, CONFLICT_LOG_PATH);
 	await queue.load();
 
-	const { provider, description } = resolveLlmProvider(process.env);
-	console.log(`LLM provider: ${description}`);
 	const analyzer = new TypeScriptAnalyzer();
 	const state = createServerState();
 	const instrumentationSink = createNdjsonInstrumentationSink({
@@ -127,17 +188,19 @@ async function main(): Promise<void> {
 	});
 	const pipelineDeps: PipelineDeps = {
 		config: pipelineConfig,
-		provider,
+		provider: llmProviderHolder,
 		analyzer,
 		auditStore,
+		prCache,
 		instrumentationSink,
 	};
 
 	const refreshDeps: RefreshDeps = {
 		accountState,
-		accountPath: ACCOUNT_PATH,
+		accountPath: INSTALLATION_PATH,
+		preferencesPath: PREFERENCES_PATH,
 		clientHolder: github,
-		oauth: oauthDeps,
+		appConfig,
 		decidedStore,
 		state,
 		pipelineDeps,
@@ -145,7 +208,8 @@ async function main(): Promise<void> {
 
 	// The webhook path needs its exact raw request bytes to verify GitHub's HMAC signature,
 	// so it must be parsed (and mounted) before the global express.json() below would
-	// otherwise consume the body as parsed JSON.
+	// otherwise consume the body as parsed JSON. Its own signature check is the trust
+	// boundary here, independent of session auth (GitHub's delivery carries no cookie).
 	if (webhookConfig !== undefined) {
 		app.use(
 			"/webhooks/github",
@@ -155,32 +219,64 @@ async function main(): Promise<void> {
 		);
 		console.log("GitHub webhook receiver: enabled at /webhooks/github");
 	} else {
-		console.log("GitHub webhook receiver: disabled (QUIRE_PUBLIC_URL/GITHUB_WEBHOOK_SECRET not set)");
+		console.log("GitHub webhook receiver: disabled (QUIRE_PUBLIC_URL/GITHUB_APP_WEBHOOK_SECRET not set)");
 	}
 
 	app.use(express.json());
 
-	// Serve static UI
+	// Serve static UI — public; the login gate is enforced by the API, not page delivery,
+	// so the frontend can always load and show an appropriate signed-in/signed-out state.
 	app.use(express.static(join(__dirname, "../ui")));
 
+	const session = requireSession(sessionSecret, allowlist, isProduction);
+
+	// Login-establishing routes: reachable without a session (that's the point). Mounted
+	// before the global `session` middleware below applies to everything else.
+	app.use(
+		"/account/github",
+		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache),
+	);
+
+	app.use(session);
+
+	app.use(
+		"/account/github",
+		githubAppRouter(
+			refreshDeps,
+			appSlug,
+			appConfig,
+			(installationId) => listInstallationRepositories(buildInstallationOctokit(appConfig, installationId)),
+			(installationId) => getInstallationAccount(appConfig, installationId),
+			isProduction,
+			userTokenCache,
+			(repos, accessToken) => enrichWithStarredAndPinned(repos, buildUserOctokit(accessToken)),
+		),
+	);
 	app.use("/prs", prsRouter(state, pipelineDeps, queue));
 	app.use("/bundles", bundlesRouter(state));
-	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github, decidedStore));
-	app.use("/queue", queueRouter(queue));
+	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github, decidedStore, accountState));
+	app.use("/queue", queueRouter(queue, state, decidedStore));
 	app.use("/shelf", shelfRouter(state, decidedStore));
+	app.use("/events", eventsRouter());
 	app.use("/audit", auditRouter(auditStore));
 	app.use(
 		"/admin",
-		adminRouter(state, auditStore, queue, [DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH], decidedStore),
+		adminRouter(
+			state,
+			auditStore,
+			queue,
+			[DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH, CONFLICT_LOG_PATH],
+			decidedStore,
+		),
 	);
 	app.use(
-		"/account/github",
-		githubAccountRouter(
-			refreshDeps,
-			githubToken,
-			fetchAuthenticatedUser,
-			(token) => listRepositories(new Octokit({ auth: token })),
-			webhookConfig,
+		"/account/llm",
+		llmAccountRouter(
+			llmAccountState,
+			LLM_ACCOUNT_PATH,
+			llmProviderHolder,
+			buildLlmProviderFromAccount,
+			() => resolveLlmProvider(process.env),
 		),
 	);
 
@@ -193,7 +289,7 @@ async function main(): Promise<void> {
 		const repo = accountState.current?.selectedRepo;
 		if (repo === undefined) return;
 		enqueueRefresh(repo.owner, repo.name, refreshDeps).catch((err: unknown) => {
-			if (err instanceof NeedsReconnectError) {
+			if (err instanceof InstallationRevokedError) {
 				console.warn(`Reconciliation poll paused for ${repo.owner}/${repo.name}: ${err.message}`);
 				return;
 			}
@@ -205,6 +301,18 @@ async function main(): Promise<void> {
 		});
 	}, RECONCILE_INTERVAL_MS);
 	reconcileTimer.unref();
+
+	// Keeps queued PRs from drifting far behind main while they wait their turn — a bundle
+	// stuck behind several others that land ahead of it would otherwise only get checked (and
+	// fast-forwarded) once dequeueNext() finally reaches it, by which point "behind" may have
+	// calcified into a real "dirty" conflict needing the in-process hunk resolver instead of a
+	// free merge.
+	const queueRefreshTimer = setInterval(() => {
+		queue.refreshQueuedBranches().catch((err: unknown) => {
+			console.error("Queue branch refresh failed:", err);
+		});
+	}, QUEUE_REFRESH_INTERVAL_MS);
+	queueRefreshTimer.unref();
 
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);

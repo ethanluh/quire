@@ -29,6 +29,12 @@ export class AnthropicLlmProvider implements LlmProvider {
 		return this._calls;
 	}
 
+	get modelKey(): string {
+		return `anthropic:${this.model}`;
+	}
+
+	readonly supportsEmbeddings = false;
+
 	async complete(messages: ReadonlyArray<LlmMessage>, opts?: LlmCallOptions): Promise<string> {
 		const system = messages.find((m) => m.role === "system")?.content;
 		const turns = messages
@@ -57,10 +63,10 @@ export class AnthropicLlmProvider implements LlmProvider {
 		return text;
 	}
 
-	// Anthropic has no embeddings endpoint. textSimilarity() (similarity.ts) already
-	// falls back to Jaccard similarity over the real extracted-effect text whenever
-	// embed() reports all-zero vectors, so returning [] here routes straight to that
-	// existing, tested path instead of faking a vector.
+	// Anthropic has no embeddings endpoint (supportsEmbeddings = false above), so
+	// clusterPRs() (similarity.ts) never actually calls this — it routes clustering
+	// through an LLM classification call (clusterClassifier.ts) instead. Returning []
+	// rather than a fabricated vector is just defensive, for any other caller of embed().
 	async embed(_text: string): Promise<ReadonlyArray<number>> {
 		return [];
 	}

@@ -7,12 +7,35 @@ import type { AuditStore } from "../gate/auditStore.js";
 import { runGate } from "../gate/gate.js";
 import { buildBundles, type BundleConfig } from "../bundle/bundler.js";
 import { runCheapScreen } from "../drift/screen.js";
-import { buildReviewCard } from "../review/card.js";
+import { buildReviewCard, computeInputsHash, reuseReviewCard } from "../review/card.js";
+import { PrEffectCache } from "../cache/prCache.js";
 
 export interface PipelineConfig {
 	gate: GateConfig;
 	bundle: BundleConfig;
 }
+
+export interface PipelineRunDeps {
+	provider: LlmProvider;
+	analyzer: StaticAnalyzer;
+	auditStore: AuditStore;
+	// Ephemeral by default: with no cache passed in, every PR is always a cache miss,
+	// reproducing today's "always extract, always cluster fresh" behavior exactly.
+	prCache?: PrEffectCache;
+	// Optional: instrumentation is a pluggable add-on, not a hard dependency for the
+	// pipeline to run. Omitting it (or the caller's sink lacking a method) is a no-op.
+	sink?: InstrumentationSink;
+}
+
+// The previous call's bundles/cards for this same PR set, used to seed clustering and
+// skip re-screening bundles that didn't change. Empty by default, which reproduces
+// today's full-batch clustering and full re-screening exactly.
+export interface PriorPipelineRun {
+	bundles: ReadonlyArray<Bundle>;
+	cards: ReadonlyMap<string, ReviewCard>;
+}
+
+const EMPTY_PRIOR_RUN: PriorPipelineRun = { bundles: [], cards: new Map() };
 
 export interface PipelineResult {
 	cards: ReadonlyArray<ReviewCard>;
@@ -42,13 +65,11 @@ async function logSafely(call: (() => Promise<void> | void) | undefined): Promis
 export async function orchestratePipeline(
 	prs: ReadonlyArray<PullRequest>,
 	config: PipelineConfig,
-	provider: LlmProvider,
-	analyzer: StaticAnalyzer,
-	auditStore: AuditStore,
-	// Optional: instrumentation is a pluggable add-on, not a hard dependency for the
-	// pipeline to run. Omitting it (or the caller's sink lacking a method) is a no-op.
-	sink?: InstrumentationSink,
+	deps: PipelineRunDeps,
+	priorRun: PriorPipelineRun = EMPTY_PRIOR_RUN,
 ): Promise<PipelineResult> {
+	const { provider, analyzer, auditStore, sink } = deps;
+	const prCache = deps.prCache ?? new PrEffectCache();
 	const passed: PullRequest[] = [];
 	const rejected: PullRequest[] = [];
 	const shadowed: PullRequest[] = [];
@@ -84,7 +105,7 @@ export async function orchestratePipeline(
 	let extractionError: string | undefined;
 	try {
 		const { bundles: builtBundles, effectsByPr, extractionFailures, clusteringFailures } = await buildBundles(
-			passed, provider, config.bundle,
+			passed, provider, config.bundle, prCache, priorRun.bundles,
 		);
 		bundles.push(...builtBundles);
 
@@ -104,6 +125,20 @@ export async function orchestratePipeline(
 		}
 
 		for (const bundle of bundles) {
+			// computeInputsHash proves whether blastRadius/flags/drift would come out
+			// identical to the prior run without recomputing them — a strictly stronger
+			// check than "membership + reextraction" (it also catches same-members-same-
+			// headShas-but-different-effectSummary, and stays correct if the drift screen
+			// ever grows a new input this hash doesn't yet cover... though it would need
+			// updating then too). directionSummary is excluded on purpose (see
+			// reuseReviewCard) so a declaredDirection-only edit is never served stale.
+			const priorCard = priorRun.cards.get(bundle.id);
+			const canReuse = priorCard !== undefined && priorCard.inputsHash === computeInputsHash(bundle);
+			if (canReuse) {
+				cards.push(reuseReviewCard(bundle, priorCard));
+				continue;
+			}
+
 			const driftVerdicts = new Map<string, DriftVerdict>();
 			for (const member of bundle.members) {
 				const rawClauses = effectsByPr.get(member.id) ?? [];

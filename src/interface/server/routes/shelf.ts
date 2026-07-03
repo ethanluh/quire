@@ -24,6 +24,11 @@ export function shelfRouter(state: ServerState, decidedStore: DecidedPrStore): R
 			// webhook/reconciliation refresh would immediately treat them as still-decided
 			// and exclude them again.
 			state.cards.set(bundleId, shelved.card);
+			// Restore the full bundle too, in case a repo refresh swept state.bundles while
+			// this bundle sat on the shelf (clearRepoFromQueue doesn't know about the shelf).
+			if (shelved.bundle !== undefined) {
+				state.bundles.set(bundleId, shelved.bundle);
+			}
 			for (const prId of shelved.memberPrIds) {
 				await decidedStore.clearDecided(prId);
 			}

@@ -1,37 +1,21 @@
-import { randomBytes } from "node:crypto";
+import { parse } from "cookie";
 import { Router } from "express";
-import { z } from "zod";
-import { Octokit } from "@octokit/rest";
-import type { ConnectedAccount } from "../../../engine/github/account.js";
-import { saveAccount, clearAccount } from "../../../engine/github/account.js";
-import type { GitHubClientHolder } from "../../../engine/github/clientHolder.js";
-import { OctokitGitHubClient } from "../../../engine/github/octokitClient.js";
-import { StubGitHubClient } from "../../../engine/github/stubClient.js";
+import type { RequestHandler } from "express";
+import type { Allowlist } from "../allowlist.js";
+import type { OAuthDeps } from "../../../engine/github/oauth.js";
+import { OAuthExchangeError } from "../../../engine/github/oauth.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
-import type { RepoSummary } from "../../../engine/github/repos.js";
-import { OAuthExchangeError } from "../../../engine/github/oauth.js";
-import { clearRepoFromQueue, enqueueRefresh } from "../refreshRepoQueue.js";
-import type { RefreshDeps } from "../refreshRepoQueue.js";
-import { localOnly } from "../middleware/localOnly.js";
-import { requireAdminHeader } from "../middleware/requireAdminHeader.js";
-import { validateBody } from "../middleware/validation.js";
+import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
+import { SESSION_COOKIE_NAME, SESSION_TTL_MS, createSession, verifySession } from "../session.js";
+import { cookieOptions, mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
 
-const ConnectSchema = z.object({
-	token: z.string().min(1),
-});
-
-const SelectRepoSchema = z.object({
-	owner: z.string().min(1),
-	name: z.string().min(1),
-});
-
+const OAUTH_STATE_COOKIE_NAME = "quire_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
-
-export interface WebhookConfig {
-	publicUrl: string;
-	secret: string;
-}
+// Fallback when GitHub doesn't return expires_in (classic non-expiring user tokens) — long
+// enough to be useful for a session, short enough that a leaked in-memory entry doesn't
+// linger indefinitely.
+const DEFAULT_USER_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 // Where the OAuth callback sends the browser once it's done — GitHub's redirect is a
 // top-level navigation, so the result is reported via a query param on the app's own
@@ -42,250 +26,99 @@ function oauthResultRedirectUrl(status: "connected" | "error", reason: string | 
 	return `/?${params.toString()}`;
 }
 
-async function deleteWebhookBestEffort(
-	clientHolder: GitHubClientHolder,
-	repo: { owner: string; name: string; webhookId: number },
-): Promise<void> {
-	await clientHolder.deleteWebhook(repo.owner, repo.name, repo.webhookId).catch((err: unknown) => {
-		console.error(`Failed to delete webhook for ${repo.owner}/${repo.name}:`, err);
-	});
-}
-
-function buildClientForFallback(fallbackToken: string | undefined): OctokitGitHubClient | StubGitHubClient {
-	return fallbackToken !== undefined && fallbackToken !== ""
-		? new OctokitGitHubClient(new Octokit({ auth: fallbackToken }))
-		: new StubGitHubClient();
-}
-
-function buildConnectedAccount(
-	identity: VerifiedTokenIdentity,
-	token: string,
-	extra: { refreshToken?: string; tokenExpiresAt?: string } = {},
-): ConnectedAccount {
-	return {
-		login: identity.login,
-		token,
-		scopes: identity.scopes,
-		connectedAt: new Date().toISOString(),
-		...extra,
-	};
-}
-
-// `refreshDeps` bundles the account's live state, its on-disk copy, the swappable GitHub
-// client, OAuth config, the decided-PR store, and the pipeline — the same dependency set
-// POST /repos/select needs to fetch-and-ingest, and the same one the webhook route and
-// reconciliation poll need to trigger that exact same refresh from outside this router.
-export function githubAccountRouter(
-	refreshDeps: RefreshDeps,
-	fallbackToken: string | undefined,
-	verifyToken: (token: string) => Promise<VerifiedTokenIdentity>,
-	listRepos: (token: string) => Promise<ReadonlyArray<RepoSummary>>,
-	webhookConfig: WebhookConfig | undefined,
+// Identity first, API access second: "Sign in with GitHub" using the GitHub App's own
+// OAuth (protocol-identical to a standalone OAuth App's, just with no scope requested —
+// GitHub Apps take their user-to-server permissions from the App's own configuration, not
+// a scope param). The resulting token is used here to resolve who is signing in via
+// verifyIdentity, then cached in-memory only (userTokenCache — never persisted to disk or
+// placed in the session cookie) purely so the repo picker can enrich with the user's
+// starred/pinned repos later; it is never used for anything ingestion-related. That access
+// comes from a separate installation binding (routes/githubApp.ts), which is why this
+// router still has no PAT-based /connect or any /repos*/disconnect routes — those belonged
+// to the old token-owns-API-access model this replaces.
+export function accountRouter(
+	oauth: OAuthDeps,
+	verifyIdentity: (token: string) => Promise<VerifiedTokenIdentity>,
+	allowlist: Allowlist,
+	sessionSecret: string,
+	secureCookies: boolean,
+	requireSession: RequestHandler,
+	userTokenCache: UserTokenCache,
 ): Router {
 	const router = Router();
-	const { accountState, accountPath, clientHolder, oauth } = refreshDeps;
 
-	interface PendingOAuthState {
-		state: string;
-		expiresAt: number;
-	}
-	let pendingOAuth: PendingOAuthState | undefined;
+	// GET, not POST: unlike the old dual-purpose flow, this has no side effect worth CSRF
+	// protection — it only mints a nonce and returns GitHub's own authorize URL. GitHub's
+	// login screen is the real gate; a page tricking a visitor into "starting" a login (via
+	// GET or POST) at worst just opens a GitHub authorize prompt that bounces back to
+	// Quire's own sign-in page.
+	//
+	// The nonce lives in a short-lived cookie scoped to the browser that started this flow,
+	// not a server-wide variable — this endpoint is reachable by anyone (that's the point,
+	// it's how you log in), so a shared singleton here would let any visitor silently
+	// invalidate every other in-flight login on the server just by hitting this route.
+	// mintOrReuseStateCookie reuses an already-pending nonce from this same browser instead
+	// of always minting fresh, so a double-click or a second tab doesn't orphan the first.
+	router.get("/oauth/start", (req, res) => {
+		const state = mintOrReuseStateCookie(req, res, OAUTH_STATE_COOKIE_NAME, OAUTH_STATE_TTL_MS, secureCookies);
+		res.json({ authorizeUrl: oauth.buildAuthorizeUrl(oauth.config, oauth.redirectUri, state) });
+	});
 
-	router.get("/status", (_req, res) => {
-		const account = accountState.current;
-		if (account === undefined) {
-			res.json({ connected: false, oauthAvailable: oauth !== undefined });
+	router.get("/oauth/callback", async (req, res) => {
+		const { code, state: returnedState } = req.query;
+		const pendingState = consumeStateCookie(req, res, OAUTH_STATE_COOKIE_NAME);
+
+		if (
+			pendingState === undefined ||
+			typeof code !== "string" ||
+			typeof returnedState !== "string" ||
+			returnedState !== pendingState
+		) {
+			res.redirect(oauthResultRedirectUrl("error", "the sign-in request expired or was invalid"));
 			return;
 		}
-		res.json({
-			connected: true,
-			login: account.login,
-			scopes: account.scopes,
-			connectedAt: account.connectedAt,
-			selectedRepo: account.selectedRepo,
-			oauthAvailable: oauth !== undefined,
-			needsReconnect: account.needsReconnect ?? false,
-		});
-	});
 
-	router.get("/repos", localOnly, requireAdminHeader, async (_req, res, next) => {
 		try {
-			const account = accountState.current;
-			if (account === undefined) {
-				res.status(400).json({ error: "Connect a GitHub account first" });
-				return;
-			}
-			const repos = await listRepos(account.token);
-			res.json({ repos, selected: account.selectedRepo });
-		} catch (err) {
-			next(err);
-		}
-	});
+			const { accessToken, tokenExpiresAt } = await oauth.exchangeCodeForToken(oauth.config, code, oauth.redirectUri);
+			const identity = await verifyIdentity(accessToken);
 
-	router.post(
-		"/repos/select",
-		localOnly,
-		requireAdminHeader,
-		validateBody(SelectRepoSchema),
-		async (req, res, next) => {
-			try {
-				const account = accountState.current;
-				if (account === undefined) {
-					res.status(400).json({ error: "Connect a GitHub account first" });
-					return;
-				}
-				const { owner, name } = req.body as z.infer<typeof SelectRepoSchema>;
-				const previousRepo = account.selectedRepo;
-
-				// Drop the previously selected repo's bundles; refreshRepoQueue itself
-				// handles clearing (and re-populating) the newly selected repo's own entries.
-				clearRepoFromQueue(refreshDeps.state, previousRepo);
-				const summary = await enqueueRefresh(owner, name, refreshDeps);
-
-				if (previousRepo?.webhookId !== undefined) {
-					await deleteWebhookBestEffort(clientHolder, {
-						owner: previousRepo.owner,
-						name: previousRepo.name,
-						webhookId: previousRepo.webhookId,
-					});
-				}
-
-				let webhookRegistered = false;
-				let webhookError: string | undefined;
-				let webhookId: number | undefined;
-				if (webhookConfig !== undefined) {
-					try {
-						const hook = await clientHolder.createWebhook(owner, name, {
-							url: `${webhookConfig.publicUrl}/webhooks/github`,
-							secret: webhookConfig.secret,
-						});
-						webhookId = hook.id;
-						webhookRegistered = true;
-					} catch (err) {
-						webhookError = err instanceof Error ? err.message : String(err);
-					}
-				}
-
-				const current = accountState.current;
-				if (current === undefined) {
-					if (webhookId !== undefined) {
-						await deleteWebhookBestEffort(clientHolder, { owner, name, webhookId });
-					}
-					throw new Error("Account was disconnected mid-request");
-				}
-				const updated: ConnectedAccount = {
-					...current,
-					selectedRepo: { owner, name, ...(webhookId !== undefined ? { webhookId } : {}) },
-				};
-				accountState.current = updated;
-				await saveAccount(accountPath, updated);
-
-				res.json({
-					selected: updated.selectedRepo,
-					...summary,
-					webhookRegistered,
-					...(webhookError !== undefined ? { webhookError } : {}),
-					...(webhookConfig === undefined ? { webhookDisabledReason: "QUIRE_PUBLIC_URL/GITHUB_WEBHOOK_SECRET not configured" } : {}),
-				});
-			} catch (err) {
-				next(err);
-			}
-		},
-	);
-
-	router.post("/connect", localOnly, requireAdminHeader, validateBody(ConnectSchema), async (req, res, next) => {
-		try {
-			const { token } = req.body as z.infer<typeof ConnectSchema>;
-			const identity = await verifyToken(token);
-
-			accountState.current = buildConnectedAccount(identity, token);
-			await saveAccount(accountPath, accountState.current);
-			clientHolder.setClient(new OctokitGitHubClient(new Octokit({ auth: token })));
-
-			const account = accountState.current;
-			res.json({ connected: true, login: account.login, scopes: account.scopes, connectedAt: account.connectedAt });
-		} catch (err) {
-			if (err instanceof InvalidTokenError) {
-				res.status(400).json({ error: err.message });
-				return;
-			}
-			next(err);
-		}
-	});
-
-	router.post("/disconnect", localOnly, requireAdminHeader, async (_req, res, next) => {
-		try {
-			const previousRepo = accountState.current?.selectedRepo;
-			if (previousRepo?.webhookId !== undefined) {
-				await deleteWebhookBestEffort(clientHolder, {
-					owner: previousRepo.owner,
-					name: previousRepo.name,
-					webhookId: previousRepo.webhookId,
-				});
-			}
-			accountState.current = undefined;
-			await clearAccount(accountPath);
-			clientHolder.setClient(buildClientForFallback(fallbackToken));
-			res.json({ connected: false });
-		} catch (err) {
-			next(err);
-		}
-	});
-
-	if (oauth !== undefined) {
-		router.post("/oauth/start", localOnly, requireAdminHeader, (_req, res) => {
-			// Idempotent while a flow is still pending: a double-click before the page
-			// navigates away, or a second tab, reuses the same nonce instead of minting a
-			// fresh one that would silently orphan the first flow's eventual callback.
-			if (pendingOAuth === undefined || Date.now() >= pendingOAuth.expiresAt) {
-				pendingOAuth = { state: randomBytes(32).toString("hex"), expiresAt: Date.now() + OAUTH_STATE_TTL_MS };
-			}
-			res.json({ authorizeUrl: oauth.buildAuthorizeUrl(oauth.config, oauth.redirectUri, pendingOAuth.state) });
-		});
-
-		router.get("/oauth/callback", localOnly, async (req, res) => {
-			const { code, state: returnedState } = req.query;
-			const pending = pendingOAuth;
-			// Consumed before the exchange awaits, so a concurrent double-submit of the same
-			// code+state can't both pass this check — only the first request still sees it.
-			pendingOAuth = undefined;
-
-			if (
-				pending === undefined ||
-				typeof code !== "string" ||
-				typeof returnedState !== "string" ||
-				returnedState !== pending.state ||
-				Date.now() >= pending.expiresAt
-			) {
-				res.redirect(oauthResultRedirectUrl("error", "the connection request expired or was invalid"));
-				return;
-			}
-
-			try {
-				const { accessToken, refreshToken, tokenExpiresAt } = await oauth.exchangeCodeForToken(
-					oauth.config,
-					code,
-					oauth.redirectUri,
+			if (!allowlist.isAllowed(identity.login)) {
+				res.redirect(
+					oauthResultRedirectUrl("error", "this GitHub account is not authorized to use this Quire instance"),
 				);
-				const identity = await verifyToken(accessToken);
-
-				accountState.current = buildConnectedAccount(identity, accessToken, {
-					...(refreshToken !== undefined ? { refreshToken } : {}),
-					...(tokenExpiresAt !== undefined ? { tokenExpiresAt } : {}),
-				});
-				await saveAccount(accountPath, accountState.current);
-				clientHolder.setClient(new OctokitGitHubClient(new Octokit({ auth: accessToken })));
-
-				res.redirect(oauthResultRedirectUrl("connected", undefined));
-			} catch (err) {
-				const reason =
-					err instanceof OAuthExchangeError || err instanceof InvalidTokenError
-						? err.message
-						: "GitHub connection failed unexpectedly";
-				res.redirect(oauthResultRedirectUrl("error", reason));
+				return;
 			}
-		});
-	}
+
+			const expiresAt = tokenExpiresAt !== undefined ? new Date(tokenExpiresAt).getTime() : Date.now() + DEFAULT_USER_TOKEN_TTL_MS;
+			userTokenCache.set(identity.login, { accessToken, expiresAt });
+
+			res.cookie(SESSION_COOKIE_NAME, createSession(identity.login, sessionSecret), cookieOptions(secureCookies, SESSION_TTL_MS));
+			res.redirect(oauthResultRedirectUrl("connected", undefined));
+		} catch (err) {
+			const reason =
+				err instanceof OAuthExchangeError || err instanceof InvalidTokenError
+					? err.message
+					: "sign-in failed unexpectedly";
+			res.redirect(oauthResultRedirectUrl("error", reason));
+		}
+	});
+
+	// Cheap "am I logged in" check for the frontend's initial render. Unlike every other
+	// route in this file, this one DOES require a valid session — applied per-route
+	// (rather than mounting this whole router behind requireSession) so /oauth/start,
+	// /oauth/callback, and /logout stay reachable without one.
+	router.get("/session", requireSession, (_req, res) => {
+		res.json({ login: res.locals.login });
+	});
+
+	router.post("/logout", (req, res) => {
+		const token = parse(req.headers.cookie ?? "")[SESSION_COOKIE_NAME];
+		const payload = token !== undefined ? verifySession(token, sessionSecret) : undefined;
+		if (payload !== undefined) userTokenCache.clear(payload.login);
+
+		res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
+		res.json({ loggedOut: true });
+	});
 
 	return router;
 }

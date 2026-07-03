@@ -15,6 +15,7 @@ function makeBundle(members: PullRequest[] = []): Bundle {
 function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
 	return {
 		id: "pr-1", repoOwner: "org", repoName: "repo", number: 1,
+		headSha: "sha-1",
 		declaredDirection: "add passwordless auth",
 		diff: EMPTY_DIFF, filesTouched: ["src/auth.ts"],
 		symbolsTouched: [], testNamesChanged: [], ciStatus: "success",
@@ -110,6 +111,7 @@ describe("runCheapScreen — INV-3: clean only when zero signals", () => {
 		if (verdict.status === "flagged") {
 			const signal = verdict.signals.find(s => s.kind === "effectList");
 			expect(signal).toBeDefined();
+			expect(signal?.prId).toBe(pr.id);
 		}
 	});
 

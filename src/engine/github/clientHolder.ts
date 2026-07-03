@@ -1,5 +1,6 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
-import type { CreatedWebhook, GitHubClient, ListOpenPullRequestsResult, RawPRPayload } from "./client.js";
+import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
+import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 
 // MergeQueue is constructed once at startup holding a reference to a GitHubClient.
 // Connecting/disconnecting an account needs to change which client that reference
@@ -29,6 +30,10 @@ export class GitHubClientHolder implements GitHubClient {
 		return this.current.mergePullRequest(owner, repo, prNumber);
 	}
 
+	closePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+		return this.current.closePullRequest(owner, repo, prNumber);
+	}
+
 	revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string> {
 		return this.current.revertPullRequest(owner, repo, prNumber);
 	}
@@ -43,11 +48,56 @@ export class GitHubClientHolder implements GitHubClient {
 		return this.current.postReviewCardComment(owner, repo, prNumber, action, card);
 	}
 
-	createWebhook(owner: string, repo: string, config: { url: string; secret: string }): Promise<CreatedWebhook> {
-		return this.current.createWebhook(owner, repo, config);
+	getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined> {
+		return this.current.getFileContent(owner, repo, path);
 	}
 
-	deleteWebhook(owner: string, repo: string, hookId: number): Promise<void> {
-		return this.current.deleteWebhook(owner, repo, hookId);
+	getDefaultBranch(owner: string, repo: string): Promise<string> {
+		return this.current.getDefaultBranch(owner, repo);
+	}
+
+	commitFileToBranch(
+		owner: string,
+		repo: string,
+		branch: string,
+		path: string,
+		content: string,
+		message: string,
+	): Promise<void> {
+		return this.current.commitFileToBranch(owner, repo, branch, path, content, message);
+	}
+
+	findOrCreatePullRequest(
+		owner: string,
+		repo: string,
+		params: { head: string; base: string; title: string; body: string },
+	): Promise<FoundOrCreatedPullRequest> {
+		return this.current.findOrCreatePullRequest(owner, repo, params);
+	}
+
+	getMergeability(owner: string, repo: string, prNumber: number): Promise<MergeabilityResult> {
+		return this.current.getMergeability(owner, repo, prNumber);
+	}
+
+	updateBranch(owner: string, repo: string, prNumber: number): Promise<void> {
+		return this.current.updateBranch(owner, repo, prNumber);
+	}
+
+	getConflictTrees(owner: string, repo: string, prNumber: number): Promise<ConflictTrees> {
+		return this.current.getConflictTrees(owner, repo, prNumber);
+	}
+
+	getBlobContent(owner: string, repo: string, sha: string): Promise<string> {
+		return this.current.getBlobContent(owner, repo, sha);
+	}
+
+	commitResolvedFiles(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		baseTipSha: string,
+		files: ReadonlyArray<ResolvedFile>,
+	): Promise<void> {
+		return this.current.commitResolvedFiles(owner, repo, prNumber, baseTipSha, files);
 	}
 }

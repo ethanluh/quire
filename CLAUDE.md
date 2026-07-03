@@ -15,9 +15,10 @@ Every PR body must also include a `<!-- declared-direction: ... -->` HTML commen
 ## Running and testing locally
 
 - **Setup**: `npm install`.
-- **Dev server**: `npm run dev` (runs `tsx src/interface/server/index.ts`). Serves the UI and API at `http://localhost:3000` (override with `PORT`). There's no database — state persists to the gitignored `data/` directory (`queue.json`, `github-account.json`, `instrumentation/*.ndjson`), created automatically on first run.
-- **GitHub auth**, in priority order: a connected account (set up through the UI, persisted to `data/github-account.json`) beats the `GITHUB_TOKEN` env var beats the built-in `StubGitHubClient` (mock data, no token needed — fine for exercising pipeline logic, but doesn't ingest real PRs).
-- **Dogfooding on the Quire repo itself**: open `http://localhost:3000`, use the account panel to connect a GitHub PAT with `repo` scope, then select `quire` from the repo list. Selecting a repo immediately fetches its open PRs and ingests them into the queue. Its own PRs must carry the `<!-- declared-direction: ... -->` marker (see "Pull request discipline" above) or they're silently skipped. Note the account/repo-selection endpoints are gated to localhost and require a same-origin header — they're only reachable through Quire's own UI, not arbitrary scripts.
+- **Dev server**: `npm run dev` (runs `tsx src/interface/server/index.ts`). Serves the UI and API at `http://localhost:3000` (override with `PORT`). There's no database — state persists to the gitignored `data/` directory (`queue.json`, `installation.json`, `instrumentation/*.ndjson`), created automatically on first run.
+- **GitHub auth is a GitHub App, not a personal token.** Register one (see `.env.example`'s `GITHUB_APP_*` vars and this file's "GitHub App setup" pointer once written) and set the resulting env vars — without them the server refuses to start. Sign-in uses the App's own OAuth (identity only); actual API access comes from an installation bound via the Account tab's "Install GitHub App" button, persisted to `data/installation.json`. There is no more `GITHUB_TOKEN`/PAT fallback and no `StubGitHubClient`-backed demo login — the app requires a real (even if locally-scoped) GitHub App to sign in at all.
+- **Access control**: every route except the two login-establishing ones (`/account/github/oauth/start`, `/account/github/oauth/callback`) and the HMAC-verified webhook route requires a signed session cookie (`middleware/requireSession.ts`), gated by `QUIRE_ALLOWED_GITHUB_LOGINS`. This replaces the old localhost-only/`X-Quire-Admin`-header model — Quire is designed to be reachable off the box it runs on now.
+- **Dogfooding on the Quire repo itself**: open `http://localhost:3000`, sign in with GitHub, install the GitHub App on your account/org from Settings (gear icon in the header), then select `quire` from the repo list. Selecting a repo immediately fetches its open PRs and ingests them into the queue. Its own PRs must carry the `<!-- declared-direction: ... -->` marker (see "Pull request discipline" above) or they're silently skipped.
 - **Automated tests**: `npm test` (Jest via `ts-jest`, ESM), `npm run build` (`tsc`), `npm run lint` (`tsc --noEmit`).
 
 ## Code style
@@ -48,7 +49,7 @@ The pipeline runs top to bottom:
 - **INV-2** — effect-list extraction runs without seeing `declaredDirection`. Feed the declaration only as a comparison target *after* extraction.
 - **INV-3** — declaration-level disagreement may flag a member; agreement may never clear one. Clearing requires the independent check.
 - **INV-4** — accept operates on bundles; revert operates on individual PRs.
-- **INV-5** — accept enqueues; it does not merge synchronously. Every accept is reversible until the merge queue lands it.
+- **INV-5** — accept enqueues; it does not merge synchronously. Every accept is reversible until the merge queue lands it. *Exception: an explicit, opt-in `autoMergeOnAccept` account setting drains the queue immediately on accept for users who want that; default is off.*
 - **INV-6** — surface what the system could not clear. Disclose the residual honestly on the card.
 
 ### Module boundaries

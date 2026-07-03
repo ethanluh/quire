@@ -2,6 +2,10 @@ import type { Bundle, ReviewCard } from "../../engine/types/core.js";
 
 export interface ShelvedBundle {
 	card: ReviewCard;
+	// Optional only so existing lightweight test fixtures stay valid; every real defer
+	// (gestures.ts) always sets it. Kept alongside `state.bundles` rather than relying on
+	// it, since clearRepoFromQueue sweeps state.bundles per-repo independent of shelf status.
+	bundle?: Bundle;
 	// Kept alongside the card (not just on `Bundle`, which is dropped from state on defer)
 	// so promoting a bundle back to review can clear its members' decided-PR record.
 	memberPrIds: ReadonlyArray<string>;
