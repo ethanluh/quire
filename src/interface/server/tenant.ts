@@ -6,8 +6,11 @@ import type { GitHubClient } from "../../engine/github/client.js";
 import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
 import { StubGitHubClient } from "../../engine/github/stubClient.js";
 import { loadInstallation } from "../../engine/github/installation.js";
-import { loadPreferences, savePreferences } from "../../engine/github/preferences.js";
-import { buildInstallationClient, buildInstallationOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
+import {
+	buildInstallationClient,
+	buildInstallationOctokit,
+	getInstallationAccount,
+} from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
 import { listInstallationRepositories } from "../../engine/github/repos.js";
 import type { RepoSummary } from "../../engine/github/repos.js";
@@ -21,7 +24,7 @@ import type { StaticAnalyzer } from "../../engine/drift/footprint/analyzer.js";
 import { loadAccount as loadLlmAccount } from "../../engine/llm/account.js";
 import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
-import { createAccountState } from "./accountState.js";
+import { createAccountState, activeInstallation } from "./accountState.js";
 import type { AccountState } from "./accountState.js";
 import { createLlmAccountState } from "./llmAccountState.js";
 import type { LlmAccountState } from "./llmAccountState.js";
@@ -99,7 +102,6 @@ function sanitizeLogin(login: string): string {
 async function loadTenant(login: string, shared: TenantSharedConfig): Promise<TenantContext> {
 	const dir = join(shared.dataDir, "users", login);
 	const installationPath = join(dir, "installation.json");
-	const preferencesPath = join(dir, "preferences.json");
 	const llmAccountPath = join(dir, "llm-account.json");
 	const queuePath = join(dir, "queue.json");
 	const decidedPrsPath = join(dir, "decided-prs.json");
@@ -110,15 +112,14 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 	const conflictLogPath = join(dir, "instrumentation/conflict-resolution.ndjson");
 	const auditLogPath = join(dir, "instrumentation/audit.ndjson");
 
-	const installationBinding = await loadInstallation(installationPath);
-	const preferences = await loadPreferences(preferencesPath);
-	const accountState = createAccountState(installationBinding, preferences);
-	// Backfills this tenant's preferences.json from an installation bound before it
-	// existed — persisted once here so the values survive even if the server restarts
-	// between now and the next /settings or /repos/select call (both of which keep the
-	// file in sync going forward). See index.ts's prior single-tenant version of this
-	// same backfill.
-	await savePreferences(preferencesPath, accountState.preferences);
+	// One operator (this tenant) can bind several GitHub App installations — their personal
+	// account plus N orgs — and see a merged repo picker across all of them (see
+	// installation.ts's InstallationAccountState). selectedRepo/autoMergeOnAccept/
+	// flagConflictsForFleet live on that always-present account-wide state, not on any one
+	// installation, so they already survive an individual installation's disconnect/
+	// reconnect without a separate preferences store.
+	const installationAccountState = await loadInstallation(installationPath);
+	const accountState = createAccountState(installationAccountState);
 
 	const decidedStore = new DecidedPrStore(decidedPrsPath);
 	await decidedStore.load();
@@ -129,8 +130,9 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 	const auditStore = await loadAuditStore(auditLogPath);
 
 	let initialClient: GitHubClient;
-	if (installationBinding !== undefined) {
-		initialClient = buildInstallationClient(shared.appConfig, installationBinding.installationId);
+	const active = activeInstallation(accountState.current);
+	if (active !== undefined) {
+		initialClient = buildInstallationClient(shared.appConfig, active.installationId);
 	} else {
 		initialClient = new StubGitHubClient();
 	}
@@ -148,7 +150,7 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 		llmProviderHolder,
 		conflictLogPath,
 		DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
-		() => accountState.current?.flagConflictsForFleet === true,
+		() => accountState.current.flagConflictsForFleet === true,
 	);
 	await queue.load();
 
@@ -169,7 +171,6 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 	const refreshDeps: RefreshDeps = {
 		accountState,
 		accountPath: installationPath,
-		preferencesPath,
 		clientHolder,
 		appConfig: shared.appConfig,
 		decidedStore,
@@ -200,8 +201,9 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 		githubAppRouter(
 			refreshDeps,
 			shared.appSlug,
-			shared.appConfig,
-			(installationId) => listInstallationRepositories(buildInstallationOctokit(shared.appConfig, installationId)),
+			(installationId) => buildInstallationClient(shared.appConfig, installationId),
+			(installationId, accountLogin) =>
+				listInstallationRepositories(buildInstallationOctokit(shared.appConfig, installationId), installationId, accountLogin),
 			(installationId) => getInstallationAccount(shared.appConfig, installationId),
 			shared.isProduction,
 			shared.userTokenCache,
@@ -259,13 +261,16 @@ export class TenantRegistry {
 		return [...this.tenants.values()];
 	}
 
-	// A linear scan over (typically a handful of) tenants instead of a maintained reverse
-	// index — accountState.current is the one place installationId already lives, kept up
-	// to date by githubApp.ts's existing routes, so there's nothing else that could drift
-	// out of sync with it.
+	// A linear scan over (typically a handful of) tenants, each scanning its own (typically
+	// small) installations[] array, instead of a maintained reverse index —
+	// accountState.current.installations is the one place installationId already lives, kept
+	// up to date by githubApp.ts's existing routes, so there's nothing else that could drift
+	// out of sync with it. One tenant can bind several installations, so this can't stop at
+	// the first tenant whose *selected* installation doesn't match — it has to check every
+	// installation that tenant has ever bound.
 	findByInstallationId(installationId: number): TenantContext | undefined {
 		for (const tenant of this.tenants.values()) {
-			if (tenant.accountState.current?.installationId === installationId) return tenant;
+			if (tenant.accountState.current.installations.some((i) => i.installationId === installationId)) return tenant;
 		}
 		return undefined;
 	}

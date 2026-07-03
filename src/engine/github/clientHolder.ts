@@ -18,6 +18,10 @@ export class GitHubClientHolder implements GitHubClient {
 		this.current = client;
 	}
 
+	getClient(): GitHubClient {
+		return this.current;
+	}
+
 	getPullRequest(owner: string, repo: string, prNumber: number): Promise<RawPRPayload> {
 		return this.current.getPullRequest(owner, repo, prNumber);
 	}

@@ -31,18 +31,38 @@ describe("listInstallationRepositories", () => {
 			},
 		]);
 
-		const repos = await listInstallationRepositories(octokit);
+		const repos = await listInstallationRepositories(octokit, 555, "acme-corp");
 
 		expect(repos).toEqual([
-			{ owner: "octocat", name: "hello-world", fullName: "octocat/hello-world", private: false, defaultBranch: "main", starred: false, pinned: false },
-			{ owner: "octocat", name: "secret-project", fullName: "octocat/secret-project", private: true, defaultBranch: "trunk", starred: false, pinned: false },
+			{
+				owner: "octocat",
+				name: "hello-world",
+				fullName: "octocat/hello-world",
+				private: false,
+				defaultBranch: "main",
+				installationId: 555,
+				accountLogin: "acme-corp",
+				starred: false,
+				pinned: false,
+			},
+			{
+				owner: "octocat",
+				name: "secret-project",
+				fullName: "octocat/secret-project",
+				private: true,
+				defaultBranch: "trunk",
+				installationId: 555,
+				accountLogin: "acme-corp",
+				starred: false,
+				pinned: false,
+			},
 		]);
 	});
 
 	it("returns an empty list when the installation has no accessible repos", async () => {
 		const octokit = makeFakeOctokit([]);
 
-		const repos = await listInstallationRepositories(octokit);
+		const repos = await listInstallationRepositories(octokit, 555, "acme-corp");
 
 		expect(repos).toEqual([]);
 	});
@@ -67,10 +87,20 @@ describe("listInstallationRepositories", () => {
 			},
 		]);
 
-		const repos = await listInstallationRepositories(octokit);
+		const repos = await listInstallationRepositories(octokit, 555, "acme-corp");
 
 		expect(repos).toEqual([
-			{ owner: "octocat", name: "hello-world", fullName: "octocat/hello-world", private: false, defaultBranch: "main", starred: false, pinned: false },
+			{
+				owner: "octocat",
+				name: "hello-world",
+				fullName: "octocat/hello-world",
+				private: false,
+				defaultBranch: "main",
+				installationId: 555,
+				accountLogin: "acme-corp",
+				starred: false,
+				pinned: false,
+			},
 		]);
 	});
 });
@@ -81,6 +111,8 @@ function repo(overrides: Partial<RepoSummary> & { fullName: string }): RepoSumma
 		name: overrides.fullName.split("/")[1] ?? "",
 		private: false,
 		defaultBranch: "main",
+		installationId: 555,
+		accountLogin: "acme-corp",
 		starred: false,
 		pinned: false,
 		...overrides,

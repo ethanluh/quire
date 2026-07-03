@@ -79,7 +79,7 @@ export function webhookRouter(findRefreshDeps: (installationId: number) => Refre
 
 		const parsed = parsePullRequestEvent(payload);
 		const refreshDeps = parsed?.installationId !== undefined ? findRefreshDeps(parsed.installationId) : undefined;
-		const selected = refreshDeps?.accountState.current?.selectedRepo;
+		const selected = refreshDeps?.accountState.current.selectedRepo;
 		if (
 			parsed === undefined ||
 			refreshDeps === undefined ||
