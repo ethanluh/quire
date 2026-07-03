@@ -28,6 +28,8 @@ import type { RawPRPayload } from "../../src/engine/github/client.js";
 import type { InstallationAccount } from "../../src/engine/github/installationClient.js";
 import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
 import type { UserTokenCache } from "../../src/engine/github/userTokenCache.js";
+import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -179,6 +181,7 @@ describe("githubAppRouter", () => {
 			decidedStore,
 			state,
 			pipelineDeps: deps,
+			queue: new MergeQueue(join(dir, "queue.json"), client, new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
 		};
 		const app = express();
 		app.use(express.json());

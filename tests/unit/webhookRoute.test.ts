@@ -18,6 +18,10 @@ import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { InstallationBinding } from "../../src/engine/github/installation.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
+import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
+import type { Bundle, PullRequest } from "../../src/engine/types/core.js";
+import type { MergeabilityResult } from "../../src/engine/types/mergeability.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -57,6 +61,39 @@ function pullRequestEventPayload(owner: string, repo: string, action: string, pr
 	};
 }
 
+function makeQueuedPr(id: string): PullRequest {
+	return {
+		id,
+		repoOwner: "octocat",
+		repoName: "hello-world",
+		number: 1,
+		headSha: "sha-1",
+		declaredDirection: "add passwordless auth",
+		diff: { raw: "", hunks: [] },
+		filesTouched: ["src/auth.ts"],
+		symbolsTouched: [],
+		testNamesChanged: [],
+		ciStatus: "success",
+	};
+}
+
+function makeBundleFor(pr: PullRequest): Bundle {
+	return { id: `bundle-${pr.id}`, direction: pr.declaredDirection, effectSummary: "adds OTP-based login", members: [pr] };
+}
+
+function makeMergeability(overrides: Partial<MergeabilityResult> = {}): MergeabilityResult {
+	return {
+		state: "clean",
+		isFork: false,
+		merged: false,
+		headBranch: "feature",
+		headSha: "sha-1",
+		baseBranch: "main",
+		baseSha: "base-sha",
+		...overrides,
+	};
+}
+
 describe("webhookRouter", () => {
 	let dir: string;
 	let server: Server;
@@ -66,7 +103,9 @@ describe("webhookRouter", () => {
 		if (dir) await rm(dir, { recursive: true, force: true });
 	});
 
-	async function setup(client: StubGitHubClient = new StubGitHubClient(), provider = new StubLlmProvider()): Promise<{ refreshDeps: RefreshDeps }> {
+	async function setup(client: StubGitHubClient = new StubGitHubClient(), provider = new StubLlmProvider()): Promise<{ refreshDeps: RefreshDeps; queue: MergeQueue }> {
+		const queue = new MergeQueue(join(dir, "queue.json"), client, new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson"));
+		await queue.load();
 		const refreshDeps: RefreshDeps = {
 			accountState: createAccountState({
 				installations: [BINDING],
@@ -84,12 +123,13 @@ describe("webhookRouter", () => {
 				auditStore: new AuditStore(),
 				prCache: new PrEffectCache(),
 			},
+			queue,
 		};
 		const app = express();
 		app.use(express.raw({ type: "application/json" }));
 		app.use(webhookRouter((installationId) => (installationId === BINDING.installationId ? refreshDeps : undefined)));
 		server = app.listen(0);
-		return { refreshDeps };
+		return { refreshDeps, queue };
 	}
 
 	async function post(payload: unknown, event: string): Promise<{ status: number; body: unknown }> {
@@ -179,6 +219,57 @@ describe("webhookRouter", () => {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(refreshDeps.decidedStore.isDecided("123")).toBe(false);
 		expect(refreshDeps.state.bundles.size).toBe(1);
+	});
+
+	it("clears a matching \"conflict\" queue entry on synchronize, without merging when autoMergeOnAccept is off", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+		const pr = makeQueuedPr("123");
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundleFor(pr));
+		const blocked = await queue.dequeueNext();
+		expect(blocked?.status).toBe("conflict");
+
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		const { status } = await post(pullRequestEventPayload("octocat", "hello-world", "synchronize", 123), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("queued");
+		expect(client.mergedPrs).toEqual([]);
+	});
+
+	it("also lands the bundle on synchronize when autoMergeOnAccept is on", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { refreshDeps, queue } = await setup(client);
+		refreshDeps.accountState.current.autoMergeOnAccept = true;
+		const pr = makeQueuedPr("123");
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundleFor(pr));
+		const blocked = await queue.dequeueNext();
+		expect(blocked?.status).toBe("conflict");
+
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		const { status } = await post(pullRequestEventPayload("octocat", "hello-world", "synchronize", 123), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("landed");
+		expect(client.mergedPrs).toEqual([`${pr.repoOwner}/${pr.repoName}/${pr.number}`]);
+	});
+
+	it("is a no-op on the queue when a synchronize event's PR has no matching conflict entry", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+
+		const { status } = await post(pullRequestEventPayload("octocat", "hello-world", "synchronize", 123), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(await queue.listEntries()).toHaveLength(0);
 	});
 
 	it("ignores non-pull_request events even when they look like a GitHub payload", async () => {
