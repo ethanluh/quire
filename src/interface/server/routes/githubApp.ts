@@ -9,7 +9,7 @@ import { StubGitHubClient } from "../../../engine/github/stubClient.js";
 import type { GitHubClient } from "../../../engine/github/client.js";
 import type { OAuthDeps } from "../../../engine/github/oauth.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
-import { setUpDeclaredDirectionConvention } from "../../../engine/github/repoSetup.js";
+import { checkDeclaredDirectionConvention, setUpDeclaredDirectionConvention } from "../../../engine/github/repoSetup.js";
 import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
 import { refreshUserTokenFromDisk } from "../../../engine/github/userToken.js";
 import { settleWithConcurrency } from "../../../engine/util/concurrency.js";
@@ -378,6 +378,22 @@ export function githubAppRouter(
 			const { owner, name } = req.body as z.infer<typeof RepoIdentifierSchema>;
 			const result = await setUpDeclaredDirectionConvention(clientHolder, owner, name);
 			res.json(result);
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// Read-only counterpart to /repos/setup — lets the client check whether the setup PR is
+	// needed before asking the user to confirm opening one.
+	router.post("/repos/setup-status", validateBody(RepoIdentifierSchema), async (req, res, next) => {
+		try {
+			if (accountState.current.installations.length === 0) {
+				res.status(400).json({ error: "Install the GitHub App first" });
+				return;
+			}
+			const { owner, name } = req.body as z.infer<typeof RepoIdentifierSchema>;
+			const alreadySetUp = await checkDeclaredDirectionConvention(clientHolder, owner, name);
+			res.json({ alreadySetUp });
 		} catch (err) {
 			next(err);
 		}
