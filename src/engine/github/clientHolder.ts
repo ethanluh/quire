@@ -52,6 +52,10 @@ export class GitHubClientHolder implements GitHubClient {
 		return this.current.postReviewCardComment(owner, repo, prNumber, action, card);
 	}
 
+	postComment(owner: string, repo: string, prNumber: number, body: string): Promise<void> {
+		return this.current.postComment(owner, repo, prNumber, body);
+	}
+
 	getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined> {
 		return this.current.getFileContent(owner, repo, path);
 	}

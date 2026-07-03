@@ -28,6 +28,10 @@ export interface RefreshDeps {
 	decidedStore: DecidedPrStore;
 	state: ServerState;
 	pipelineDeps: PipelineDeps;
+	// Scopes enqueueRefresh's per-repo coalescing lock to this tenant (its GitHub login) —
+	// omitted defaults to the pre-multi-tenant behavior of one shared lock namespace, which
+	// existing single-tenant callers/tests still rely on.
+	tenantKey?: string;
 }
 
 export interface RefreshRepoQueueResult extends IngestSummary {
@@ -113,10 +117,12 @@ export async function refreshRepoQueue(
 // Serializes overlapping refresh calls for the same repo (a webhook burst, or a webhook
 // racing the reconciliation poll) instead of letting them race on clearRepoFromQueue's and
 // ingestIntoQueue's state mutations — see the concurrency note in refreshRepoQueue's design.
+// Keyed by tenant too: two different tenants independently selecting the same owner/name
+// must never coalesce onto each other's refresh.
 const inFlight = new Map<string, Promise<RefreshRepoQueueResult>>();
 
 export function enqueueRefresh(owner: string, name: string, deps: RefreshDeps): Promise<RefreshRepoQueueResult> {
-	const key = `${owner}/${name}`;
+	const key = `${deps.tenantKey ?? ""}:${owner}/${name}`;
 	const previous = inFlight.get(key) ?? Promise.resolve();
 	const run = previous
 		.catch(() => undefined)

@@ -193,7 +193,13 @@ describe("githubAppRouter", () => {
 		const { status, body } = await call(server, "GET", "/account/github/status");
 
 		expect(status).toBe(200);
-expect(body).toEqual({ connected: false, installations: [], selectedRepo: undefined, autoMergeOnAccept: false });
+		expect(body).toEqual({
+			connected: false,
+			installations: [],
+			selectedRepo: undefined,
+			autoMergeOnAccept: false,
+			flagConflictsForFleet: false,
+		});
 	});
 
 	it("mints an installUrl pointing at the app's install page with a state param", async () => {
@@ -556,6 +562,52 @@ const { accountPath } = setup(async () => []);
 		expect(body["repos"]).toEqual(repos);
 	});
 
+	it("reports sortingAvailable: false when no user token is cached (e.g. right after a redeploy)", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			repo({ fullName: "acme-corp/widgets", installationId: 555, accountLogin: "acme-corp" }),
+		];
+		setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			undefined,
+			"octocat",
+		);
+		// Deliberately not calling userTokenCache.set — no cached token for "octocat".
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(body["sortingAvailable"]).toBe(false);
+	});
+
+	it("reports sortingAvailable: true when a user token is cached for the requester", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			repo({ fullName: "acme-corp/widgets", installationId: 555, accountLogin: "acme-corp" }),
+		];
+		const { userTokenCache } = setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			undefined,
+			"octocat",
+		);
+		userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(body["sortingAvailable"]).toBe(true);
+	});
+
 	it("returns 400 for /repos when no installation is bound", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		setup();
@@ -758,10 +810,13 @@ const { accountPath } = setup(async () => []);
 			});
 			await new Promise((resolve) => server.once("listening", resolve));
 
-			const { status, body } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true });
+			const { status, body } = await call(server, "POST", "/account/github/settings", {
+				autoMergeOnAccept: true,
+				flagConflictsForFleet: false,
+			});
 
 			expect(status).toBe(200);
-			expect(body).toEqual({ autoMergeOnAccept: true });
+			expect(body).toEqual({ autoMergeOnAccept: true, flagConflictsForFleet: false });
 
 			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
 			expect(persisted["autoMergeOnAccept"]).toBe(true);
@@ -772,7 +827,10 @@ const { accountPath } = setup(async () => []);
 			setup();
 			await new Promise((resolve) => server.once("listening", resolve));
 
-			const { status } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true });
+			const { status } = await call(server, "POST", "/account/github/settings", {
+				autoMergeOnAccept: true,
+				flagConflictsForFleet: false,
+			});
 
 			expect(status).toBe(400);
 		});
@@ -882,6 +940,7 @@ const { accountPath } = setup(async () => []);
 			installations: [],
 			selectedRepo: undefined,
 			autoMergeOnAccept: false,
+			flagConflictsForFleet: false,
 		});
 	});
 

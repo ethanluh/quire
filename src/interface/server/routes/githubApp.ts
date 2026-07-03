@@ -29,6 +29,7 @@ const RepoIdentifierSchema = z.object({
 
 const SettingsSchema = z.object({
 	autoMergeOnAccept: z.boolean(),
+	flagConflictsForFleet: z.boolean(),
 });
 
 const INSTALL_STATE_COOKIE_NAME = "quire_install_state";
@@ -83,7 +84,7 @@ export function githubAppRouter(
 	}
 
 	router.get("/status", (_req, res) => {
-		const { installations, selectedRepo, autoMergeOnAccept } = accountState.current;
+		const { installations, selectedRepo, autoMergeOnAccept, flagConflictsForFleet } = accountState.current;
 		res.json({
 			connected: installations.length > 0,
 			installations: installations.map((i) => ({
@@ -94,6 +95,7 @@ export function githubAppRouter(
 			})),
 			selectedRepo,
 			autoMergeOnAccept: autoMergeOnAccept ?? false,
+			flagConflictsForFleet: flagConflictsForFleet ?? false,
 		});
 	});
 
@@ -104,11 +106,11 @@ export function githubAppRouter(
 				res.status(400).json({ error: "Install the GitHub App first" });
 				return;
 			}
-			const { autoMergeOnAccept } = req.body as z.infer<typeof SettingsSchema>;
-			const updated: InstallationAccountState = { ...current, autoMergeOnAccept };
+			const { autoMergeOnAccept, flagConflictsForFleet } = req.body as z.infer<typeof SettingsSchema>;
+			const updated: InstallationAccountState = { ...current, autoMergeOnAccept, flagConflictsForFleet };
 			accountState.current = updated;
 			await saveInstallation(accountPath, updated);
-			res.json({ autoMergeOnAccept });
+			res.json({ autoMergeOnAccept, flagConflictsForFleet });
 		} catch (err) {
 			next(err);
 		}
@@ -217,7 +219,7 @@ export function githubAppRouter(
 			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
 			const responseRepos = userToken !== undefined ? await enrichWithUserToken(repos, userToken) : repos;
 
-			res.json({ repos: responseRepos, selected: selectedRepo, failedAccounts });
+			res.json({ repos: responseRepos, selected: selectedRepo, failedAccounts, sortingAvailable: userToken !== undefined });
 		} catch (err) {
 			next(err);
 		}

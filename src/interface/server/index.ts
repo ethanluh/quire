@@ -2,51 +2,29 @@ import { randomBytes } from "node:crypto";
 import express from "express";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadAuditStore } from "../../engine/gate/auditStore.js";
-import { MergeQueue } from "../../engine/queue/mergeQueue.js";
-import { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
-import { PrEffectCache } from "../../engine/cache/prCache.js";
-import type { GitHubClient } from "../../engine/github/client.js";
-import { StubGitHubClient } from "../../engine/github/stubClient.js";
-import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
-import { loadInstallation } from "../../engine/github/installation.js";
-import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
-import { buildInstallationClient, buildInstallationOctokit, buildUserOctokit, getInstallationAccount } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
-import { InstallationRevokedError } from "../../engine/github/installationClient.js";
+import { InstallationRevokedError, buildUserOctokit } from "../../engine/github/installationClient.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
-import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../engine/github/repos.js";
-import { resolveLlmProvider, buildLlmProviderFromAccount } from "./resolveLlmProvider.js";
-import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.js";
-import { loadAccount as loadLlmAccount } from "../../engine/llm/account.js";
-import { createLlmAccountState } from "./llmAccountState.js";
-import { llmAccountRouter } from "./routes/llmAccount.js";
+import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
+import { enrichWithStarredAndPinned } from "../../engine/github/repos.js";
+import type { RepoSummary } from "../../engine/github/repos.js";
+import { resolveLlmProvider } from "./resolveLlmProvider.js";
 import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken } from "../../engine/github/oauth.js";
 import type { OAuthDeps } from "../../engine/github/oauth.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
-import { createServerState } from "./state.js";
-import { createAccountState, activeInstallation } from "./accountState.js";
+import { TenantRegistry } from "./tenant.js";
+import type { TenantSharedConfig } from "./tenant.js";
 import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
-import type { RefreshDeps } from "./refreshRepoQueue.js";
 import { createAllowlist } from "./allowlist.js";
 import { requireSession } from "./middleware/requireSession.js";
-import { prsRouter } from "./routes/prs.js";
-import { bundlesRouter } from "./routes/bundles.js";
-import { gesturesRouter } from "./routes/gestures.js";
-import { queueRouter } from "./routes/queue.js";
-import { shelfRouter } from "./routes/shelf.js";
+import { resolveTenant } from "./middleware/resolveTenant.js";
 import { eventsRouter } from "./routes/events.js";
-import { auditRouter } from "./routes/audit.js";
-import { adminRouter } from "./routes/admin.js";
 import { accountRouter } from "./routes/account.js";
-import { githubAppRouter } from "./routes/githubApp.js";
 import type { WebhookConfig } from "./routes/webhook.js";
 import { webhookRouter } from "./routes/webhook.js";
 import { verifyGithubSignature } from "./middleware/webhookSignature.js";
 import { errorHandler } from "./middleware/errors.js";
-import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
-import type { PipelineDeps } from "./ingestIntoQueue.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Not derived from __dirname: the compiled dist/ output nests one level deeper than the
@@ -55,16 +33,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // and `npm start` (both invoked from the project root); QUIRE_DATA_DIR lets a deploy mount
 // its persistent volume anywhere.
 const DATA_DIR = process.env.QUIRE_DATA_DIR ?? join(process.cwd(), "data");
-const QUEUE_PATH = join(DATA_DIR, "queue.json");
-const DECIDED_PRS_PATH = join(DATA_DIR, "decided-prs.json");
-const PR_CACHE_PATH = join(DATA_DIR, "pr-cache.json");
-const DEFER_LOG_PATH = join(DATA_DIR, "instrumentation/defers.ndjson");
-const GATE_LOG_PATH = join(DATA_DIR, "instrumentation/gate-decisions.ndjson");
-const DRIFT_SCREEN_LOG_PATH = join(DATA_DIR, "instrumentation/drift-screen.ndjson");
-const CONFLICT_LOG_PATH = join(DATA_DIR, "instrumentation/conflict-resolution.ndjson");
-const AUDIT_LOG_PATH = join(DATA_DIR, "instrumentation/audit.ndjson");
-const INSTALLATION_PATH = join(DATA_DIR, "installation.json");
-const LLM_ACCOUNT_PATH = join(DATA_DIR, "llm-account.json");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const RECONCILE_INTERVAL_MS =
@@ -137,75 +105,53 @@ async function main(): Promise<void> {
 			? { publicUrl, secret: webhookSecret }
 			: undefined;
 
-	const auditStore = await loadAuditStore(AUDIT_LOG_PATH);
-	const installationAccountState = await loadInstallation(INSTALLATION_PATH);
-	const accountState = createAccountState(installationAccountState);
+	// Fails fast on a bad LLM_PROVIDER/key combination at startup instead of on whichever
+	// tenant's first request happens to hit resolveDefaultLlmProvider() first.
+	const { description: defaultLlmDescription } = resolveLlmProvider(process.env);
+	console.log(`Default LLM provider (used by a tenant until they connect their own): ${defaultLlmDescription}`);
+
+	// A signed-in user's own OAuth token, cached in memory only, keyed by login — used
+	// solely to enrich the repo picker with starred/pinned status (an installation client
+	// has no "viewer" of its own). Already partitioned by login internally, so — unlike
+	// accountState/clientHolder/queue below — it's safe to share across tenants: every
+	// caller only ever looks up the current request's own login.
 	const userTokenCache = createUserTokenCache();
+	const enrichWithUserToken = (repos: ReadonlyArray<RepoSummary>, accessToken: string) =>
+		enrichWithStarredAndPinned(repos, buildUserOctokit(accessToken));
 
-	const decidedStore = new DecidedPrStore(DECIDED_PRS_PATH);
-	await decidedStore.load();
-
-	const prCache = new PrEffectCache(PR_CACHE_PATH);
-	await prCache.load();
-
-	let initialClient: GitHubClient;
-	const active = activeInstallation(accountState.current);
-	if (active !== undefined) {
-		initialClient = buildInstallationClient(appConfig, active.installationId);
-		console.log(`GitHub client: installation (bound to ${active.accountLogin}, ${accountState.current.installations.length} installation(s) total)`);
-	} else {
-		initialClient = new StubGitHubClient();
-		console.log(`GitHub client: stub (${accountState.current.installations.length} installation(s) bound, none backing a selected repo)`);
-	}
-	const github = new GitHubClientHolder(initialClient);
-
-	// An LLM account connected through the UI takes priority over env-based resolution.
-	// Resolved before MergeQueue below, which needs a provider for conflict resolution.
-	const connectedLlmAccount = await loadLlmAccount(LLM_ACCOUNT_PATH);
-	const llmAccountState = createLlmAccountState(connectedLlmAccount);
-	const { provider: initialLlmProvider, description } =
-		connectedLlmAccount !== undefined ? buildLlmProviderFromAccount(connectedLlmAccount) : resolveLlmProvider(process.env);
-	console.log(`LLM provider: ${description}`);
-	const llmProviderHolder = new LlmProviderHolder(initialLlmProvider);
-
-	const queue = new MergeQueue(QUEUE_PATH, github, llmProviderHolder, CONFLICT_LOG_PATH);
-	await queue.load();
-
-	const analyzer = new TypeScriptAnalyzer();
-	const state = createServerState();
-	const instrumentationSink = createNdjsonInstrumentationSink({
-		gateLogPath: GATE_LOG_PATH,
-		driftScreenLogPath: DRIFT_SCREEN_LOG_PATH,
-	});
-	const pipelineDeps: PipelineDeps = {
-		config: pipelineConfig,
-		provider: llmProviderHolder,
-		analyzer,
-		auditStore,
-		prCache,
-		instrumentationSink,
-	};
-
-	const refreshDeps: RefreshDeps = {
-		accountState,
-		accountPath: INSTALLATION_PATH,
-		clientHolder: github,
+	const sharedConfig: TenantSharedConfig = {
+		dataDir: DATA_DIR,
 		appConfig,
-		decidedStore,
-		state,
-		pipelineDeps,
+		appSlug,
+		pipelineConfig,
+		analyzer: new TypeScriptAnalyzer(),
+		isProduction,
+		resolveDefaultLlmProvider: () => resolveLlmProvider(process.env),
+		userTokenCache,
+		enrichWithUserToken,
 	};
+
+	// Every signed-in GitHub login gets its own isolated set of GitHub App installations,
+	// repo selection, PR queue, and LLM account (see tenant.ts) — replaces the single set of
+	// process-wide singletons a prior version of this file wired up once and shared across
+	// every request regardless of who was signed in.
+	const registry = new TenantRegistry(sharedConfig);
+	await registry.hydrateExisting();
+	console.log(`Loaded ${registry.all().length} existing tenant(s) from ${join(DATA_DIR, "users")}`);
 
 	// The webhook path needs its exact raw request bytes to verify GitHub's HMAC signature,
 	// so it must be parsed (and mounted) before the global express.json() below would
 	// otherwise consume the body as parsed JSON. Its own signature check is the trust
 	// boundary here, independent of session auth (GitHub's delivery carries no cookie).
+	// One App, one webhook endpoint, many tenants' installations (each tenant possibly
+	// binding several) — each delivery is routed to its owning tenant by the installation id
+	// it carries (see webhookRouter and TenantRegistry.findByInstallationId).
 	if (webhookConfig !== undefined) {
 		app.use(
 			"/webhooks/github",
 			express.raw({ type: "application/json" }),
 			verifyGithubSignature(webhookConfig.secret),
-			webhookRouter(refreshDeps),
+			webhookRouter((installationId) => registry.findByInstallationId(installationId)?.refreshDeps),
 		);
 		console.log("GitHub webhook receiver: enabled at /webhooks/github");
 	} else {
@@ -228,68 +174,49 @@ async function main(): Promise<void> {
 	);
 
 	app.use(session);
+	app.use(resolveTenant(registry));
 
-	app.use(
-		"/account/github",
-		githubAppRouter(
-			refreshDeps,
-			appSlug,
-			(installationId) => buildInstallationClient(appConfig, installationId),
-			(installationId, accountLogin) =>
-				listInstallationRepositories(buildInstallationOctokit(appConfig, installationId), installationId, accountLogin),
-			(installationId) => getInstallationAccount(appConfig, installationId),
-			isProduction,
-			userTokenCache,
-			(repos, accessToken) => enrichWithStarredAndPinned(repos, buildUserOctokit(accessToken)),
-		),
-	);
-	app.use("/prs", prsRouter(state, pipelineDeps, queue));
-	app.use("/bundles", bundlesRouter(state));
-	app.use("/bundles", gesturesRouter(state, queue, DEFER_LOG_PATH, github, decidedStore, accountState));
-	app.use("/queue", queueRouter(queue, state, decidedStore));
-	app.use("/shelf", shelfRouter(state, decidedStore));
+	// Shared across every tenant on purpose: it carries no payload, just a "something
+	// changed, go re-fetch" wakeup (see changeEvents.ts), so there's no cross-tenant data
+	// leak in mounting one instance here instead of one per tenant router. See the
+	// known-gap note on notifyStateChanged()/changeEvents.ts below — this does mean one
+	// tenant's refresh currently wakes every open /events connection, tenant or not.
 	app.use("/events", eventsRouter());
-	app.use("/audit", auditRouter(auditStore));
-	app.use(
-		"/admin",
-		adminRouter(
-			state,
-			auditStore,
-			queue,
-			[DEFER_LOG_PATH, GATE_LOG_PATH, DRIFT_SCREEN_LOG_PATH, CONFLICT_LOG_PATH],
-			decidedStore,
-		),
-	);
-	app.use(
-		"/account/llm",
-		llmAccountRouter(
-			llmAccountState,
-			LLM_ACCOUNT_PATH,
-			llmProviderHolder,
-			buildLlmProviderFromAccount,
-			() => resolveLlmProvider(process.env),
-		),
-	);
+
+	// Every other route lives on the resolved tenant's own router (built once per tenant in
+	// tenant.ts from the exact same route factories this file used to wire up a single time
+	// at startup) — dispatching here instead of mounting one shared router per path is what
+	// keeps one signed-in login from ever reaching another's state.
+	app.use((req, res, next) => {
+		const tenant = res.locals.tenant;
+		if (tenant === undefined) {
+			res.status(401).json({ error: "Sign in required" });
+			return;
+		}
+		tenant.router(req, res, next);
+	});
 
 	app.use(errorHandler);
 
 	// Independent of webhooks — a safety net for a missed delivery, and the sole detection
-	// mechanism if webhooks aren't configured. Shares enqueueRefresh's per-repo coalescing
-	// lock with the webhook route, so the two never race on the same repo's queue.
+	// mechanism if webhooks aren't configured. Iterates every known tenant (not just the
+	// ones actively browsing) so a teammate's repo stays in sync even while they're away.
 	const reconcileTimer = setInterval(() => {
-		const repo = accountState.current.selectedRepo;
-		if (repo === undefined) return;
-		enqueueRefresh(repo.owner, repo.name, refreshDeps).catch((err: unknown) => {
-			if (err instanceof InstallationRevokedError) {
-				console.warn(`Reconciliation poll paused for ${repo.owner}/${repo.name}: ${err.message}`);
-				return;
-			}
-			if (err instanceof AccountChangedError) {
-				console.warn(`Reconciliation poll for ${repo.owner}/${repo.name} aborted: ${err.message}`);
-				return;
-			}
-			console.error(`Reconciliation poll failed for ${repo.owner}/${repo.name}:`, err);
-		});
+		for (const tenant of registry.all()) {
+			const repo = tenant.accountState.current.selectedRepo;
+			if (repo === undefined) continue;
+			enqueueRefresh(repo.owner, repo.name, tenant.refreshDeps).catch((err: unknown) => {
+				if (err instanceof InstallationRevokedError) {
+					console.warn(`Reconciliation poll paused for ${tenant.login} (${repo.owner}/${repo.name}): ${err.message}`);
+					return;
+				}
+				if (err instanceof AccountChangedError) {
+					console.warn(`Reconciliation poll for ${tenant.login} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
+					return;
+				}
+				console.error(`Reconciliation poll failed for ${tenant.login} (${repo.owner}/${repo.name}):`, err);
+			});
+		}
 	}, RECONCILE_INTERVAL_MS);
 	reconcileTimer.unref();
 
@@ -297,11 +224,13 @@ async function main(): Promise<void> {
 	// stuck behind several others that land ahead of it would otherwise only get checked (and
 	// fast-forwarded) once dequeueNext() finally reaches it, by which point "behind" may have
 	// calcified into a real "dirty" conflict needing the in-process hunk resolver instead of a
-	// free merge.
+	// free merge. Iterates every known tenant's own queue, same as the reconcile timer above.
 	const queueRefreshTimer = setInterval(() => {
-		queue.refreshQueuedBranches().catch((err: unknown) => {
-			console.error("Queue branch refresh failed:", err);
-		});
+		for (const tenant of registry.all()) {
+			tenant.queue.refreshQueuedBranches().catch((err: unknown) => {
+				console.error(`Queue branch refresh failed for ${tenant.login}:`, err);
+			});
+		}
 	}, QUEUE_REFRESH_INTERVAL_MS);
 	queueRefreshTimer.unref();
 

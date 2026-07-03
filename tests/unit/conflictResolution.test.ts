@@ -197,7 +197,7 @@ describe("resolveMergeConflict", () => {
 		]);
 	});
 
-	it("fails closed to the human queue when a semantic hunk resolves at low confidence", async () => {
+	it("fails closed to the human queue when a semantic hunk resolves at low confidence, disclosing the hunk content and the model's attempt", async () => {
 		const github = new StubGitHubClient();
 		setUpConflict(github, "line1\nline2\nline3", "line1\nline2-A\nline3", "line1\nline2-B\nline3");
 		const provider = new StubLlmProvider();
@@ -207,8 +207,66 @@ describe("resolveMergeConflict", () => {
 
 		expect(result.status).toBe("failed");
 		if (result.status === "failed") {
-			expect(result.reason).toContain("could not confidently resolve a conflicting hunk");
+			expect(result.reason).toContain("could not confidently resolve 1 conflicting hunk");
+			// Full hunk content on every side, not just a truncated anchor.
+			expect(result.reason).toContain("line2-A");
+			expect(result.reason).toContain("line2-B");
+			// The model's own attempted resolution and confidence, not discarded.
+			expect(result.reason).toContain("line2-merged");
+			expect(result.reason).toContain("confidence: low");
 		}
+		expect(github.commitResolvedFilesCalls).toHaveLength(0);
+	});
+
+	it("reports every low-confidence hunk in a file, not just the first one hit", async () => {
+		const github = new StubGitHubClient();
+		setUpConflict(
+			github,
+			"line1\nline2\nline3\nline4\nline5",
+			"line1-A\nline2\nline3\nline4-A\nline5",
+			"line1-B\nline2\nline3\nline4-B\nline5",
+		);
+		const provider = new StubLlmProvider();
+		provider.queueCompletion(
+			JSON.stringify([
+				{ hunk_id: 1, resolution: "line1-merged", confidence: "low" },
+				{ hunk_id: 2, resolution: "line4-merged", confidence: "low" },
+			]),
+		);
+
+		const result = await resolveMergeConflict(makePr(), makeMergeability(), github, provider);
+
+		expect(result.status).toBe("failed");
+		if (result.status === "failed") {
+			expect(result.reason).toContain("could not confidently resolve 2 conflicting hunks");
+			expect(result.reason).toContain("line1-merged");
+			expect(result.reason).toContain("line4-merged");
+		}
+		expect(github.commitResolvedFilesCalls).toHaveLength(0);
+	});
+
+	it("fails the whole file, not just the bad hunk, when only some semantic hunks are low-confidence", async () => {
+		// Regression guard: a file with one high-confidence and one low-confidence hunk must
+		// not partially commit the high-confidence one — an all-or-nothing attempt per file
+		// means a human reviewing "conflict" sees the real, unmodified file.
+		const github = new StubGitHubClient();
+		setUpConflict(
+			github,
+			"line1\nline2\nline3\nline4\nline5",
+			"line1-A\nline2\nline3\nline4-A\nline5",
+			"line1-B\nline2\nline3\nline4-B\nline5",
+		);
+		const provider = new StubLlmProvider();
+		provider.queueCompletion(
+			JSON.stringify([
+				{ hunk_id: 1, resolution: "line1-merged", confidence: "high" },
+				{ hunk_id: 2, resolution: "line4-merged", confidence: "low" },
+			]),
+		);
+
+		const result = await resolveMergeConflict(makePr(), makeMergeability(), github, provider);
+
+		expect(result.status).toBe("failed");
 		expect(github.commitResolvedFilesCalls).toHaveLength(0);
 	});
 

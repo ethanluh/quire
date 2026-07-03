@@ -11,7 +11,7 @@ const MERGEABLE_STATES: ReadonlyArray<MergeabilityState> = ["clean", "hasHooks",
 
 // Bounded backoff for GitHub's async mergeable_state computation — both the initial read
 // and the re-check after updateBranch()/commitResolvedFiles() poll on this same schedule.
-const DEFAULT_MERGEABILITY_POLL_DELAYS_MS: ReadonlyArray<number> = [1000, 2000, 4000, 4000, 4000];
+export const DEFAULT_MERGEABILITY_POLL_DELAYS_MS: ReadonlyArray<number> = [1000, 2000, 4000, 4000, 4000];
 
 type MergeableCheck = { ok: true; alreadyMerged?: boolean } | { ok: false; reason: string };
 
@@ -27,6 +27,10 @@ export class MergeQueue {
 		private readonly llmProviderHolder: LlmProviderHolder,
 		private readonly conflictLogPath: string,
 		private readonly mergeabilityPollDelaysMs: ReadonlyArray<number> = DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
+		// Live, swappable, same shape as llmProviderHolder — read at the moment a resolution
+		// fails rather than captured once at construction, so a mid-run settings change takes
+		// effect on the very next failure.
+		private readonly shouldFlagForFleet: () => boolean = () => false,
 	) {}
 
 	async load(): Promise<void> {
@@ -37,12 +41,12 @@ export class MergeQueue {
 		await saveState(this.statePath, this.state);
 	}
 
-	// dequeueNext() and retryConflict() are each reachable from independent triggers (a
-	// human's manual "Process" click, autoMergeOnAccept, and the review UI's retry button)
-	// that don't coordinate with each other. Chaining every call through this lock serializes
-	// them onto `this.state` instead of letting two land concurrently and silently drop one
-	// side's update — mirrors refreshRepoQueue.ts's per-repo `inFlight` map, collapsed to a
-	// single chain since only one queue entry is ever actively processed at a time.
+	// dequeueNext(), reattempt(), and abort() are each reachable from independent triggers (a
+	// human's manual "Process" click, autoMergeOnAccept, and the review UI's retry/abort
+	// buttons) that don't coordinate with each other. Chaining every call through this lock
+	// serializes them onto `this.state` instead of letting two land concurrently and silently
+	// drop one side's update — mirrors refreshRepoQueue.ts's per-repo `inFlight` map, collapsed
+	// to a single chain since only one queue entry is ever actively processed at a time.
 	private lock: Promise<unknown> = Promise.resolve();
 	private withLock<T>(fn: () => Promise<T>): Promise<T> {
 		const run = this.lock.then(fn, fn);
@@ -183,7 +187,17 @@ export class MergeQueue {
 			result.status === "resolved" ? "resolved" : "unresolved",
 			result.status === "failed" ? result.reason : undefined,
 		);
-		if (result.status === "failed") return { ok: false, reason: result.reason };
+		if (result.status === "failed") {
+			if (this.shouldFlagForFleet()) {
+				await this.github.postComment(
+					pr.repoOwner,
+					pr.repoName,
+					pr.number,
+					`Quire could not automatically resolve this PR's merge conflict:\n\n${result.reason}`,
+				);
+			}
+			return { ok: false, reason: result.reason };
+		}
 
 		// Give GitHub a moment to recompute mergeable_state after the new commit rather
 		// than immediately racing its own async recomputation with a merge attempt.
@@ -212,8 +226,8 @@ export class MergeQueue {
 	async revertPr(bundleId: string, prId: string): Promise<string> {
 		const entry = this.state.entries.find((e) => e.bundleId === bundleId);
 		if (entry === undefined) throw new Error(`Bundle ${bundleId} not found in queue`);
-		if (entry.status !== "landed") {
-			throw new Error(`Cannot revert PR ${prId}: bundle ${bundleId} has not landed (status: ${entry.status})`);
+		if (!entry.mergedPrIds.includes(prId)) {
+			throw new Error(`Cannot revert PR ${prId}: it was not merged by bundle ${bundleId} (status: ${entry.status})`);
 		}
 
 		const pr = entry.bundle.members.find((m) => m.id === prId);
@@ -241,19 +255,47 @@ export class MergeQueue {
 		return entry;
 	}
 
-	// Clears a "conflict" entry back to "queued" so the next dequeueNext() tries again — used
-	// whether a human fixed the underlying issue manually or just wants a retry.
-	async retryConflict(bundleId: string): Promise<MergeQueueEntry | undefined> {
-		return this.withLock(() => this.retryConflictLocked(bundleId));
+	// Clears a "conflict" or "aborted" entry back to "queued" so the next dequeueNext() tries
+	// again — used whether a human fixed the underlying issue manually, changed their mind
+	// about an abort, or just wants another attempt. mergedPrIds is untouched, so a bundle
+	// that partially landed before conflicting/being aborted resumes from where it left off.
+	async reattempt(bundleId: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.reattemptLocked(bundleId));
 	}
 
-	private async retryConflictLocked(bundleId: string): Promise<MergeQueueEntry | undefined> {
-		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "conflict");
+	private async reattemptLocked(bundleId: string): Promise<MergeQueueEntry | undefined> {
+		const entry = this.state.entries.find((e) => e.bundleId === bundleId && (e.status === "conflict" || e.status === "aborted"));
 		if (entry === undefined) return undefined;
-		const { conflict: _conflict, ...rest } = entry;
+		const { conflict: _conflict, abortedAt: _abortedAt, ...rest } = entry;
 		const retried: MergeQueueEntry = { ...rest, status: "queued" };
 		await this.setEntry(bundleId, retried);
 		return retried;
+	}
+
+	// A human gave up waiting on a bundle stuck mid-landing (possibly with some members
+	// already merged) or blocked on conflict — moves it to a terminal "aborted" state so it
+	// stops being retried by dequeueNext()/reattempt(). Does not revert mergedPrIds (INV-4:
+	// that's a separate, explicit per-PR action via revertPr) and does not delete the entry
+	// (residual stays visible per INV-6, same as every other non-queued exit path). "queued"
+	// entries use removeQueued() instead; "landed" and already-"aborted" entries have nothing
+	// to abort.
+	async abort(bundleId: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.abortLocked(bundleId));
+	}
+
+	private async abortLocked(bundleId: string): Promise<MergeQueueEntry | undefined> {
+		const entry = this.state.entries.find((e) => e.bundleId === bundleId && (e.status === "landing" || e.status === "conflict"));
+		if (entry === undefined) return undefined;
+		const { conflict: _conflict, ...rest } = entry;
+		const aborted: MergeQueueEntry = { ...rest, status: "aborted", abortedAt: new Date().toISOString() };
+		await this.setEntry(bundleId, aborted);
+		// Audit trail, matching logConflictResolution()'s call at every other conflict-adjacent
+		// transition — only when there's a specific prId to attribute it to; a "landing" abort
+		// with no conflict recorded yet isn't blocked on a particular PR.
+		if (entry.conflict !== undefined) {
+			await logConflictResolution(this.conflictLogPath, bundleId, entry.conflict.prId, "unresolved", "aborted by user");
+		}
+		return aborted;
 	}
 
 	async clear(): Promise<void> {
@@ -267,7 +309,7 @@ export class MergeQueue {
 	// then main has moved further and what would have been a free fast-forward has calcified
 	// into a real "dirty" conflict needing the LLM Action. Read-only w.r.t. `this.state` (no
 	// setEntry/persist), so it deliberately doesn't go through withLock — it must not block
-	// dequeueNext()/retryConflict() for however long a pass over every queued PR takes, and a
+	// dequeueNext()/reattempt() for however long a pass over every queued PR takes, and a
 	// concurrent updateBranch() call from dequeueNext() picking the same PR is a harmless
 	// duplicate, not a correctness issue.
 	async refreshQueuedBranches(): Promise<void> {
