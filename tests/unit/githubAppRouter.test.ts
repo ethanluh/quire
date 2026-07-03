@@ -462,6 +462,50 @@ describe("githubAppRouter", () => {
 		expect(body["repos"]).toEqual(repos);
 	});
 
+	it("reports sortingAvailable: false when no user token is cached (e.g. right after a redeploy)", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main", starred: false, pinned: false },
+		];
+		setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"octocat",
+		);
+		// Deliberately not calling userTokenCache.set — no cached token for "octocat".
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(body["sortingAvailable"]).toBe(false);
+	});
+
+	it("reports sortingAvailable: true when a user token is cached for the requester", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			{ owner: "acme-corp", name: "widgets", fullName: "acme-corp/widgets", private: false, defaultBranch: "main", starred: false, pinned: false },
+		];
+		const { userTokenCache } = setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"octocat",
+		);
+		userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(body["sortingAvailable"]).toBe(true);
+	});
+
 	it("returns 400 for /repos when no installation is bound", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		setup();

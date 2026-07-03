@@ -277,6 +277,10 @@
           <input type="checkbox" id="chk-flag-conflicts-for-fleet">
           Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
         </label>
+        <div id="sorting-notice" class="result-msg" style="display:none">
+          Starred/pinned sorting is unavailable until you reconnect GitHub (this happens after every server redeploy).
+          <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
+        </div>
         <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
         <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
       </div>
@@ -865,18 +869,28 @@ function hideSigninGate(login) {
   settingsBtn.style.display = 'inline-block';
 }
 
-document.getElementById('btn-signin').addEventListener('click', async () => {
-  const btn = document.getElementById('btn-signin');
+// Shared by "Sign in with GitHub" and "Reconnect GitHub" — both just need to run the OAuth
+// flow again. Safe to call even while already signed in: it doesn't touch the installation
+// binding or selected repo, only the session cookie and the in-memory starred/pinned token.
+async function startOAuth(btn, errorEl) {
   btn.disabled = true;
   const result = await fetch('/account/github/oauth/start').then((r) => r.json());
   if (result.error) {
-    const el = document.getElementById('signin-result');
-    el.textContent = 'Error: ' + result.error;
-    el.style.display = 'block';
+    errorEl.textContent = 'Error: ' + result.error;
+    errorEl.className = 'result-msg error';
+    errorEl.style.display = 'block';
     btn.disabled = false;
     return;
   }
   location.href = result.authorizeUrl;
+}
+
+document.getElementById('btn-signin').addEventListener('click', () => {
+  startOAuth(document.getElementById('btn-signin'), document.getElementById('signin-result'));
+});
+
+document.getElementById('btn-reconnect-github').addEventListener('click', () => {
+  startOAuth(document.getElementById('btn-reconnect-github'), document.getElementById('account-result'));
 });
 
 signoutBtn.addEventListener('click', async () => {
@@ -1072,6 +1086,7 @@ async function loadRepos(selectedRepo) {
   }
   loadedRepos = result.repos || [];
   loadedSelectedRepo = result.selected || selectedRepo;
+  document.getElementById('sorting-notice').style.display = result.sortingAvailable ? 'none' : 'block';
   renderRepoList();
 }
 
