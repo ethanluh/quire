@@ -143,6 +143,15 @@
   .repo-entry.selected { border-color: var(--color-brand); }
   .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 64px; justify-content: center; }
   .repo-entry .badge-priority { font-size: var(--text-xs); flex: 0 0 auto; white-space: nowrap; }
+  .repo-group-header {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wider);
+    margin: var(--space-2) 0 0;
+  }
+  .repo-group-header:first-child { margin-top: 0; }
 
   .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
   .result-msg.error { color: var(--color-reject); }
@@ -1349,17 +1358,13 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
 function repoHtml(repo, selectedRepo) {
   const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name && selectedRepo.installationId === repo.installationId;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
-  // Only shown once >1 installation is connected — with a single installation, every repo
-  // shares the same source, so the badge would just be clutter.
-  const sourceBadge = loadedInstallations.length > 1 ? `<span class="badge badge-neutral">via ${escapeHtml(repo.accountLogin)}</span>` : '';
-  const starIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>';
+  const starIcon ='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>';
   const pinIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
   const starredBadge = repo.starred ? `<span class="badge badge-clean badge-priority">${starIcon} Favorite</span>` : '';
   const pinnedBadge = repo.pinned ? `<span class="badge badge-neutral badge-priority">${pinIcon} Pinned</span>` : '';
   const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name && repoSelectionTarget.installationId === repo.installationId;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
-    ${sourceBadge}
     ${starredBadge}
     ${pinnedBadge}
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
@@ -1384,8 +1389,17 @@ function renderRepoList() {
     listEl.innerHTML = '<div class="empty">No repos found for this account.</div>';
   } else if (!repos.length) {
     listEl.innerHTML = '<div class="empty">No repos match your search.</div>';
-  } else {
+  } else if (loadedInstallations.length <= 1) {
     listEl.innerHTML = repos.map((r) => repoHtml(r, loadedSelectedRepo)).join('');
+  } else {
+    listEl.innerHTML = loadedInstallations
+      .map((installation) => {
+        const groupRepos = repos.filter((r) => r.installationId === installation.installationId);
+        if (!groupRepos.length) return '';
+        return `<div class="repo-group-header">${escapeHtml(installation.accountLogin)}</div>`
+          + groupRepos.map((r) => repoHtml(r, loadedSelectedRepo)).join('');
+      })
+      .join('');
   }
 }
 
