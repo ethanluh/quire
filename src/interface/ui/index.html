@@ -101,6 +101,14 @@
   }
   .account-status .login { font-weight: var(--weight-medium); color: var(--color-text-primary); }
 
+  #installations-list, #team-members-list, #connectable-installations {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+  #installations-list:empty, #team-members-list:empty { display: none; }
+
   .repo-panel { margin-top: var(--space-6); }
   .repo-panel h3 {
     font-size: var(--text-sm);
@@ -1004,11 +1012,11 @@ async function loadConnectableInstallations() {
   const installations = result.installations || [];
   if (installations.length) {
     el.innerHTML = '<p>Already installed — connect without leaving this page:</p>' + installations.map(connectableInstallationHtml).join('');
-    el.style.display = 'block';
+    el.style.display = 'flex';
   } else if (result.needsReconnect) {
     el.innerHTML = `<div class="result-msg">Reconnect GitHub to check for installations you already have access to.
       <button class="btn btn-defer" id="btn-check-installations-reconnect">Reconnect GitHub</button></div>`;
-    el.style.display = 'block';
+    el.style.display = 'flex';
     document.getElementById('btn-check-installations-reconnect').addEventListener('click', () => {
       startOAuth(document.getElementById('btn-check-installations-reconnect'), document.getElementById('account-result'));
     });
