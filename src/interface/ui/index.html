@@ -175,6 +175,9 @@
   /* Same reject tier as pr-status-conflict — automated resolution was attempted and
      failed; the bundle is stopped and waiting on a human, not mid-retry. */
   .status-conflict { background: var(--color-reject-wash); color: var(--color-reject); }
+  /* Reject tier, not flagged: abort is a deliberate human give-up (like the reject
+     gesture), not a routine/retryable state the way conflict is. */
+  .status-aborted  { background: var(--color-reject-wash); color: var(--color-reject); }
 
   .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
@@ -620,8 +623,9 @@ async function loadQueue() {
     <div class="queue-entry-actions">
       <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
       <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
-      ${e.status === 'conflict' ? `<button class="btn btn-defer" onclick="retryConflict('${escapeHtml(e.bundleId)}')">Retry</button>` : ''}
       ${e.status === 'queued' ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
+      ${['conflict', 'aborted'].includes(e.status) ? `<button class="btn btn-accept" onclick="reattemptQueueEntry('${escapeHtml(e.bundleId)}')">Reattempt</button>` : ''}
+      ${['landing', 'conflict'].includes(e.status) ? `<button class="btn btn-reject" onclick="abortQueueEntry('${escapeHtml(e.bundleId)}', ${e.mergedPrIds.length}, ${e.bundle.members.length})">Abort</button>` : ''}
     </div>
   </div>`).join('');
 }
@@ -633,8 +637,17 @@ async function removeFromQueue(bundleId) {
   loadReview();
 }
 
-async function retryConflict(bundleId) {
-  await api('POST', `/queue/${bundleId}/retry`);
+async function abortQueueEntry(bundleId, mergedCount, totalCount) {
+  const message = mergedCount > 0
+    ? `Abort this bundle? ${mergedCount} of ${totalCount} member PRs already merged and will stay merged — aborting only stops Quire from retrying the rest. Nothing is reverted.`
+    : 'Abort this bundle? It will stop being retried and remain in the queue marked as aborted.';
+  if (!confirm(message)) return;
+  await api('POST', `/queue/${bundleId}/abort`, undefined);
+  loadQueue();
+}
+
+async function reattemptQueueEntry(bundleId) {
+  await api('POST', `/queue/${bundleId}/retry`, undefined);
   loadQueue();
 }
 

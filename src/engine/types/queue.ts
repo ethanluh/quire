@@ -1,6 +1,6 @@
 import type { Bundle, ReviewCard } from "./core.js";
 
-export type MergeQueueEntryStatus = "queued" | "landing" | "landed" | "reverted" | "conflict";
+export type MergeQueueEntryStatus = "queued" | "landing" | "landed" | "reverted" | "conflict" | "aborted";
 
 export interface MergeQueueEntry {
 	bundleId: string;
@@ -22,6 +22,11 @@ export interface MergeQueueEntry {
 	// per INV-6 rather than leaving the bundle silently stuck; POST /queue/:bundleId/retry
 	// clears this to try again.
 	conflict?: { prId: string; reason: string; detectedAt: string };
+	// Set when status is "aborted": a human gave up waiting on a bundle stuck mid-landing or
+	// blocked on conflict, rather than letting it keep retrying. mergedPrIds is left untouched
+	// so the partial-merge residual stays visible (INV-6) — abort does not revert what already
+	// landed; see revertPr() for that as a separate, explicit action.
+	abortedAt?: string;
 }
 
 export interface QueueState {
