@@ -5,7 +5,10 @@ export function bundlesRouter(state: ServerState): Router {
 	const router = Router();
 
 	router.get("/", (_req, res) => {
-		const cards = [...state.cards.values()];
+		const cards = [...state.cards.values()].map((card) => {
+			const bundle = state.bundles.get(card.bundleId);
+			return { ...card, assignedTo: bundle?.assignedTo, assignedAt: bundle?.assignedAt, assignedBy: bundle?.assignedBy };
+		});
 		res.json(cards);
 	});
 
@@ -18,7 +21,14 @@ export function bundlesRouter(state: ServerState): Router {
 			return;
 		}
 		const bundle = state.bundles.get(id) ?? shelved?.bundle;
-		res.json({ ...card, effectSummary: bundle?.effectSummary ?? "", members: bundle?.members ?? [] });
+		res.json({
+			...card,
+			effectSummary: bundle?.effectSummary ?? "",
+			members: bundle?.members ?? [],
+			assignedTo: bundle?.assignedTo,
+			assignedAt: bundle?.assignedAt,
+			assignedBy: bundle?.assignedBy,
+		});
 	});
 
 	return router;
