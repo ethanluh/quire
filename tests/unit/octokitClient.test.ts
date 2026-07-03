@@ -55,6 +55,8 @@ function makeFakeOctokit(opts: {
 	createOrUpdateFileContentsRejects?: Error;
 	openPrs?: ReadonlyArray<{ number: number; html_url: string }>;
 	pullsCreateRejects?: Error;
+	compareCommitsResult?: { merge_base_commit: { sha: string } };
+	treesBySha?: Record<string, ReadonlyArray<{ path: string; sha: string; mode: string; type: "blob" | "tree" | "commit" }>>;
 }): {
 	octokit: Octokit;
 	merge: jest.Mock;
@@ -67,6 +69,8 @@ function makeFakeOctokit(opts: {
 	createOrUpdateFileContents: jest.Mock;
 	pullsList: jest.Mock;
 	pullsCreate: jest.Mock;
+	compareCommitsWithBasehead: jest.Mock;
+	getTree: jest.Mock;
 } {
 	const pr = opts.pr ?? makePrResponse("<!-- declared-direction: add passwordless auth -->");
 	const get = jest.fn(async (params: { mediaType?: { format: string } }) => {
@@ -116,6 +120,13 @@ function makeFakeOctokit(opts: {
 	const pullsCreate = opts.pullsCreateRejects
 		? jest.fn(async () => { throw opts.pullsCreateRejects; })
 		: jest.fn(async () => ({ data: { number: 9, html_url: "https://github.com/org/repo/pull/9" } }));
+	const compareCommitsWithBasehead = jest.fn(async () => ({
+		data: opts.compareCommitsResult ?? { merge_base_commit: { sha: "merge-base-sha" } },
+	}));
+	const getTree = jest.fn(async (params: unknown) => {
+		const { tree_sha } = params as { tree_sha: string };
+		return { data: { tree: opts.treesBySha?.[tree_sha] ?? [] } };
+	});
 
 	const paginate = jest.fn(async (method: (p: unknown) => Promise<{ data: unknown }>, params: unknown) => {
 		const res = await method(params);
@@ -126,15 +137,29 @@ function makeFakeOctokit(opts: {
 		rest: {
 			pulls: { get, merge, update, listFiles, list: pullsList, create: pullsCreate },
 			checks: { listForRef },
-			repos: { getCombinedStatusForRef, get: reposGet, getContent, createOrUpdateFileContents },
-			git: { getRef, createRef },
+			repos: { getCombinedStatusForRef, get: reposGet, getContent, createOrUpdateFileContents, compareCommitsWithBasehead },
+			git: { getRef, createRef, getTree },
 			issues: { createComment },
 		},
 		paginate,
 		graphql,
 	} as unknown as Octokit;
 
-	return { octokit, merge, update, graphql, createComment, getRef, createRef, getContent, createOrUpdateFileContents, pullsList, pullsCreate };
+	return {
+		octokit,
+		merge,
+		update,
+		graphql,
+		createComment,
+		getRef,
+		createRef,
+		getContent,
+		createOrUpdateFileContents,
+		pullsList,
+		pullsCreate,
+		compareCommitsWithBasehead,
+		getTree,
+	};
 }
 
 describe("OctokitGitHubClient", () => {
@@ -404,6 +429,46 @@ describe("OctokitGitHubClient", () => {
 			await expect(
 				client.commitFileToBranch("org", "repo", "quire/setup", "README.md", "hello", "add readme"),
 			).rejects.toThrow(InsufficientGitHubPermissionError);
+		});
+	});
+
+	describe("getMergeability", () => {
+		it("reads the base branch's live tip instead of the PR's cached (and possibly stale) base.sha", async () => {
+			const { octokit, getRef } = makeFakeOctokit({
+				pr: makePrResponse("<!-- declared-direction: x -->", {
+					base: { ref: "main", sha: "stale-base-sha", repo: { id: 1 } },
+					head: { sha: "head-sha", ref: "feature", repo: { id: 1 } },
+					mergeable_state: "dirty",
+				}),
+			});
+			const client = new OctokitGitHubClient(octokit);
+			const result = await client.getMergeability("org", "repo", 7);
+
+			expect(getRef).toHaveBeenCalledWith({ owner: "org", repo: "repo", ref: "heads/main" });
+			expect(result.baseSha).toBe("default-sha");
+			expect(result.baseSha).not.toBe("stale-base-sha");
+		});
+	});
+
+	describe("getConflictTrees", () => {
+		it("diffs against the base branch's live tip, not the PR's cached base.sha", async () => {
+			const { octokit, getRef, compareCommitsWithBasehead, getTree } = makeFakeOctokit({
+				pr: makePrResponse("<!-- declared-direction: x -->", {
+					base: { ref: "main", sha: "stale-base-sha", repo: { id: 1 } },
+					head: { sha: "head-sha", ref: "feature", repo: { id: 1 } },
+				}),
+				compareCommitsResult: { merge_base_commit: { sha: "merge-base-sha" } },
+			});
+			const client = new OctokitGitHubClient(octokit);
+			const result = await client.getConflictTrees("org", "repo", 7);
+
+			expect(getRef).toHaveBeenCalledWith({ owner: "org", repo: "repo", ref: "heads/main" });
+			expect(compareCommitsWithBasehead).toHaveBeenCalledWith(
+				expect.objectContaining({ basehead: "default-sha...head-sha" }),
+			);
+			expect(getTree).toHaveBeenCalledWith(expect.objectContaining({ tree_sha: "default-sha" }));
+			expect(result.baseSha).toBe("default-sha");
+			expect(result.baseSha).not.toBe("stale-base-sha");
 		});
 	});
 

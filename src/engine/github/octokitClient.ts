@@ -323,6 +323,10 @@ export class OctokitGitHubClient implements GitHubClient {
 		// Repos are nullable in GitHub's schema (deleted fork) — either a null head repo or
 		// one with a different id than the base means resolution can't write to it.
 		const isFork = pr.head.repo === null || pr.base.repo === null || pr.head.repo.id !== pr.base.repo.id;
+		// pr.base.sha is a cached pointer GitHub only refreshes when the PR itself is
+		// synchronized (e.g. a push to head) — it silently lags behind the base branch's
+		// real tip when other PRs land on it in the meantime. Read the live tip instead.
+		const baseSha = await this.getBranchTipSha(owner, repo, pr.base.ref);
 		return {
 			state: normalizeMergeableState(pr.draft === true, pr.mergeable_state ?? "unknown"),
 			isFork,
@@ -330,7 +334,7 @@ export class OctokitGitHubClient implements GitHubClient {
 			headBranch: pr.head.ref,
 			headSha: pr.head.sha,
 			baseBranch: pr.base.ref,
-			baseSha: pr.base.sha,
+			baseSha,
 		};
 	}
 
@@ -340,7 +344,9 @@ export class OctokitGitHubClient implements GitHubClient {
 
 	async getConflictTrees(owner: string, repo: string, prNumber: number): Promise<ConflictTrees> {
 		const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-		const baseSha = pr.base.sha;
+		// See getMergeability's comment above — pr.base.sha can lag behind the base
+		// branch's real tip, which would make this diff against a stale "theirs".
+		const baseSha = await this.getBranchTipSha(owner, repo, pr.base.ref);
 		const headSha = pr.head.sha;
 
 		const { data: comparison } = await this.octokit.rest.repos.compareCommitsWithBasehead({
@@ -482,6 +488,11 @@ export class OctokitGitHubClient implements GitHubClient {
 		if (run === undefined) return undefined;
 		const ageMs = Date.now() - new Date(run.created_at).getTime();
 		return ageMs <= RECENT_DISPATCH_WINDOW_MS ? run.id : undefined;
+	}
+
+	private async getBranchTipSha(owner: string, repo: string, branch: string): Promise<string> {
+		const { data } = await this.octokit.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+		return data.object.sha;
 	}
 
 	private async getFlatTree(owner: string, repo: string, treeSha: string): Promise<ReadonlyMap<string, TreeEntry>> {
