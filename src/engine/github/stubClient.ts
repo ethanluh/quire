@@ -1,13 +1,5 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
-import type {
-	ConflictResolutionDispatchParams,
-	ConflictResolutionDispatchResult,
-	FoundOrCreatedPullRequest,
-	GitHubClient,
-	ListOpenPullRequestsResult,
-	RawPRPayload,
-	RepoFile,
-} from "./client.js";
+import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
 import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 
 export interface CommitResolvedFilesCall {
@@ -16,12 +8,6 @@ export interface CommitResolvedFilesCall {
 	prNumber: number;
 	baseTipSha: string;
 	files: ReadonlyArray<ResolvedFile>;
-}
-
-export interface DispatchConflictResolutionCall {
-	owner: string;
-	repo: string;
-	params: ConflictResolutionDispatchParams;
 }
 
 export interface PostedReviewCardComment {
@@ -58,13 +44,10 @@ export class StubGitHubClient implements GitHubClient {
 	readonly postedReviewCardComments: PostedReviewCardComment[] = [];
 	readonly updateBranchCalls: string[] = [];
 	readonly commitResolvedFilesCalls: CommitResolvedFilesCall[] = [];
-	readonly dispatchConflictResolutionCalls: DispatchConflictResolutionCall[] = [];
 	// One-shot: thrown on the next call, then cleared, so a test can simulate a single
 	// transient failure (e.g. a non-fast-forward race) without permanently breaking the stub.
 	updateBranchError: Error | undefined;
 	commitResolvedFilesError: Error | undefined;
-	dispatchConflictResolutionError: Error | undefined;
-	dispatchConflictResolutionResult: ConflictResolutionDispatchResult = {};
 	// Set false to simulate updateBranch/commitResolvedFiles succeeding but the PR staying
 	// not-mergeable anyway (e.g. the base branch moved again during resolution).
 	autoMarkMergeableAfterSuccess = true;
@@ -246,20 +229,6 @@ export class StubGitHubClient implements GitHubClient {
 		// Mirrors reality: a successful resolution commit is exactly what makes the PR
 		// mergeable again, so the next getMergeability() call should reflect that.
 		this.markMergeableAfterSuccess(owner, repo, prNumber);
-	}
-
-	async dispatchConflictResolution(
-		owner: string,
-		repo: string,
-		params: ConflictResolutionDispatchParams,
-	): Promise<ConflictResolutionDispatchResult> {
-		this.dispatchConflictResolutionCalls.push({ owner, repo, params });
-		if (this.dispatchConflictResolutionError !== undefined) {
-			const err = this.dispatchConflictResolutionError;
-			this.dispatchConflictResolutionError = undefined;
-			throw err;
-		}
-		return this.dispatchConflictResolutionResult;
 	}
 
 	private markMergeableAfterSuccess(owner: string, repo: string, prNumber: number): void {

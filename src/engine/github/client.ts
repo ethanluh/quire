@@ -39,21 +39,6 @@ export interface FoundOrCreatedPullRequest {
 	created: boolean;
 }
 
-export interface ConflictResolutionDispatchParams {
-	prNumber: number;
-	headBranch: string;
-	baseBranch: string;
-	declaredDirection: string;
-	callbackUrl: string;
-	callbackToken: string;
-}
-
-export interface ConflictResolutionDispatchResult {
-	// workflow_dispatch's REST response carries no body, so the run it created isn't known
-	// synchronously — this is a best-effort recovery, absent if inconclusive.
-	workflowRunId?: number;
-}
-
 export interface GitHubClient {
 	getPullRequest(owner: string, repo: string, prNumber: number): Promise<RawPRPayload>;
 	listOpenPullRequests(owner: string, repo: string): Promise<ListOpenPullRequestsResult>;
@@ -108,16 +93,6 @@ export interface GitHubClient {
 		baseTipSha: string,
 		files: ReadonlyArray<ResolvedFile>,
 	): Promise<void>;
-	// Triggers the target repo's conflict-resolution workflow (see repoSetup.ts) via
-	// workflow_dispatch, passing everything the workflow needs to reproduce and resolve the
-	// conflict itself. Does not wait for the run to finish — the run reports back via
-	// callbackUrl (see routes/actionCallback.ts), with a timeout poll as a fallback. Throws
-	// if the workflow file doesn't exist on the default branch yet (repo setup PR not merged).
-	dispatchConflictResolution(
-		owner: string,
-		repo: string,
-		params: ConflictResolutionDispatchParams,
-	): Promise<ConflictResolutionDispatchResult>;
 }
 
 // Content that couldn't be decoded as UTF-8 text — a binary file. Conflict resolution

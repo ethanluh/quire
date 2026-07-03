@@ -97,7 +97,6 @@
   .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
   .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
   .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
-  .pr-status-resolving { background: var(--color-flagged-wash); color: var(--color-flagged); }
 
   .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
   .result-msg.error { color: var(--color-reject); }
@@ -421,7 +420,6 @@ function prMergeStatusBadge(pr, mergeStatus) {
   if (mergeStatus.revertedPrIds.includes(pr.id)) status = 'reverted';
   else if (mergeStatus.mergedPrIds.includes(pr.id)) status = 'merged';
   else if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) status = 'conflict';
-  else if (mergeStatus.resolution && mergeStatus.resolution.prId === pr.id) status = 'resolving';
   return `<span class="badge pr-status-${status}">Merge: ${escapeHtml(status)}</span>`;
 }
 
@@ -491,7 +489,7 @@ function showQueueDetail(bundleId) {
     { direction: entry.bundle.direction, effectSummary: entry.bundle.effectSummary, members: entry.bundle.members },
     {
       queueMeta: { status: entry.status, enqueuedAt: entry.enqueuedAt },
-      mergeStatus: { mergedPrIds: entry.mergedPrIds, revertedPrIds: entry.revertedPrIds, conflict: entry.conflict, resolution: entry.resolution },
+      mergeStatus: { mergedPrIds: entry.mergedPrIds, revertedPrIds: entry.revertedPrIds, conflict: entry.conflict },
     },
   ));
 }
@@ -1074,8 +1072,8 @@ function startPolling() {
 }
 
 // Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
-// a webhook, reconciliation pass, or conflict-resolution callback changes state, so the active
-// pane updates immediately instead of waiting for the next poll tick. The interval above stays
+// a webhook or reconciliation pass changes state, so the active pane updates immediately
+// instead of waiting for the next poll tick. The interval above stays
 // running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
 // server's own reconciliation timer is a fallback for a missed webhook delivery. Reuses
 // pollActivePane's own gesture-in-flight/dragging guard, so a push can't yank the stack out

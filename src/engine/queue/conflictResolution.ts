@@ -1,10 +1,18 @@
-import { randomBytes } from "node:crypto";
-import { merge as diff3Merge } from "node-diff3";
 import type { PullRequest } from "../types/core.js";
 import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 import { NotFastForwardError } from "../types/mergeability.js";
 import type { GitHubClient } from "../github/client.js";
 import { BinaryFileError } from "../github/client.js";
+import type { LlmProvider } from "../drift/effectList/provider.js";
+import type { ConflictHunk } from "./conflictHunks.js";
+import {
+	classifyHunk,
+	extractConflictHunks,
+	extractConflictRegions,
+	reconstructContent,
+	resolveMechanicalHunk,
+} from "./conflictHunks.js";
+import { resolveSemanticHunks } from "./semanticHunkResolver.js";
 
 export type FileResolutionPlan =
 	| { path: string; kind: "takeOurs" }
@@ -73,23 +81,32 @@ export function planFileResolutions(trees: ConflictTrees): ReadonlyArray<FileRes
 	return plans;
 }
 
-export type ConflictResolutionOutcome =
-	| { status: "resolved" }
-	| { status: "failed"; reason: string }
-	| { status: "dispatched"; prId: string; workflowRunId?: number; callbackToken: string };
+const HUNK_PREVIEW_LINE_LENGTH = 60;
+
+// A short, human-scannable anchor for a hunk in a failure reason — enough for a reviewer to
+// find the right conflict marker in the file without re-diffing it by hand (see INV-6).
+function describeHunkSide(lines: ReadonlyArray<string>): string {
+	const first = lines[0] ?? "";
+	const truncated = first.length > HUNK_PREVIEW_LINE_LENGTH ? `${first.slice(0, HUNK_PREVIEW_LINE_LENGTH)}…` : first;
+	const suffix = lines.length > 1 ? ` (+${lines.length - 1} more line${lines.length > 2 ? "s" : ""})` : "";
+	return `"${truncated}"${suffix}`;
+}
+
+export type ConflictResolutionOutcome = { status: "resolved" } | { status: "failed"; reason: string };
 
 // One full attempt: fetch the three trees, triage every touched path, resolve whatever
-// diff3 can on its own, commit if everything resolved that way. The moment a file survives
-// diff3 with real conflict markers, stop and dispatch the whole PR to the target repo's
-// conflict-resolution Action instead — that Action re-merges the branch itself in its own
-// checkout, so a partial Quire-side commit of the cheaply-resolved files would just be redone.
+// diff3 can on its own, commit if everything resolved that way. When a file survives diff3
+// with real conflict markers, extract the specific conflicting hunks and resolve those:
+// mechanical hunks (both sides agree modulo whitespace) resolve for free, semantic hunks go
+// through one batched LLM call, and any hunk the model isn't confident about fails the whole
+// attempt rather than guessing — per INV-6, surfaced to the human queue via the "failed"
+// status, same as every other unresolvable case in this function.
 // Never loops or retries internally — the caller (mergeQueue.ts) decides what happens next.
 export async function resolveMergeConflict(
-	bundleId: string,
 	pr: PullRequest,
 	mergeability: MergeabilityResult,
 	github: GitHubClient,
-	callbackBaseUrl: string | undefined,
+	provider: LlmProvider,
 ): Promise<ConflictResolutionOutcome> {
 	if (mergeability.isFork) {
 		return { status: "failed", reason: "head branch lives in a fork this installation can't push to" };
@@ -124,52 +141,40 @@ export async function resolveMergeConflict(
 				github.getBlobContent(pr.repoOwner, pr.repoName, plan.oursSha),
 				github.getBlobContent(pr.repoOwner, pr.repoName, plan.theirsSha),
 			]);
-			const merged = diff3Merge(oursContent, mergeBaseContent, theirsContent, {
-				stringSeparator: "\n",
-				label: { a: "PR (ours)", b: "main (theirs)" },
-			});
-			const mergedContent = merged.result.join("\n");
-			if (!merged.conflict) {
-				resolvedFiles.push({ path: plan.path, content: mergedContent, mode: plan.mode });
-				continue;
+			// A single diff3 pass gives both the conflict check and, if there's nothing to
+			// resolve, the clean merge itself — no separate "is there a conflict" call needed.
+			const regions = extractConflictRegions(oursContent, mergeBaseContent, theirsContent);
+			const hunks = extractConflictHunks(regions);
+			const resolutions = new Map<number, string>();
+			const semanticHunks: ConflictHunk[] = [];
+			for (const hunk of hunks) {
+				if (classifyHunk(hunk) === "mechanical") {
+					resolutions.set(hunk.index, resolveMechanicalHunk(hunk));
+				} else {
+					semanticHunks.push(hunk);
+				}
 			}
 
-			// diff3 itself couldn't resolve this file — hand the whole PR off to the target
-			// repo's Action rather than resolving file-by-file (see function comment).
-			if (callbackBaseUrl === undefined) {
-				return {
-					status: "failed",
-					reason: "QUIRE_PUBLIC_URL is not configured — the conflict-resolution Action has no way to call back to this instance",
-				};
+			if (semanticHunks.length > 0) {
+				const semanticResolutions = await resolveSemanticHunks(semanticHunks, pr.declaredDirection, provider);
+				for (let i = 0; i < semanticHunks.length; i++) {
+					const hunk = semanticHunks[i];
+					const resolution = semanticResolutions[i];
+					if (hunk === undefined || resolution === undefined) continue;
+					if (resolution.confidence === "low") {
+						// Per INV-6, disclose which hunk beat the resolver, not just that one did —
+						// a bare "couldn't resolve" reason forces a human to re-diff the file by hand.
+						return {
+							status: "failed",
+							reason: `${plan.path}: could not confidently resolve a conflicting hunk (ours: ${describeHunkSide(hunk.oursLines)} vs theirs: ${describeHunkSide(hunk.theirsLines)})`,
+						};
+					}
+					resolutions.set(hunk.index, resolution.resolution);
+				}
 			}
-			const callbackToken = randomBytes(32).toString("hex");
-			let dispatch;
-			try {
-				dispatch = await github.dispatchConflictResolution(pr.repoOwner, pr.repoName, {
-					prNumber: pr.number,
-					headBranch: mergeability.headBranch,
-					baseBranch: mergeability.baseBranch,
-					declaredDirection: pr.declaredDirection,
-					callbackUrl: `${callbackBaseUrl}/${bundleId}/resolution`,
-					callbackToken,
-				});
-			} catch (dispatchErr) {
-				// Most commonly: the target repo hasn't merged Quire's setup PR yet, so
-				// workflow_dispatch has no workflow file on the default branch to target.
-				// Surface it as a plain resolution failure rather than an uncaught exception
-				// that would crash dequeueNext() for every other queued bundle too.
-				const message = dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr);
-				return {
-					status: "failed",
-					reason: `could not dispatch the conflict-resolution workflow (merge Quire's setup PR first if you haven't): ${message}`,
-				};
-			}
-			return {
-				status: "dispatched",
-				prId: pr.id,
-				callbackToken,
-				...(dispatch.workflowRunId !== undefined ? { workflowRunId: dispatch.workflowRunId } : {}),
-			};
+
+			resolvedFiles.push({ path: plan.path, content: reconstructContent(regions, resolutions), mode: plan.mode });
+			continue;
 		} catch (err) {
 			if (err instanceof BinaryFileError) {
 				return { status: "failed", reason: `${plan.path}: binary file conflict, cannot auto-resolve` };
