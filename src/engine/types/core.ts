@@ -15,6 +15,11 @@ export interface Diff {
 	hunks: ReadonlyArray<DiffHunk>;
 }
 
+// Explicit "no direction was declared" label. Distinct from any real declaration so it
+// can never collide with real text; recognized downstream (bundling, gate criteria) to
+// force per-PR handling without ever inferring a direction from the diff (INV-1).
+export const UNDECLARED_DIRECTION = "(no declared direction)";
+
 export interface PullRequest {
 	id: string;
 	repoOwner: string;

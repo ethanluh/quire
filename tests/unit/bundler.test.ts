@@ -2,7 +2,7 @@ import { describe, it, expect } from "@jest/globals";
 import { buildBundles } from "../../src/engine/bundle/bundler.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { PrEffectCache } from "../../src/engine/cache/prCache.js";
-import type { Bundle, PullRequest } from "../../src/engine/types/core.js";
+import { UNDECLARED_DIRECTION, type Bundle, type PullRequest } from "../../src/engine/types/core.js";
 import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "../../src/engine/drift/effectList/provider.js";
 import { LlmApiError } from "../../src/engine/drift/effectList/httpRetry.js";
 
@@ -126,6 +126,26 @@ describe("buildBundles — clusters on drift-check evidence, not declaredDirecti
 		expect(extractionFailures.map((f) => f.pr.id)).toEqual(["pr-bad"]);
 		expect(bundles.length).toBe(1);
 		expect(bundles[0]?.members.map((m) => m.id)).toEqual(["pr-good"]);
+	});
+
+	it("never clusters undeclared-direction PRs together, even with identical extracted effects", async () => {
+		const stub = new StubLlmProvider();
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow to the auth endpoint"]));
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow to the auth endpoint"]));
+		// If clustering ran for these PRs at all, StubLlmProvider (no embeddings) would need
+		// a classify() call to compare pr-b against pr-a's centroid. None is queued, so the
+		// test fails loudly if the forced-singleton path is bypassed.
+
+		const prs = [
+			makePR("pr-a", UNDECLARED_DIRECTION),
+			makePR("pr-b", UNDECLARED_DIRECTION),
+		];
+
+		const { bundles } = await buildBundles(prs, stub, { similarityThreshold: 0.75 });
+
+		expect(bundles.length).toBe(2);
+		const memberIds = bundles.map((b) => b.members.map((m) => m.id)).sort();
+		expect(memberIds).toEqual([["pr-a"], ["pr-b"]]);
 	});
 });
 
