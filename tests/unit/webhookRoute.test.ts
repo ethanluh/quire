@@ -24,12 +24,11 @@ const PIPELINE_CONFIG: PipelineConfig = {
 	bundle: { similarityThreshold: 0.75 },
 };
 
-const ACCOUNT: InstallationBinding = {
+const BINDING: InstallationBinding = {
 	installationId: 1,
 	accountLogin: "octocat",
 	accountType: "User",
 	boundAt: "2026-06-30T00:00:00.000Z",
-	selectedRepo: { owner: "octocat", name: "hello-world" },
 };
 
 function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
@@ -49,7 +48,7 @@ function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 	};
 }
 
-function pullRequestEventPayload(owner: string, repo: string, action: string, prId = 123, installationId = ACCOUNT.installationId): unknown {
+function pullRequestEventPayload(owner: string, repo: string, action: string, prId = 123, installationId = BINDING.installationId): unknown {
 	return {
 		action,
 		repository: { owner: { login: owner }, name: repo },
@@ -69,9 +68,11 @@ describe("webhookRouter", () => {
 
 	async function setup(client: StubGitHubClient = new StubGitHubClient(), provider = new StubLlmProvider()): Promise<{ refreshDeps: RefreshDeps }> {
 		const refreshDeps: RefreshDeps = {
-			accountState: createAccountState(ACCOUNT),
+			accountState: createAccountState({
+				installations: [BINDING],
+				selectedRepo: { owner: "octocat", name: "hello-world", installationId: BINDING.installationId },
+			}),
 			accountPath: join(dir, "installation.json"),
-			preferencesPath: join(dir, "preferences.json"),
 			clientHolder: new GitHubClientHolder(client),
 			appConfig: { appId: "1", privateKey: "unused" },
 			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),
@@ -86,7 +87,7 @@ describe("webhookRouter", () => {
 		};
 		const app = express();
 		app.use(express.raw({ type: "application/json" }));
-		app.use(webhookRouter((installationId) => (installationId === ACCOUNT.installationId ? refreshDeps : undefined)));
+		app.use(webhookRouter((installationId) => (installationId === BINDING.installationId ? refreshDeps : undefined)));
 		server = app.listen(0);
 		return { refreshDeps };
 	}
