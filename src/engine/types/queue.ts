@@ -52,6 +52,11 @@ export interface MergeQueueEntry {
 	// so the partial-merge residual stays visible (INV-6) — abort does not revert what already
 	// landed; see revertPr() for that as a separate, explicit action.
 	abortedAt?: string;
+	// Set when status is "landed": timestamp the final member PR merged. Used by listEntries()
+	// to float recently-landed bundles to the top of the queue view, independent of enqueuedAt
+	// (a bundle enqueued early but stuck behind a conflict can land well after ones queued
+	// after it). Absent on entries persisted before this field existed.
+	landedAt?: string;
 	// Set when a deep-investigation session has been started for one or more escalated files
 	// (status "investigating" while any are still "running", back to "conflict" — carrying
 	// these for the review UI — once every investigation has a terminal outcome).

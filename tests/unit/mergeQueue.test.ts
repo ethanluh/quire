@@ -182,6 +182,44 @@ describe("MergeQueue.removeQueued", () => {
 	});
 });
 
+describe("MergeQueue.listEntries — ordering", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	it("puts the most recently landed bundle first, ahead of one landed earlier", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const statePath = join(dir, "queue.json");
+		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+
+		await queue.enqueue(makeBundle("bundle-1", [makePr({ id: "pr-1" })]));
+		await queue.dequeueNext(); // lands bundle-1 first
+		await queue.enqueue(makeBundle("bundle-2", [makePr({ id: "pr-2" })]));
+		await queue.dequeueNext(); // lands bundle-2 second, so it should sort above bundle-1
+
+		const entries = await queue.listEntries();
+		expect(entries.map((e) => e.bundleId)).toEqual(["bundle-2", "bundle-1"]);
+	});
+
+	it("keeps a still-queued entry after the landed group even though it was enqueued first", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const statePath = join(dir, "queue.json");
+		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+
+		await queue.enqueue(makeBundle("bundle-1", [makePr({ id: "pr-1" })]));
+		await queue.enqueue(makeBundle("bundle-2", [makePr({ id: "pr-2" })]));
+		await queue.dequeueNext(); // lands bundle-1, bundle-2 stays queued
+
+		const entries = await queue.listEntries();
+		expect(entries.map((e) => e.bundleId)).toEqual(["bundle-1", "bundle-2"]);
+		expect(entries[1]?.status).toBe("queued");
+	});
+});
+
 describe("MergeQueue.dequeueNext — mergeability handling", () => {
 	let dir: string;
 
