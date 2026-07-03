@@ -6,6 +6,7 @@ import { InstallationRevokedError, isInstallationRevoked } from "../../engine/gi
 import { rawPRPayloadToIncomingPR } from "../../engine/github/toIncomingPR.js";
 import { normalizePR } from "../../engine/ingest/ingest.js";
 import type { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
+import type { MergeQueue } from "../../engine/queue/mergeQueue.js";
 import type { AccountState } from "./accountState.js";
 import { activeInstallation } from "./accountState.js";
 import { notifyStateChanged } from "./changeEvents.js";
@@ -28,6 +29,9 @@ export interface RefreshDeps {
 	decidedStore: DecidedPrStore;
 	state: ServerState;
 	pipelineDeps: PipelineDeps;
+	// Lets a webhook-triggered refresh also pick a stuck merge back up (see webhook.ts's
+	// synchronize handling) — not used by refreshRepoQueue/enqueueRefresh themselves.
+	queue: MergeQueue;
 	// Scopes enqueueRefresh's per-repo coalescing lock to this tenant (its GitHub login) —
 	// omitted defaults to the pre-multi-tenant behavior of one shared lock namespace, which
 	// existing single-tenant callers/tests still rely on.

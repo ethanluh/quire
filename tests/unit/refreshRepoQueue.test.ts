@@ -17,6 +17,8 @@ import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { InstallationBinding } from "../../src/engine/github/installation.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
+import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -115,6 +117,7 @@ describe("refreshRepoQueue", () => {
 				auditStore: new AuditStore(),
 				prCache: new PrEffectCache(),
 			},
+			queue: new MergeQueue(join(dir, "queue.json"), client, new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
 		};
 	}
 
@@ -256,6 +259,7 @@ describe("enqueueRefresh", () => {
 				auditStore: new AuditStore(),
 				prCache: new PrEffectCache(),
 			},
+			queue: new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
 		};
 
 		const first = enqueueRefresh("octocat", "hello-world", deps);
@@ -289,6 +293,7 @@ describe("enqueueRefresh", () => {
 				auditStore: new AuditStore(),
 				prCache: new PrEffectCache(),
 			},
+			queue: new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
 		};
 		let notifyCount = 0;
 		const unsubscribe = onStateChanged(() => { notifyCount += 1; });

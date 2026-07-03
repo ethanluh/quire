@@ -481,6 +481,61 @@ describe("MergeQueue.reattempt", () => {
 	});
 });
 
+describe("MergeQueue.reattemptForPr", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	it("clears a conflict entry matching the given PR id and requeues it", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		const blocked = await queue.dequeueNext();
+		expect(blocked?.status).toBe("conflict");
+
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		const retried = await queue.reattemptForPr(pr.id);
+
+		expect(retried?.bundleId).toBe("bundle-1");
+		expect(retried?.status).toBe("queued");
+		expect(retried?.conflict).toBeUndefined();
+
+		const landed = await queue.dequeueNext();
+		expect(landed?.status).toBe("landed");
+		expect(github.mergedPrs).toEqual(["org/repo/1"]);
+	});
+
+	it("returns undefined when no entry is in conflict for that PR", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		await queue.enqueue(makeBundle("bundle-1", [makePr()]));
+
+		await expect(queue.reattemptForPr("pr-1")).resolves.toBeUndefined();
+	});
+
+	it("does not match an aborted entry, even with a stale matching conflict.prId", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.dequeueNext();
+		await queue.abort("bundle-1");
+
+		await expect(queue.reattemptForPr(pr.id)).resolves.toBeUndefined();
+		expect((await queue.getEntry("bundle-1"))?.status).toBe("aborted");
+	});
+});
+
 describe("MergeQueue.abort", () => {
 	let dir: string;
 

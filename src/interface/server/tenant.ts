@@ -199,6 +199,7 @@ async function loadTenant(login: string, shared: TenantSharedConfig): Promise<Te
 		decidedStore,
 		state,
 		pipelineDeps,
+		queue,
 		tenantKey: login,
 	};
 

@@ -326,9 +326,28 @@ export class MergeQueue {
 	private async reattemptLocked(bundleId: string): Promise<MergeQueueEntry | undefined> {
 		const entry = this.state.entries.find((e) => e.bundleId === bundleId && (e.status === "conflict" || e.status === "aborted"));
 		if (entry === undefined) return undefined;
+		return this.clearToQueued(entry);
+	}
+
+	// Same "conflict" → "queued" transition as reattempt(), but looked up by the PR a
+	// conflict was recorded against rather than by bundle id — the caller (a GitHub webhook
+	// on new commits) only knows which PR just changed, not which bundle it belongs to.
+	// Deliberately excludes "aborted": that status is an explicit human give-up, which a
+	// stray push shouldn't silently override the way a fresh conflict-clearing commit does.
+	async reattemptForPr(prId: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.reattemptForPrLocked(prId));
+	}
+
+	private async reattemptForPrLocked(prId: string): Promise<MergeQueueEntry | undefined> {
+		const entry = this.state.entries.find((e) => e.status === "conflict" && e.conflict?.prId === prId);
+		if (entry === undefined) return undefined;
+		return this.clearToQueued(entry);
+	}
+
+	private async clearToQueued(entry: MergeQueueEntry): Promise<MergeQueueEntry> {
 		const { conflict: _conflict, abortedAt: _abortedAt, ...rest } = entry;
 		const retried: MergeQueueEntry = { ...rest, status: "queued" };
-		await this.setEntry(bundleId, retried);
+		await this.setEntry(entry.bundleId, retried);
 		return retried;
 	}
 
