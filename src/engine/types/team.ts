@@ -23,6 +23,20 @@ export interface LoginMembershipIndex {
 	activeTeamId: string;
 }
 
+// data/teams/<teamId>/invites.json — a record of every invite link minted for this team,
+// so an owner/admin can see who's been invited but hasn't joined yet (the invite token
+// itself is stateless/self-verifying and carries no such visibility on its own). `id`
+// matches InvitePayload.id, letting /team/join find and stamp the right record on redemption.
+export interface InviteRecord {
+	id: string;
+	invitedBy: string; // login, audit only
+	issuedAt: string;
+	expiresAt: string;
+	redeemedBy?: string;
+	redeemedAt?: string;
+	revokedAt?: string;
+}
+
 export function isTeam(value: unknown): value is Team {
 	if (typeof value !== "object" || value === null) return false;
 	const record = value as Record<string, unknown>;
@@ -61,4 +75,22 @@ export function isLoginMembershipIndex(value: unknown): value is LoginMembership
 		record["teamIds"].every((id) => typeof id === "string") &&
 		typeof record["activeTeamId"] === "string"
 	);
+}
+
+function isInviteRecord(value: unknown): value is InviteRecord {
+	if (typeof value !== "object" || value === null) return false;
+	const record = value as Record<string, unknown>;
+	return (
+		typeof record["id"] === "string" &&
+		typeof record["invitedBy"] === "string" &&
+		typeof record["issuedAt"] === "string" &&
+		typeof record["expiresAt"] === "string" &&
+		(record["redeemedBy"] === undefined || typeof record["redeemedBy"] === "string") &&
+		(record["redeemedAt"] === undefined || typeof record["redeemedAt"] === "string") &&
+		(record["revokedAt"] === undefined || typeof record["revokedAt"] === "string")
+	);
+}
+
+export function isInviteRecordList(value: unknown): value is ReadonlyArray<InviteRecord> {
+	return Array.isArray(value) && value.every(isInviteRecord);
 }

@@ -166,9 +166,106 @@ describe("teamRouter", () => {
 		expect(verifyInvite(token as string, SECRET)?.teamId).toBe(teamId);
 	});
 
+	it("POST /invite records a pending invite visible via GET /invites", async () => {
+		await signIn("alice");
+
+		const res = await fetch(`${baseUrl}/account/team/invite`, { method: "POST" });
+		expect(res.status).toBe(200);
+
+		const listRes = await fetch(`${baseUrl}/account/team/invites`);
+		const { invites } = (await listRes.json()) as { invites: Array<{ status: string; invitedBy: string }> };
+		expect(invites).toHaveLength(1);
+		expect(invites[0]).toMatchObject({ status: "pending", invitedBy: "alice" });
+	});
+
+	it("GET /invites 403s for a plain member", async () => {
+		const teamId = await signIn("alice");
+		await addMemberWithIndex(teamId, "carol", "member");
+		currentLogin = "carol";
+
+		const res = await fetch(`${baseUrl}/account/team/invites`);
+
+		expect(res.status).toBe(403);
+	});
+
+	it("GET /invites reflects redeemed status after the invite is joined", async () => {
+		const ownerTeamId = await signIn("owner");
+		const inviteRes = await fetch(`${baseUrl}/account/team/invite`, { method: "POST" });
+		const { inviteUrl } = (await inviteRes.json()) as { inviteUrl: string };
+		const token = new URL(inviteUrl).searchParams.get("joinTeam") as string;
+
+		currentLogin = "bob";
+		await store.createTeamForLogin("bob", "bob's team");
+		await fetch(`${baseUrl}/account/team/join`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ token }),
+		});
+
+		currentLogin = "owner";
+		const listRes = await fetch(`${baseUrl}/account/team/invites`);
+		const { invites } = (await listRes.json()) as { invites: Array<{ status: string; redeemedBy?: string }> };
+		expect(invites[0]).toMatchObject({ status: "redeemed", redeemedBy: "bob" });
+	});
+
+	it("DELETE /invites/:id revokes a pending invite and blocks it from being joined", async () => {
+		const ownerTeamId = await signIn("owner");
+		const inviteRes = await fetch(`${baseUrl}/account/team/invite`, { method: "POST" });
+		const { inviteUrl } = (await inviteRes.json()) as { inviteUrl: string };
+		const token = new URL(inviteUrl).searchParams.get("joinTeam") as string;
+		const { invites: before } = (await (await fetch(`${baseUrl}/account/team/invites`)).json()) as {
+			invites: Array<{ id: string }>;
+		};
+		const inviteId = before[0]?.id as string;
+
+		const revokeRes = await fetch(`${baseUrl}/account/team/invites/${inviteId}`, { method: "DELETE" });
+		expect(revokeRes.status).toBe(200);
+
+		currentLogin = "bob";
+		await store.createTeamForLogin("bob", "bob's team");
+		const joinRes = await fetch(`${baseUrl}/account/team/join`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ token }),
+		});
+		expect(joinRes.status).toBe(400);
+		expect(await store.getMembership(ownerTeamId, "bob")).toBeUndefined();
+	});
+
+	it("DELETE /invites/:id 409s for an already-redeemed invite", async () => {
+		await signIn("owner");
+		const inviteRes = await fetch(`${baseUrl}/account/team/invite`, { method: "POST" });
+		const { inviteUrl } = (await inviteRes.json()) as { inviteUrl: string };
+		const token = new URL(inviteUrl).searchParams.get("joinTeam") as string;
+		const { invites: before } = (await (await fetch(`${baseUrl}/account/team/invites`)).json()) as {
+			invites: Array<{ id: string }>;
+		};
+		const inviteId = before[0]?.id as string;
+
+		currentLogin = "bob";
+		await store.createTeamForLogin("bob", "bob's team");
+		await fetch(`${baseUrl}/account/team/join`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ token }),
+		});
+
+		currentLogin = "owner";
+		const revokeRes = await fetch(`${baseUrl}/account/team/invites/${inviteId}`, { method: "DELETE" });
+		expect(revokeRes.status).toBe(409);
+	});
+
+	it("DELETE /invites/:id 404s for an unknown id", async () => {
+		await signIn("owner");
+
+		const res = await fetch(`${baseUrl}/account/team/invites/does-not-exist`, { method: "DELETE" });
+
+		expect(res.status).toBe(404);
+	});
+
 	it("POST /join adds the invited login as a member and switches their active team to it", async () => {
 		const ownerTeamId = await signIn("owner");
-		const token = createInvite(ownerTeamId, "owner", SECRET);
+		const { token } = createInvite(ownerTeamId, "owner", SECRET);
 
 		currentLogin = "bob";
 		await store.createTeamForLogin("bob", "bob's team"); // bob already has his own personal team
@@ -200,7 +297,7 @@ describe("teamRouter", () => {
 
 	it("POST /join is idempotent when the login is already a member", async () => {
 		const ownerTeamId = await signIn("owner");
-		const token = createInvite(ownerTeamId, "owner", SECRET);
+		const { token } = createInvite(ownerTeamId, "owner", SECRET);
 		currentLogin = "bob";
 		await store.createTeamForLogin("bob", "bob's team");
 

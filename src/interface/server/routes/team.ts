@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { TeamStore } from "../../../engine/team/teamStore.js";
-import { LastOwnerError, NotAMemberError } from "../../../engine/team/teamStore.js";
-import { createInvite, verifyInvite } from "../invite.js";
+import { InviteAlreadyRedeemedError, LastOwnerError, NotAMemberError } from "../../../engine/team/teamStore.js";
+import { createInvite, verifyInvite, INVITE_TTL_MS } from "../invite.js";
 import { validateBody } from "../middleware/validation.js";
 import { requireRole } from "../middleware/requireRole.js";
 
@@ -134,8 +134,73 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				res.status(401).json({ error: "Sign in required" });
 				return;
 			}
-			const token = createInvite(membership.teamId, login, sessionSecret);
+			const { token, id } = createInvite(membership.teamId, login, sessionSecret);
+			const now = new Date();
+			await teamStore.addInvite(membership.teamId, {
+				id,
+				invitedBy: login,
+				issuedAt: now.toISOString(),
+				expiresAt: new Date(now.getTime() + INVITE_TTL_MS).toISOString(),
+			});
 			res.json({ inviteUrl: `${publicUrl}/?joinTeam=${token}` });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// Owner/admin only, matching every other roster-composition route — an invite link is a
+	// capability to join, so who's holding an unredeemed one is the same class of information
+	// as the roster itself. `status` is derived, not stored, so revocation/expiry/redemption
+	// never need reconciling against "now" in more than one place.
+	router.get("/invites", requireRole("owner", "admin"), async (_req, res, next) => {
+		try {
+			const membership = res.locals.membership;
+			if (membership === undefined) {
+				res.status(401).json({ error: "Sign in required" });
+				return;
+			}
+			const invites = await teamStore.listInvites(membership.teamId);
+			const now = Date.now();
+			const withStatus = invites.map((invite) => ({
+				...invite,
+				status:
+					invite.redeemedAt !== undefined
+						? "redeemed"
+						: invite.revokedAt !== undefined
+							? "revoked"
+							: new Date(invite.expiresAt).getTime() < now
+								? "expired"
+								: "pending",
+			}));
+			res.json({ invites: withStatus });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	router.delete("/invites/:id", requireRole("owner", "admin"), async (req, res, next) => {
+		try {
+			const membership = res.locals.membership;
+			if (membership === undefined) {
+				res.status(401).json({ error: "Sign in required" });
+				return;
+			}
+			const id = req.params["id"] ?? "";
+			const existing = await teamStore.getInvite(membership.teamId, id);
+			if (existing === undefined) {
+				res.status(404).json({ error: "Invite not found" });
+				return;
+			}
+			try {
+				await teamStore.revokeInvite(membership.teamId, id);
+			} catch (err) {
+				if (err instanceof InviteAlreadyRedeemedError) {
+					res.status(409).json({ error: "This invite was already redeemed — there's nothing left to revoke" });
+					return;
+				}
+				throw err;
+			}
+			res.json({ id, revoked: true });
 		} catch (err) {
 			next(err);
 		}
@@ -160,6 +225,16 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				return;
 			}
 
+			// A revoked invite's token still verifies (the signature alone can't know about a
+			// later revocation) — the persisted record is the only place that can be checked.
+			// A missing record (predates this feature, or the team's invites.json was reset)
+			// is not treated as revoked: the token's own signature is still sufficient proof.
+			const inviteRecord = await teamStore.getInvite(payload.teamId, payload.id);
+			if (inviteRecord?.revokedAt !== undefined) {
+				res.status(400).json({ error: "This invite has been revoked" });
+				return;
+			}
+
 			const existingMembership = await teamStore.getMembership(payload.teamId, login);
 			if (existingMembership === undefined) {
 				await teamStore.addMember(payload.teamId, {
@@ -174,6 +249,7 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				teamIds: [...new Set([...(current?.teamIds ?? []), payload.teamId])],
 				activeTeamId: payload.teamId,
 			}));
+			await teamStore.markInviteRedeemed(payload.teamId, payload.id, login);
 			res.json({ teamId: payload.teamId, name: team.name });
 		} catch (err) {
 			next(err);

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "@jest/globals";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LastOwnerError, TeamStore } from "../../src/engine/team/teamStore.js";
+import { InviteAlreadyRedeemedError, LastOwnerError, TeamStore } from "../../src/engine/team/teamStore.js";
 
 describe("TeamStore", () => {
 	let dir: string;
@@ -254,5 +254,71 @@ describe("TeamStore", () => {
 		await setup();
 
 		await expect(store.loadMembershipIndex("../../etc/passwd")).rejects.toThrow();
+	});
+
+	describe("invites", () => {
+		it("listInvites is empty for a team with none", async () => {
+			await setup();
+			const team = await store.createTeamForLogin("ivy", "Ivy's team");
+
+			expect(await store.listInvites(team.teamId)).toEqual([]);
+		});
+
+		it("addInvite persists and round-trips a record", async () => {
+			await setup();
+			const team = await store.createTeamForLogin("ivy", "Ivy's team");
+			const record = { id: "inv-1", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" };
+
+			await store.addInvite(team.teamId, record);
+
+			expect(await store.listInvites(team.teamId)).toEqual([record]);
+			expect(await store.getInvite(team.teamId, "inv-1")).toEqual(record);
+		});
+
+		it("markInviteRedeemed stamps redeemedBy/redeemedAt on the matching record only", async () => {
+			await setup();
+			const team = await store.createTeamForLogin("ivy", "Ivy's team");
+			await store.addInvite(team.teamId, { id: "inv-1", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" });
+			await store.addInvite(team.teamId, { id: "inv-2", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" });
+
+			await store.markInviteRedeemed(team.teamId, "inv-1", "jack");
+
+			const invites = await store.listInvites(team.teamId);
+			expect(invites.find((i) => i.id === "inv-1")).toMatchObject({ redeemedBy: "jack" });
+			expect(invites.find((i) => i.id === "inv-2")?.redeemedBy).toBeUndefined();
+		});
+
+		it("markInviteRedeemed is a silent no-op for an unknown id", async () => {
+			await setup();
+			const team = await store.createTeamForLogin("ivy", "Ivy's team");
+
+			await expect(store.markInviteRedeemed(team.teamId, "does-not-exist", "jack")).resolves.toBeUndefined();
+		});
+
+		it("revokeInvite stamps revokedAt on a pending invite", async () => {
+			await setup();
+			const team = await store.createTeamForLogin("ivy", "Ivy's team");
+			await store.addInvite(team.teamId, { id: "inv-1", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" });
+
+			await store.revokeInvite(team.teamId, "inv-1");
+
+			expect((await store.getInvite(team.teamId, "inv-1"))?.revokedAt).toBeDefined();
+		});
+
+		it("revokeInvite throws for an already-redeemed invite", async () => {
+			await setup();
+			const team = await store.createTeamForLogin("ivy", "Ivy's team");
+			await store.addInvite(team.teamId, { id: "inv-1", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" });
+			await store.markInviteRedeemed(team.teamId, "inv-1", "jack");
+
+			await expect(store.revokeInvite(team.teamId, "inv-1")).rejects.toBeInstanceOf(InviteAlreadyRedeemedError);
+		});
+
+		it("revokeInvite throws for an unknown id", async () => {
+			await setup();
+			const team = await store.createTeamForLogin("ivy", "Ivy's team");
+
+			await expect(store.revokeInvite(team.teamId, "does-not-exist")).rejects.toThrow();
+		});
 	});
 });
