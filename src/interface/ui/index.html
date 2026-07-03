@@ -279,78 +279,84 @@
 
 <div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
   <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
-    <h3 class="modal-title" id="settings-modal-title">Settings</h3>
+    <div class="settings-header">
+      <h3 class="modal-title" id="settings-modal-title">Settings</h3>
+      <button class="btn btn-defer btn-icon" id="btn-settings-modal-close" title="Close" aria-label="Close settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
 
-    <div class="settings-section">
-      <h4>Preferences</h4>
-      <div class="settings-btn-row">
-        <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
-        <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
+    <div class="settings-shell">
+      <div class="settings-nav">
+        <button class="settings-nav-item active" data-section="preferences">Preferences</button>
+        <button class="settings-nav-item" data-section="session">Session</button>
+        <button class="settings-nav-item" data-section="github">GitHub connection</button>
+        <button class="settings-nav-item" data-section="llm">LLM provider</button>
+        <button class="settings-nav-item" data-section="danger">Danger zone</button>
       </div>
-    </div>
 
-    <div class="settings-section">
-      <h4>Session</h4>
-      <button class="btn btn-defer" id="btn-signout">Sign out</button>
-    </div>
+      <div class="settings-content">
+        <div class="settings-panel active" data-section="preferences">
+          <div class="settings-btn-row">
+            <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+            <a class="btn btn-defer" id="link-mobile" href="mobile.html">Mobile view</a>
+          </div>
+        </div>
 
-    <div class="settings-section account-panel">
-      <h4>GitHub connection</h4>
-      <div class="account-status" id="account-status">Checking connection&hellip;</div>
-      <div id="installations-list"></div>
-      <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
-      <div id="account-connect-form">
-        <div id="connectable-installations" style="display:none"></div>
-        <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
-        <div class="account-connect-actions">
-          <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
+        <div class="settings-panel" data-section="session">
+          <button class="btn btn-defer" id="btn-signout">Sign out</button>
+        </div>
+
+        <div class="settings-panel account-panel" data-section="github">
+          <div class="account-status" id="account-status">Checking connection&hellip;</div>
+          <div id="installations-list"></div>
+          <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
+          <div id="account-connect-form">
+            <div id="connectable-installations" style="display:none"></div>
+            <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
+            <div class="account-connect-actions">
+              <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
+            </div>
+          </div>
+          <div id="account-result" class="result-msg" style="display:none"></div>
+
+          <div class="repo-panel" id="repo-panel" style="display:none">
+            <h3>Repository to work on</h3>
+            <div class="automation-status" id="automation-status" style="display:none"></div>
+            <label class="auto-merge-toggle">
+              <input type="checkbox" id="chk-auto-merge">
+              Automatically merge accepted bundles (skips the manual "Process next" step)
+            </label>
+            <label class="auto-merge-toggle">
+              <input type="checkbox" id="chk-flag-conflicts-for-fleet">
+              Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
+            </label>
+            <label class="auto-merge-toggle">
+              <input type="checkbox" id="chk-deep-investigation">
+              Escalate unresolved merge conflicts to a Quire-hosted deep investigation (requires an Anthropic API key connected below)
+            </label>
+            <div id="sorting-notice" class="result-msg" style="display:none">
+              Starred/pinned sorting is unavailable until you reconnect GitHub (this happens after every server redeploy).
+              <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
+            </div>
+            <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
+            <div id="repo-list-warning" class="result-msg error" style="display:none"></div>
+            <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
+          </div>
+        </div>
+
+        <div class="settings-panel account-panel" data-section="llm">
+          <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles. Falls back to <code>.env</code> configuration (or a stub with no real extraction) when disconnected.</p>
+          <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
+          <div id="llm-connect-form">
+            <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
+          </div>
+          <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
+          <div id="llm-account-result" class="result-msg" style="display:none"></div>
+        </div>
+
+        <div class="settings-panel" data-section="danger">
+          <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
         </div>
       </div>
-      <div id="account-result" class="result-msg" style="display:none"></div>
-
-      <div class="repo-panel" id="repo-panel" style="display:none">
-        <h3>Repository to work on</h3>
-        <div class="automation-status" id="automation-status" style="display:none"></div>
-        <label class="auto-merge-toggle">
-          <input type="checkbox" id="chk-auto-merge">
-          Automatically merge accepted bundles (skips the manual "Process next" step)
-        </label>
-        <label class="auto-merge-toggle">
-          <input type="checkbox" id="chk-flag-conflicts-for-fleet">
-          Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
-        </label>
-        <label class="auto-merge-toggle">
-          <input type="checkbox" id="chk-deep-investigation">
-          Escalate unresolved merge conflicts to a Quire-hosted deep investigation (requires an Anthropic API key connected below)
-        </label>
-        <div id="sorting-notice" class="result-msg" style="display:none">
-          Starred/pinned sorting is unavailable until you reconnect GitHub (this happens after every server redeploy).
-          <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
-        </div>
-        <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
-        <div id="repo-list-warning" class="result-msg error" style="display:none"></div>
-        <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
-      </div>
-    </div>
-
-    <div class="settings-section account-panel">
-      <h4>LLM provider</h4>
-      <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles. Falls back to <code>.env</code> configuration (or a stub with no real extraction) when disconnected.</p>
-      <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
-      <div id="llm-connect-form">
-        <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
-      </div>
-      <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
-      <div id="llm-account-result" class="result-msg" style="display:none"></div>
-    </div>
-
-    <div class="settings-section">
-      <h4>Danger zone</h4>
-      <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
-    </div>
-
-    <div class="modal-actions">
-      <button class="btn btn-defer" id="btn-settings-modal-close">Close</button>
     </div>
   </div>
 </div>
@@ -406,8 +412,18 @@ document.querySelectorAll('.tab').forEach(tab => {
 });
 
 const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
+const settingsNavItems = document.querySelectorAll('.settings-nav-item');
+const settingsPanels = document.querySelectorAll('.settings-panel');
+function activateSettingsSection(section) {
+  settingsNavItems.forEach((item) => item.classList.toggle('active', item.dataset.section === section));
+  settingsPanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.section === section));
+}
+settingsNavItems.forEach((item) => {
+  item.addEventListener('click', () => activateSettingsSection(item.dataset.section));
+});
 function openSettingsModal() {
   settingsModalBackdrop.style.display = 'flex';
+  activateSettingsSection('preferences');
   loadAccount();
   loadLlmAccount();
 }
