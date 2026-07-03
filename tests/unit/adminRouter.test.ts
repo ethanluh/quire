@@ -3,8 +3,17 @@ import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import express from "express";
+import type { Request, Response, NextFunction } from "express";
 import type { Server } from "node:http";
 import { adminRouter } from "../../src/interface/server/routes/admin.js";
+import type { TeamRole } from "../../src/engine/types/team.js";
+
+function stubMembership(role: TeamRole) {
+	return (_req: Request, res: Response, next: NextFunction) => {
+		res.locals.membership = { teamId: "test-team", role };
+		next();
+	};
+}
 import { createServerState } from "../../src/interface/server/state.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
@@ -88,6 +97,7 @@ describe("adminRouter POST /reset", () => {
 		await decidedStore.markDecided(["pr-1"], "reject");
 
 		const app = express();
+		app.use(stubMembership("owner"));
 		app.use(
 			"/admin",
 			adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath], decidedStore),
@@ -108,5 +118,23 @@ describe("adminRouter POST /reset", () => {
 		expect(await readFile(deferLogPath, "utf8")).toBe("");
 		expect(await readFile(gateLogPath, "utf8")).toBe("");
 		expect(await readFile(driftScreenLogPath, "utf8")).toBe("");
+	});
+
+	it.each<TeamRole>(["admin", "member"])("rejects %s with 403", async (role) => {
+		dir = await mkdtemp(join(tmpdir(), "quire-admin-"));
+		const state = createServerState();
+		const auditStore = new AuditStore();
+		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new StubLlmProvider(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		const decidedStore = new DecidedPrStore(join(dir, "decided-prs.json"));
+
+		const app = express();
+		app.use(stubMembership(role));
+		app.use("/admin", adminRouter(state, auditStore, queue, [], decidedStore));
+		server = app.listen(0);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status } = await postReset(server);
+		expect(status).toBe(403);
 	});
 });

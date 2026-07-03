@@ -1,5 +1,3 @@
-// PR1 (this file) assigns roles; enforcement lands in a follow-up PR. Reserved now so
-// that PR needs zero data migration — every membership already carries a real role.
 export type TeamRole = "owner" | "admin" | "member";
 
 export interface Team {

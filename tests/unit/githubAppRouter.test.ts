@@ -3,9 +3,11 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
+import type { Request, Response, NextFunction } from "express";
 import { request as httpRequest } from "node:http";
 import type { Server } from "node:http";
 import { githubAppRouter } from "../../src/interface/server/routes/githubApp.js";
+import type { TeamRole } from "../../src/engine/types/team.js";
 import type { RepoSummary } from "../../src/engine/github/repos.js";
 import { GitHubClientHolder } from "../../src/engine/github/clientHolder.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
@@ -117,6 +119,7 @@ describe("githubAppRouter", () => {
 			accountLogin: "acme-corp",
 			accountType: "Organization",
 		}),
+		role: TeamRole = "owner",
 		// Simulates requireSession having already run and populated res.locals.login — this
 		// router is mounted after that middleware in production (see index.ts), so tests that
 		// care about the starred/pinned enrichment path (which reads res.locals.login) opt in
@@ -151,6 +154,10 @@ describe("githubAppRouter", () => {
 		};
 		const app = express();
 		app.use(express.json());
+		app.use((_req: Request, res: Response, next: NextFunction) => {
+			res.locals.membership = { teamId: "test-team", role };
+			next();
+		});
 		if (loginForRequests !== undefined) {
 			app.use((_req, res, next) => {
 				res.locals.login = loginForRequests;
@@ -304,6 +311,7 @@ describe("githubAppRouter", () => {
 			new StubLlmProvider(),
 			undefined,
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
 			undefined,
 			async (repos) => repos,
 			() => true,
@@ -447,6 +455,7 @@ describe("githubAppRouter", () => {
 			new StubLlmProvider(),
 			{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
 			"octocat",
 			enrichWithUserToken,
 		);
@@ -475,6 +484,7 @@ describe("githubAppRouter", () => {
 			new StubLlmProvider(),
 			{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
 			"octocat",
 			enrichWithUserToken,
 		);
@@ -645,6 +655,22 @@ describe("githubAppRouter", () => {
 
 			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
 			expect(persisted["autoMergeOnAccept"]).toBe(true);
+		});
+
+		it.each<TeamRole>(["admin", "member"])("rejects %s with 403 — this toggle changes team-wide merge policy", async (role) => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+				async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+				role,
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true });
+			expect(status).toBe(403);
 		});
 
 		it("returns 400 when no installation is bound", async () => {

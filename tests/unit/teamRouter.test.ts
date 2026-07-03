@@ -62,6 +62,14 @@ describe("teamRouter", () => {
 		return team.teamId;
 	}
 
+	// store.addMember alone puts a login on the roster but not the reverse-index the stub
+	// membership middleware above reads to resolve res.locals.membership for THAT login's
+	// own requests — needed for every "second team member acts on the API" test case below.
+	async function addMemberWithIndex(teamId: string, login: string, role: "owner" | "admin" | "member"): Promise<void> {
+		await store.addMember(teamId, { login, teamId, role, joinedAt: "t0" });
+		await store.saveMembershipIndex(login, { teamIds: [teamId], activeTeamId: teamId });
+	}
+
 	it("GET / returns the active team with the caller's role and full roster", async () => {
 		const teamId = await signIn("alice");
 
@@ -253,5 +261,228 @@ describe("teamRouter", () => {
 			body: JSON.stringify({ teamId: "not-my-team" }),
 		});
 		expect(res.status).toBe(400);
+	});
+
+	it("PATCH / rejects a plain member with 403", async () => {
+		const teamId = await signIn("owner");
+		await addMemberWithIndex(teamId, "bob", "member");
+		currentLogin = "bob";
+
+		const res = await fetch(`${baseUrl}/account/team`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name: "Renamed" }),
+		});
+		expect(res.status).toBe(403);
+	});
+
+	it("POST /invite rejects a plain member with 403", async () => {
+		const teamId = await signIn("owner");
+		await addMemberWithIndex(teamId, "bob", "member");
+		currentLogin = "bob";
+
+		const res = await fetch(`${baseUrl}/account/team/invite`, { method: "POST" });
+		expect(res.status).toBe(403);
+	});
+
+	describe("POST /members/:login/role", () => {
+		it("lets an owner promote a member to admin", async () => {
+			const teamId = await signIn("owner");
+			await store.addMember(teamId, { login: "bob", teamId, role: "member", joinedAt: "t1" });
+
+			const res = await fetch(`${baseUrl}/account/team/members/bob/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "admin" }),
+			});
+			expect(res.status).toBe(200);
+			expect((await store.getMembership(teamId, "bob"))?.role).toBe("admin");
+		});
+
+		it("lets an admin promote a member to admin (doesn't touch the owner role)", async () => {
+			const teamId = await signIn("owner");
+			await addMemberWithIndex(teamId, "carol", "admin");
+			await store.addMember(teamId, { login: "bob", teamId, role: "member", joinedAt: "t1" });
+			currentLogin = "carol";
+
+			const res = await fetch(`${baseUrl}/account/team/members/bob/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "admin" }),
+			});
+			expect(res.status).toBe(200);
+		});
+
+		it("blocks an admin from promoting anyone to owner", async () => {
+			const teamId = await signIn("owner");
+			await addMemberWithIndex(teamId, "carol", "admin");
+			await store.addMember(teamId, { login: "bob", teamId, role: "member", joinedAt: "t1" });
+			currentLogin = "carol";
+
+			const res = await fetch(`${baseUrl}/account/team/members/bob/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "owner" }),
+			});
+			expect(res.status).toBe(403);
+		});
+
+		it("blocks an admin from changing an existing owner's role", async () => {
+			const teamId = await signIn("owner");
+			await store.addMember(teamId, { login: "second-owner", teamId, role: "owner", joinedAt: "t0" });
+			await addMemberWithIndex(teamId, "carol", "admin");
+			currentLogin = "carol";
+
+			const res = await fetch(`${baseUrl}/account/team/members/second-owner/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "admin" }),
+			});
+			expect(res.status).toBe(403);
+		});
+
+		it("blocks a caller from changing their own role (400, before any other check)", async () => {
+			const teamId = await signIn("owner");
+
+			const res = await fetch(`${baseUrl}/account/team/members/owner/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "admin" }),
+			});
+			expect(res.status).toBe(400);
+			expect((await store.getMembership(teamId, "owner"))?.role).toBe("owner");
+		});
+
+		// The 409 "would leave the team with no owner" case is unreachable through this route
+		// once self-action is blocked: touching the owner role requires the caller to already
+		// be an owner (see touchesOwnerRole below), so the only caller who could ever demote a
+		// *sole* owner is that owner themselves — which the self-action guard above rejects
+		// first. The invariant itself still lives in TeamStore.setMemberRole (see
+		// teamStore.test.ts's "last-owner invariant" suite) so any other caller — a script, a
+		// future route — stays protected.
+
+		it("allows demoting a co-owner when another owner remains", async () => {
+			const teamId = await signIn("owner");
+			await store.addMember(teamId, { login: "second-owner", teamId, role: "owner", joinedAt: "t0" });
+
+			const res = await fetch(`${baseUrl}/account/team/members/second-owner/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "member" }),
+			});
+			expect(res.status).toBe(200);
+		});
+
+		it("404s for a login that isn't on the team", async () => {
+			await signIn("owner");
+
+			const res = await fetch(`${baseUrl}/account/team/members/stranger/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "admin" }),
+			});
+			expect(res.status).toBe(404);
+		});
+
+		it("rejects a plain member with 403 before even checking the target", async () => {
+			const teamId = await signIn("owner");
+			await addMemberWithIndex(teamId, "bob", "member");
+			currentLogin = "bob";
+
+			const res = await fetch(`${baseUrl}/account/team/members/bob/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "admin" }),
+			});
+			expect(res.status).toBe(403);
+		});
+	});
+
+	describe("POST /members/:login/remove", () => {
+		it("lets an owner remove a member, and the removed login gets a fresh personal team", async () => {
+			const teamId = await signIn("owner");
+			await store.addMember(teamId, { login: "bob", teamId, role: "member", joinedAt: "t1" });
+			await store.saveMembershipIndex("bob", { teamIds: [teamId], activeTeamId: teamId });
+
+			const res = await fetch(`${baseUrl}/account/team/members/bob/remove`, { method: "POST" });
+			expect(res.status).toBe(200);
+
+			expect(await store.getMembership(teamId, "bob")).toBeUndefined();
+			const bobIndex = await store.loadMembershipIndex("bob");
+			expect(bobIndex?.teamIds).toHaveLength(1);
+			expect(bobIndex?.activeTeamId).not.toBe(teamId);
+		});
+
+		it("switches the removed login's active team to a remaining one if it had others", async () => {
+			const teamId = await signIn("owner");
+			const bobOwnTeam = await store.createTeamForLogin("bob", "bob's own team");
+			await store.addMember(teamId, { login: "bob", teamId, role: "member", joinedAt: "t1" });
+			await store.saveMembershipIndex("bob", { teamIds: [bobOwnTeam.teamId, teamId], activeTeamId: teamId });
+
+			const res = await fetch(`${baseUrl}/account/team/members/bob/remove`, { method: "POST" });
+			expect(res.status).toBe(200);
+
+			const bobIndex = await store.loadMembershipIndex("bob");
+			expect(bobIndex?.teamIds).toEqual([bobOwnTeam.teamId]);
+			expect(bobIndex?.activeTeamId).toBe(bobOwnTeam.teamId);
+		});
+
+		it("lets an admin remove a plain member", async () => {
+			const teamId = await signIn("owner");
+			await addMemberWithIndex(teamId, "carol", "admin");
+			await store.addMember(teamId, { login: "bob", teamId, role: "member", joinedAt: "t1" });
+			currentLogin = "carol";
+
+			const res = await fetch(`${baseUrl}/account/team/members/bob/remove`, { method: "POST" });
+			expect(res.status).toBe(200);
+		});
+
+		it("blocks an admin from removing an owner", async () => {
+			const teamId = await signIn("owner");
+			await store.addMember(teamId, { login: "second-owner", teamId, role: "owner", joinedAt: "t0" });
+			await addMemberWithIndex(teamId, "carol", "admin");
+			currentLogin = "carol";
+
+			const res = await fetch(`${baseUrl}/account/team/members/second-owner/remove`, { method: "POST" });
+			expect(res.status).toBe(403);
+		});
+
+		it("blocks a caller from removing themselves this way (400)", async () => {
+			const teamId = await signIn("owner");
+
+			const res = await fetch(`${baseUrl}/account/team/members/owner/remove`, { method: "POST" });
+			expect(res.status).toBe(400);
+			expect(await store.getMembership(teamId, "owner")).toBeDefined();
+		});
+
+		// The 409 "would leave the team with no owner" case is unreachable through this route
+		// once self-action is blocked, for the same reason as /role above: removing an owner
+		// requires the caller to already be an owner, so the only caller who could ever remove
+		// a *sole* owner is that owner themselves — rejected first. See
+		// teamStore.test.ts's "last-owner invariant" suite for the invariant itself.
+
+		it("allows removing a co-owner when another owner remains", async () => {
+			const teamId = await signIn("owner");
+			await store.addMember(teamId, { login: "second-owner", teamId, role: "owner", joinedAt: "t0" });
+
+			const res = await fetch(`${baseUrl}/account/team/members/second-owner/remove`, { method: "POST" });
+			expect(res.status).toBe(200);
+		});
+
+		it("404s for a login that isn't on the team", async () => {
+			await signIn("owner");
+
+			const res = await fetch(`${baseUrl}/account/team/members/stranger/remove`, { method: "POST" });
+			expect(res.status).toBe(404);
+		});
+
+		it("rejects a plain member with 403", async () => {
+			const teamId = await signIn("owner");
+			await addMemberWithIndex(teamId, "bob", "member");
+			currentLogin = "bob";
+
+			const res = await fetch(`${baseUrl}/account/team/members/bob/remove`, { method: "POST" });
+			expect(res.status).toBe(403);
+		});
 	});
 });
