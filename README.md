@@ -67,6 +67,8 @@ The first time you select a repo, Quire opens a one-time setup PR (`src/engine/g
 
 Quire learns the outcome primarily via a callback the workflow POSTs back to `/callbacks/action-resolution/:bundleId/resolution` (needs `QUIRE_PUBLIC_URL` configured, same constraint as the GitHub webhook above), authenticated by a random per-dispatch token rather than a shared secret — no extra secret to provision for this part. A periodic poll (`QUIRE_RESOLUTION_POLL_INTERVAL_MINUTES`, `QUIRE_RESOLUTION_TIMEOUT_MINUTES`) is the fallback if that callback never arrives.
 
+A separate periodic pass (`QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES`, default 5) fast-forwards queued PRs that have merely fallen "behind" main — a free GitHub merge, no LLM involved — before it's their turn to actually land. Without it, a bundle stuck behind several others landing ahead of it only gets checked once `dequeueNext()` finally reaches it, by which point "behind" may have drifted into a real conflict that needs the Action above.
+
 ## Docs
 
 - [`docs/engineering-handoff.md`](docs/engineering-handoff.md) — full build spec: architecture, design invariants, drift-detection design, data model, phases, prior art, and success metrics.

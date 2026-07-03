@@ -77,6 +77,8 @@ const RESOLUTION_POLL_INTERVAL_MS =
 	parseInt(process.env["QUIRE_RESOLUTION_POLL_INTERVAL_MINUTES"] ?? "2", 10) * 60 * 1000;
 const RESOLUTION_TIMEOUT_MS =
 	parseInt(process.env["QUIRE_RESOLUTION_TIMEOUT_MINUTES"] ?? "20", 10) * 60 * 1000;
+const QUEUE_REFRESH_INTERVAL_MS =
+	parseInt(process.env["QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES"] ?? "5", 10) * 60 * 1000;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -323,6 +325,17 @@ async function main(): Promise<void> {
 		});
 	}, RESOLUTION_POLL_INTERVAL_MS);
 	resolutionPollTimer.unref();
+
+	// Keeps queued PRs from drifting far behind main while they wait their turn — a bundle
+	// stuck behind several others that land ahead of it would otherwise only get checked (and
+	// fast-forwarded) once dequeueNext() finally reaches it, by which point "behind" may have
+	// calcified into a real "dirty" conflict needing the LLM Action instead of a free merge.
+	const queueRefreshTimer = setInterval(() => {
+		queue.refreshQueuedBranches().catch((err: unknown) => {
+			console.error("Queue branch refresh failed:", err);
+		});
+	}, QUEUE_REFRESH_INTERVAL_MS);
+	queueRefreshTimer.unref();
 
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);

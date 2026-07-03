@@ -492,3 +492,78 @@ describe("MergeQueue.retryConflict", () => {
 		});
 	});
 });
+
+describe("MergeQueue.refreshQueuedBranches", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	it("fast-forwards a queued PR that has fallen behind main", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		await queue.load();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "behind" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		await queue.refreshQueuedBranches();
+
+		expect(github.updateBranchCalls).toEqual(["org/repo/1"]);
+	});
+
+	it("leaves already-mergeable, forked, and merged PRs alone", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		await queue.load();
+		const clean = makePr({ id: "pr-clean", number: 1 });
+		const forkedBehind = makePr({ id: "pr-forked", number: 2, repoName: "repo2" });
+		const alreadyMerged = makePr({ id: "pr-merged", number: 3, repoName: "repo3" });
+		github.setMergeability(clean.repoOwner, clean.repoName, clean.number, makeMergeability({ state: "clean" }));
+		github.setMergeability(forkedBehind.repoOwner, forkedBehind.repoName, forkedBehind.number, makeMergeability({ state: "behind", isFork: true }));
+		github.setMergeability(alreadyMerged.repoOwner, alreadyMerged.repoName, alreadyMerged.number, makeMergeability({ state: "behind", merged: true }));
+		await queue.enqueue(makeBundle("bundle-1", [clean, forkedBehind, alreadyMerged]));
+
+		await queue.refreshQueuedBranches();
+
+		expect(github.updateBranchCalls).toEqual([]);
+	});
+
+	it("does not touch PRs in bundles that aren't queued (already landing/resolving/conflict)", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		await queue.load();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.dequeueNext(); // moves bundle-1 to "conflict"
+
+		// Now that it's no longer "queued", flipping its mergeability to "behind" shouldn't
+		// matter — refreshQueuedBranches only looks at entries still waiting their turn.
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "behind" }));
+		await queue.refreshQueuedBranches();
+
+		expect(github.updateBranchCalls).toEqual([]);
+	});
+
+	it("keeps going past a PR whose refresh throws, so one failure doesn't block the rest", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, CALLBACK_BASE_URL, join(dir, "conflict.ndjson"));
+		await queue.load();
+		const failing = makePr({ id: "pr-failing", number: 1 });
+		const succeeding = makePr({ id: "pr-succeeding", number: 2, repoName: "repo2" });
+		github.setMergeability(failing.repoOwner, failing.repoName, failing.number, makeMergeability({ state: "behind" }));
+		github.setMergeability(succeeding.repoOwner, succeeding.repoName, succeeding.number, makeMergeability({ state: "behind" }));
+		github.updateBranchError = new Error("network blip");
+		await queue.enqueue(makeBundle("bundle-1", [failing, succeeding]));
+
+		await expect(queue.refreshQueuedBranches()).resolves.toBeUndefined();
+
+		expect(github.updateBranchCalls).toEqual(["org/repo/1", "org/repo2/2"]);
+	});
+});
