@@ -760,6 +760,7 @@ function commit(el, card, action, flyTransform) {
       throw new Error(body.error || `Request failed (${r.status})`);
     }
     if (action === 'defer') loadShelf();
+    if (action === 'accept') loadQueue();
   }).catch((err) => {
     const at = Math.min(restoreIndex < 0 ? 0 : restoreIndex, reviewCards.length);
     reviewCards.splice(at, 0, card);
