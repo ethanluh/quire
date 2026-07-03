@@ -87,7 +87,7 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 		const parsed = parsePullRequestEvent(payload);
 		const tenant = parsed?.installationId !== undefined ? findTenant(parsed.installationId) : undefined;
 		const refreshDeps = tenant?.refreshDeps;
-		const selected = refreshDeps?.accountState.current?.selectedRepo;
+		const selected = refreshDeps?.accountState.current.selectedRepo;
 		if (
 			parsed === undefined ||
 			refreshDeps === undefined ||

@@ -1,30 +1,25 @@
-import type { InstallationBinding } from "../../engine/github/installation.js";
-import type { StoredPreferences } from "../../engine/github/preferences.js";
+import type { InstallationAccountState, InstallationBinding } from "../../engine/github/installation.js";
 
-// Lifts the installation binding out of githubApp.ts's private closure so the webhook
-// route and reconciliation poll — both constructed in index.ts, outside that router — can
-// read the live binding (selected repo, installationId) without a second source of truth.
+// Lifts the installation state out of githubApp.ts's private closure so the webhook route
+// and reconciliation poll — both constructed in index.ts, outside that router — can read
+// the live state (bound installations, selected repo) without a second source of truth.
 //
-// `preferences` is deliberately separate from `current`: it survives disconnect/reconnect
-// (see preferences.ts), while `current` is undefined whenever there's no active installation.
+// selectedRepo/autoMergeOnAccept live on the always-present InstallationAccountState
+// itself (never undefined, only `installations` can be empty), so they already survive
+// individual installation disconnects/reconnects without a separate preferences store.
 export interface AccountState {
-	current: InstallationBinding | undefined;
-	preferences: StoredPreferences;
+	current: InstallationAccountState;
 }
 
-// Backfills selectedRepo/autoMergeOnAccept/flagConflictsForFleet from `initial` whenever the
-// caller's stored preferences don't already have them — the case for an installation bound
-// before preferences.ts existed, where those fields still only live on the binding itself.
-export function createAccountState(initial: InstallationBinding | undefined, preferences: StoredPreferences = {}): AccountState {
-	const merged: StoredPreferences = {
-		...preferences,
-		...(preferences.selectedRepo === undefined && initial?.selectedRepo !== undefined ? { selectedRepo: initial.selectedRepo } : {}),
-		...(preferences.autoMergeOnAccept === undefined && initial?.autoMergeOnAccept !== undefined
-			? { autoMergeOnAccept: initial.autoMergeOnAccept }
-			: {}),
-		...(preferences.flagConflictsForFleet === undefined && initial?.flagConflictsForFleet !== undefined
-			? { flagConflictsForFleet: initial.flagConflictsForFleet }
-			: {}),
-	};
-	return { current: initial, preferences: merged };
+export function createAccountState(initial: InstallationAccountState | undefined): AccountState {
+	return { current: initial ?? { installations: [] } };
+}
+
+// The installation that owns the currently selected repo — the only installation whose
+// client/webhooks/reconciliation matter for the active watch loop. Undefined both when
+// nothing is selected yet and when the selection's owning installation was since
+// disconnected; callers already treat "no active binding" as one case either way.
+export function activeInstallation(state: InstallationAccountState): InstallationBinding | undefined {
+	if (state.selectedRepo === undefined) return undefined;
+	return state.installations.find((i) => i.installationId === state.selectedRepo?.installationId);
 }

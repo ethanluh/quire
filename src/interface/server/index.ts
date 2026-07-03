@@ -141,8 +141,9 @@ async function main(): Promise<void> {
 	// so it must be parsed (and mounted) before the global express.json() below would
 	// otherwise consume the body as parsed JSON. Its own signature check is the trust
 	// boundary here, independent of session auth (GitHub's delivery carries no cookie).
-	// One App, one webhook endpoint, many tenants' installations — each delivery is routed
-	// to its owning tenant by the installation id it carries (see webhookRouter).
+	// One App, one webhook endpoint, many tenants' installations (each tenant possibly
+	// binding several) — each delivery is routed to its owning tenant by the installation id
+	// it carries (see webhookRouter and TenantRegistry.findByInstallationId).
 	if (webhookConfig !== undefined) {
 		app.use(
 			"/webhooks/github",
@@ -211,7 +212,7 @@ async function main(): Promise<void> {
 	// ones actively browsing) so a teammate's repo stays in sync even while they're away.
 	const reconcileTimer = setInterval(() => {
 		for (const tenant of registry.all()) {
-			const repo = tenant.accountState.current?.selectedRepo;
+			const repo = tenant.accountState.current.selectedRepo;
 			if (repo === undefined) continue;
 			enqueueRefresh(repo.owner, repo.name, tenant.refreshDeps).catch((err: unknown) => {
 				if (err instanceof InstallationRevokedError) {

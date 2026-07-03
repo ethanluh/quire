@@ -8,6 +8,7 @@ import type { ServerState } from "../state.js";
 import type { AccountState } from "../accountState.js";
 import { logDefer } from "../../../engine/instrumentation/logger.js";
 import { validateBody } from "../middleware/validation.js";
+import { notifyStateChanged } from "../changeEvents.js";
 
 const GestureSchema = z.object({
 	action: z.enum(["accept", "defer", "reject"]),
@@ -58,7 +59,7 @@ export function gesturesRouter(
 				const memberPrIds = bundle.members.map((m) => m.id);
 
 				if (action === "accept") {
-					await queue.enqueue(bundle, card); // enqueues, does not merge (INV-5, unless autoMergeOnAccept)
+					await queue.enqueue(bundle, card); // enqueues; merge (if any) happens below, not inline
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action);
@@ -71,9 +72,14 @@ export function gesturesRouter(
 					// bundles someone has already accepted, whether that's this one or another already
 					// waiting in the shared queue.
 					if (accountState.current?.autoMergeOnAccept === true) {
-						const landed = await queue.dequeueNext();
-						res.json({ status: landed?.status ?? "queued", bundleId: landed?.bundleId ?? bundleId });
-						return;
+						// Don't block the response on the full merge (GitHub mergeability polling can
+						// take many seconds) — the bundle must appear in the merge queue immediately.
+						// The merge progresses in the background; notifyStateChanged() wakes any open
+						// SSE connection once it settles instead of making them wait for the next poll.
+						queue
+							.dequeueNext()
+							.catch((err: unknown) => console.error(`Background auto-merge failed for ${bundleId}:`, err))
+							.finally(() => notifyStateChanged());
 					}
 					res.json({ status: "queued", bundleId });
 				} else if (action === "reject") {

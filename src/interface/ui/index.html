@@ -184,6 +184,21 @@
   .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
   .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
 
+  .audit-list { display: flex; flex-direction: column; gap: var(--space-2); }
+  .audit-entry {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .audit-entry .audit-meta { display: flex; flex-direction: column; gap: var(--space-1); }
+  .audit-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
+
   #toast {
     position: fixed; left: var(--space-4); right: var(--space-4); bottom: var(--space-4);
     background: var(--color-reject-wash); color: var(--color-reject); border: 1px solid var(--color-reject);
@@ -216,6 +231,7 @@
   <div class="tab active" data-tab="review">Review queue</div>
   <div class="tab" data-tab="shelf">Shelf</div>
   <div class="tab" data-tab="queue">Merge queue</div>
+  <div class="tab" data-tab="audit">Audit</div>
 </div>
 
 <div id="pane-review" class="pane active">
@@ -241,6 +257,12 @@
   <button class="btn btn-accept" style="margin-top:16px" id="btn-process-all">Process all</button>
 </div>
 
+<div id="pane-audit" class="pane">
+  <div class="audit-list" id="audit-list">
+    <div class="empty">No shadow-mode audit entries.</div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
   <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
     <h3 class="modal-title" id="settings-modal-title">Settings</h3>
@@ -261,13 +283,14 @@
     <div class="settings-section account-panel">
       <h4>GitHub connection</h4>
       <div class="account-status" id="account-status">Checking connection&hellip;</div>
+      <div id="installations-list"></div>
+      <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
       <div id="account-connect-form">
-        <p>Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
+        <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
         <div class="account-connect-actions">
           <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
         </div>
       </div>
-      <button class="btn btn-reject" style="display:none" id="btn-account-disconnect">Disconnect</button>
       <div id="account-result" class="result-msg" style="display:none"></div>
 
       <div class="repo-panel" id="repo-panel" style="display:none">
@@ -286,6 +309,7 @@
           <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
         </div>
         <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
+        <div id="repo-list-warning" class="result-msg error" style="display:none"></div>
         <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
       </div>
     </div>
@@ -378,6 +402,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'review') loadReview();
     if (tab.dataset.tab === 'shelf') loadShelf();
     if (tab.dataset.tab === 'queue') loadQueue();
+    if (tab.dataset.tab === 'audit') loadAudit();
   });
 });
 
@@ -658,6 +683,31 @@ async function loadQueue() {
   </div>`).join('');
 }
 
+function auditEntryHtml(entry) {
+  const prLabel = `${escapeHtml(entry.pr.repoOwner)}/${escapeHtml(entry.pr.repoName)}#${entry.pr.number}`;
+  const action = entry.overturnedAt !== null
+    ? '<span class="badge badge-flagged">Overturned</span>'
+    : `<button class="btn btn-reject" onclick="overturnAudit('${escapeHtml(entry.id)}')">Mark as false positive</button>`;
+  return `<div class="audit-entry">
+    <div class="audit-meta">
+      <div>${escapeHtml(entry.criterionName)} &mdash; ${escapeHtml(entry.reason)}</div>
+      <div class="entry-id">${prLabel} &middot; ${escapeHtml(entry.addedAt)}</div>
+    </div>
+    ${action}
+  </div>`;
+}
+
+async function loadAudit() {
+  const entries = await api('GET', '/audit');
+  const el = document.getElementById('audit-list');
+  el.innerHTML = entries.length ? entries.map(auditEntryHtml).join('') : '<div class="empty">No shadow-mode audit entries.</div>';
+}
+
+async function overturnAudit(entryId) {
+  await api('POST', `/audit/${entryId}/overturn`);
+  loadAudit();
+}
+
 async function removeFromQueue(bundleId) {
   if (!confirm('Remove this bundle from the merge queue?')) return;
   await api('DELETE', `/queue/${bundleId}`);
@@ -751,6 +801,7 @@ clearAllBtn.addEventListener('click', async () => {
   loadReview();
   loadShelf();
   loadQueue();
+  loadAudit();
 });
 
 // --- Sign-in gate ---------------------------------------------------------
@@ -815,10 +866,30 @@ async function checkSignedIn() {
   return true;
 }
 
-const accountConnectForm = document.getElementById('account-connect-form');
-const accountDisconnectBtn = document.getElementById('btn-account-disconnect');
 const repoPanel = document.getElementById('repo-panel');
 const installBtn = document.getElementById('btn-account-install');
+const accountDisconnectAllBtn = document.getElementById('btn-account-disconnect-all');
+let loadedInstallations = [];
+
+function installationHtml(installation) {
+  return `<div class="repo-entry">
+    <span class="badge badge-neutral">${escapeHtml(installation.accountType)}</span>
+    <span class="repo-name">${escapeHtml(installation.accountLogin)}</span>
+    <button class="btn btn-reject" onclick="disconnectInstallation(${installation.installationId})">Disconnect</button>
+  </div>`;
+}
+
+async function disconnectInstallation(installationId) {
+  if (!confirm('Disconnect this GitHub App installation?')) return;
+  await api('POST', `/account/github/disconnect/${installationId}`, undefined);
+  loadAccount();
+}
+
+accountDisconnectAllBtn.addEventListener('click', async () => {
+  if (!confirm('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.')) return;
+  await api('POST', '/account/github/disconnect-all', undefined);
+  loadAccount();
+});
 
 function renderAutomationStatus(selectedRepo) {
   const el = document.getElementById('automation-status');
@@ -833,12 +904,17 @@ function renderAutomationStatus(selectedRepo) {
 async function loadAccount() {
   const statusEl = document.getElementById('account-status');
   const resultEl = document.getElementById('account-result');
+  const listEl = document.getElementById('installations-list');
+  const copyEl = document.getElementById('account-connect-copy');
   resultEl.style.display = 'none';
   const status = await api('GET', '/account/github/status');
+  loadedInstallations = status.installations || [];
+  installBtn.disabled = false;
   if (status.connected) {
-    statusEl.innerHTML = `Connected to <span class="login">${escapeHtml(status.accountLogin)}</span>`;
-    accountConnectForm.style.display = 'none';
-    accountDisconnectBtn.style.display = 'inline-block';
+    statusEl.textContent = `Connected to ${loadedInstallations.length} installation${loadedInstallations.length === 1 ? '' : 's'}:`;
+    listEl.innerHTML = loadedInstallations.map(installationHtml).join('');
+    copyEl.textContent = 'Install on another organization or account.';
+    accountDisconnectAllBtn.style.display = 'inline-block';
     repoPanel.style.display = 'block';
     renderAutomationStatus(status.selectedRepo);
     document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
@@ -848,9 +924,9 @@ async function loadAccount() {
     statusEl.textContent = status.selectedRepo
       ? `Not connected. Will resume watching ${status.selectedRepo.owner}/${status.selectedRepo.name} once reconnected.`
       : 'Not connected.';
-    accountConnectForm.style.display = 'block';
-    installBtn.disabled = false;
-    accountDisconnectBtn.style.display = 'none';
+    listEl.innerHTML = '';
+    copyEl.textContent = 'Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.';
+    accountDisconnectAllBtn.style.display = 'none';
     repoPanel.style.display = 'none';
   }
 }
@@ -916,12 +992,6 @@ installBtn.addEventListener('click', async () => {
     showAccountResult('GitHub connection failed: ' + (params.get('reason') || 'unknown error'), true);
   }
 })();
-
-accountDisconnectBtn.addEventListener('click', async () => {
-  if (!confirm('Disconnect the installed GitHub App?')) return;
-  await api('POST', '/account/github/disconnect', undefined);
-  loadAccount();
-});
 
 const llmConnectBtn = document.getElementById('btn-llm-connect');
 const llmDisconnectBtn = document.getElementById('btn-llm-disconnect');
@@ -1142,21 +1212,25 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
 })();
 
 function repoHtml(repo, selectedRepo) {
-  const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name;
+  const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name && selectedRepo.installationId === repo.installationId;
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
+  // Only shown once >1 installation is connected — with a single installation, every repo
+  // shares the same source, so the badge would just be clutter.
+  const sourceBadge = loadedInstallations.length > 1 ? `<span class="badge badge-neutral">via ${escapeHtml(repo.accountLogin)}</span>` : '';
   const starIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg>';
   const pinIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
   const starredBadge = repo.starred ? `<span class="badge badge-clean badge-priority">${starIcon} Favorite</span>` : '';
   const pinnedBadge = repo.pinned ? `<span class="badge badge-neutral badge-priority">${pinIcon} Pinned</span>` : '';
-  const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name;
+  const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name && repoSelectionTarget.installationId === repo.installationId;
   return `<div class="repo-entry${isSelected ? ' selected' : ''}">
     ${privacyBadge}
+    ${sourceBadge}
     ${starredBadge}
     ${pinnedBadge}
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isSelected
       ? '<span class="badge badge-clean">Selected</span>'
-      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}')">${isTarget ? 'Selecting…' : 'Select'}</button>`}
+      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}',${repo.installationId})">${isTarget ? 'Selecting…' : 'Select'}</button>`}
   </div>`;
 }
 
@@ -1182,26 +1256,35 @@ function renderRepoList() {
 
 async function loadRepos(selectedRepo) {
   const listEl = document.getElementById('repo-list');
+  const warningEl = document.getElementById('repo-list-warning');
   const result = await api('GET', '/account/github/repos', undefined);
   if (result.error) {
     listEl.innerHTML = `<div class="empty">${escapeHtml(result.error)}</div>`;
+    warningEl.style.display = 'none';
     return;
   }
   loadedRepos = result.repos || [];
   loadedSelectedRepo = result.selected || selectedRepo;
   document.getElementById('sorting-notice').style.display = result.sortingAvailable ? 'none' : 'block';
   renderRepoList();
+  const failedAccounts = result.failedAccounts || [];
+  if (failedAccounts.length) {
+    warningEl.textContent = `Couldn't load repos for: ${failedAccounts.join(', ')} — the installation may have been removed.`;
+    warningEl.style.display = 'block';
+  } else {
+    warningEl.style.display = 'none';
+  }
 }
 
 document.getElementById('repo-search').addEventListener('input', renderRepoList);
 
-async function selectRepo(owner, name) {
+async function selectRepo(owner, name, installationId) {
   repoSelectionInProgress = true;
-  repoSelectionTarget = { owner, name };
+  repoSelectionTarget = { owner, name, installationId };
   renderRepoList();
   showAccountResult(`Selecting ${owner}/${name} — fetching and ingesting pull requests…`, false);
   try {
-    const result = await api('POST', '/account/github/repos/select', { owner, name });
+    const result = await api('POST', '/account/github/repos/select', { owner, name, installationId });
     if (result.error) {
       showAccountResult('Error: ' + result.error, true);
       return;
@@ -1272,6 +1355,7 @@ if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop
     if (signedIn) {
       refreshAndLoadReview();
       loadTeam(); // populates myRole before the Queue tab needs it for the Process/Remove buttons
+      loadAudit();
       startPolling();
       startLiveUpdates();
     }
