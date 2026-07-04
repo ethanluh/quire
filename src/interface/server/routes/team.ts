@@ -1,7 +1,17 @@
+import { join } from "node:path";
 import { Router } from "express";
 import { z } from "zod";
 import type { TeamStore } from "../../../engine/team/teamStore.js";
 import { InviteAlreadyRedeemedError, LastOwnerError, NotAMemberError } from "../../../engine/team/teamStore.js";
+import { addTeamMemberAsCollaborator, removeTeamMemberAsCollaborator } from "../../../engine/github/collaborators.js";
+import type { BuildOctokit, CollaboratorSyncResult } from "../../../engine/github/collaborators.js";
+import { withInstallationLock } from "../../../engine/github/installationLock.js";
+import {
+	clearCollaboratorSyncIssue,
+	listCollaboratorSyncIssues,
+	recordCollaboratorSyncFailure,
+} from "../../../engine/github/collaboratorSyncLog.js";
+import type { TeamRole } from "../../../engine/types/team.js";
 import { createInvite, verifyInvite, INVITE_TTL_MS } from "../invite.js";
 import { validateBody } from "../middleware/validation.js";
 import { requireRole } from "../middleware/requireRole.js";
@@ -23,8 +33,85 @@ const InviteSchema = z.object({ role: z.enum(["admin", "member"]).optional() }).
 // client, merge queue, ...), only the login-level membership index and the team roster,
 // so there's no reason to pay for resolving/loading a tenant just to manage team
 // membership.
-export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUrl: string): Router {
+export function teamRouter(
+	teamStore: TeamStore,
+	sessionSecret: string,
+	publicUrl: string,
+	buildOctokit: BuildOctokit,
+	dataDir: string,
+): Router {
 	const router = Router();
+
+	function installationPathFor(teamId: string): string {
+		return join(dataDir, "teams", teamId, "installation.json");
+	}
+
+	function collaboratorSyncIssuesPathFor(teamId: string): string {
+		return join(dataDir, "teams", teamId, "collaborator-sync-issues.json");
+	}
+
+	// Logs AND persists the outcome of a fire-and-forget GitHub collaborator sync — logging
+	// alone would leave an owner/admin with no way to discover a stale sync short of tailing
+	// server logs (see GET /collaborator-sync-issues below for how this gets read back). An
+	// empty results array means the team has no repos bound yet — a no-op, not an error, so
+	// nothing is persisted for it. Each per-repo failure is split further so an operator can
+	// tell "the App's permission isn't approved" (points at the README) from any other
+	// GitHub-side error. A later success for the same (login, repo, action) clears whatever
+	// issue a previous failed attempt recorded, so a resolved problem doesn't linger.
+	async function recordCollaboratorSyncResults(
+		action: "add" | "remove",
+		teamId: string,
+		login: string,
+		results: ReadonlyArray<CollaboratorSyncResult>,
+	): Promise<void> {
+		if (results.length === 0) {
+			console.log(`Skipped GitHub collaborator ${action} for ${login} on team ${teamId}: no repos bound yet`);
+			return;
+		}
+		const issuesPath = collaboratorSyncIssuesPathFor(teamId);
+		for (const result of results) {
+			if (result.outcome !== "failed") {
+				await clearCollaboratorSyncIssue(issuesPath, login, result.owner, result.name, action);
+				continue;
+			}
+			const message =
+				result.reason === "insufficient-permission"
+					? `The GitHub App is missing the "Administration: Read & write" permission (or an existing installation hasn't re-approved it yet). See README.md's "GitHub App setup" section.`
+					: String(result.error);
+			console.error(
+				`GitHub collaborator ${action} failed for ${login} on team ${teamId} (${result.owner}/${result.name}): ${message}`,
+			);
+			await recordCollaboratorSyncFailure(issuesPath, {
+				login,
+				owner: result.owner,
+				name: result.name,
+				action,
+				reason: result.reason,
+				message,
+				occurredAt: new Date().toISOString(),
+			});
+		}
+	}
+
+	// Locked per-team against githubApp.ts's repo bind/unbind routes (see installationLock.ts)
+	// so this read of installation.json's `repos` can never land on a stale snapshot that a
+	// concurrent unbind is in the middle of replacing — without it, a join could still add a
+	// member to a repo the team is simultaneously dropping.
+	function syncCollaboratorAdd(teamId: string, login: string, role: TeamRole): void {
+		withInstallationLock(teamId, () => addTeamMemberAsCollaborator(buildOctokit, installationPathFor(teamId), login, role))
+			.then((results) => recordCollaboratorSyncResults("add", teamId, login, results))
+			.catch((err: unknown) =>
+				console.error(`Unexpected error syncing GitHub collaborator add for ${login} on team ${teamId}:`, err),
+			);
+	}
+
+	function syncCollaboratorRemove(teamId: string, login: string): void {
+		withInstallationLock(teamId, () => removeTeamMemberAsCollaborator(buildOctokit, installationPathFor(teamId), login))
+			.then((results) => recordCollaboratorSyncResults("remove", teamId, login, results))
+			.catch((err: unknown) =>
+				console.error(`Unexpected error syncing GitHub collaborator removal for ${login} on team ${teamId}:`, err),
+			);
+	}
 
 	router.get("/", async (_req, res, next) => {
 		try {
@@ -185,6 +272,25 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 		}
 	});
 
+	// Owner/admin only, same protection level as the roster/invite reads above — surfaces
+	// what GET /invites' sibling comment calls the residual: a GitHub-side collaborator sync
+	// that failed and hasn't since resolved (see recordCollaboratorSyncResults). Reads
+	// straight off disk on every call rather than caching, since this is a low-traffic
+	// diagnostic view, not a hot path.
+	router.get("/collaborator-sync-issues", requireRole("owner", "admin"), async (_req, res, next) => {
+		try {
+			const membership = res.locals.membership;
+			if (membership === undefined) {
+				res.status(401).json({ error: "Sign in required" });
+				return;
+			}
+			const issues = await listCollaboratorSyncIssues(collaboratorSyncIssuesPathFor(membership.teamId));
+			res.json({ issues });
+		} catch (err) {
+			next(err);
+		}
+	});
+
 	router.delete("/invites/:id", requireRole("owner", "admin"), async (req, res, next) => {
 		try {
 			const membership = res.locals.membership;
@@ -257,6 +363,14 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				activeTeamId: payload.teamId,
 			}));
 			await teamStore.markInviteRedeemed(payload.teamId, payload.id, login);
+
+			// Best-effort, never awaited into the response — see syncCollaboratorAdd. Uses the
+			// login's actual current role, not payload.role: invites are reusable (nothing
+			// checks redeemedAt on redemption, only revokedAt), so a still-valid higher-role
+			// invite re-redeemed by an existing lower-role member must not grant them a GitHub
+			// permission above what Quire itself records for them.
+			syncCollaboratorAdd(payload.teamId, login, existingMembership?.role ?? payload.role);
+
 			res.json({ teamId: payload.teamId, name: team.name });
 		} catch (err) {
 			next(err);
@@ -292,6 +406,9 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 			// own first-login behavior. Shared with an owner/admin removing someone else (see
 			// routes in the roles PR) so both go through one "never teamless" guarantee.
 			const updated = await teamStore.releaseLoginFromTeam(login, teamId);
+
+			syncCollaboratorRemove(teamId, login);
+
 			res.json({ activeTeamId: updated.activeTeamId });
 		} catch (err) {
 			next(err);
@@ -340,6 +457,14 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				}
 				throw err;
 			}
+
+			// Best-effort, never awaited into the response — see syncCollaboratorAdd. GitHub's
+			// addCollaborator upserts an existing collaborator's permission rather than erroring,
+			// so re-adding with the new role's permission is exactly what re-syncing a role
+			// change needs — a member promoted to admin actually gets push access immediately,
+			// not only the next time they leave and rejoin.
+			syncCollaboratorAdd(membership.teamId, targetLogin, newRole);
+
 			res.json({ login: targetLogin, role: newRole });
 		} catch (err) {
 			next(err);
@@ -386,6 +511,9 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 			}
 
 			await teamStore.releaseLoginFromTeam(targetLogin, membership.teamId);
+
+			syncCollaboratorRemove(membership.teamId, targetLogin);
+
 			res.json({ login: targetLogin, removed: true });
 		} catch (err) {
 			next(err);

@@ -81,7 +81,9 @@ async function mapWithConcurrency<T, R>(
 	return results;
 }
 
-function isNotFoundError(err: unknown): boolean {
+// Exported so other GitHub-error call sites (e.g. collaborators.ts) share this same 404
+// detection instead of re-deriving it locally.
+export function isNotFoundError(err: unknown): boolean {
 	return typeof err === "object" && err !== null && "status" in err && (err as { status: unknown }).status === 404;
 }
 
@@ -100,7 +102,9 @@ export function isHttpError(err: unknown): err is { name: string; status: number
 	return err instanceof Error && err.name === "HttpError" && typeof (err as { status?: unknown }).status === "number";
 }
 
-function isInsufficientPermission(err: unknown): boolean {
+// Exported so other GitHub-error call sites (e.g. collaborators.ts's classifyFailure) share
+// this same detection instead of re-deriving the same status/message check locally.
+export function isInsufficientPermission(err: unknown): boolean {
 	return isHttpError(err)
 		&& err.status === 403
 		&& /Resource not accessible by integration/i.test(err.message);

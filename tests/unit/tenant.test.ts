@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TenantRegistry } from "../../src/interface/server/tenant.js";
 import type { TenantSharedConfig } from "../../src/interface/server/tenant.js";
+import { TeamStore } from "../../src/engine/team/teamStore.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
@@ -66,6 +67,7 @@ describe("TenantRegistry", () => {
 			oauth: makeOAuth(async () => {
 				throw new OAuthExchangeError("no stored token expected in most tests");
 			}),
+			teamStore: new TeamStore(dir),
 			...overrides,
 		};
 		return new TenantRegistry(shared);
