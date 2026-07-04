@@ -44,6 +44,7 @@ import type { ResolvedLlmProvider } from "./resolveLlmProvider.js";
 import { prsRouter } from "./routes/prs.js";
 import { bundlesRouter } from "./routes/bundles.js";
 import { gesturesRouter } from "./routes/gestures.js";
+import { assignmentsRouter } from "./routes/assignments.js";
 import { queueRouter } from "./routes/queue.js";
 import { shelfRouter } from "./routes/shelf.js";
 import { auditRouter } from "./routes/audit.js";
@@ -224,6 +225,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	router.use("/prs", prsRouter(state, pipelineDeps, queue));
 	router.use("/bundles", bundlesRouter(state));
 	router.use("/bundles", gesturesRouter(state, queue, deferLogPath, clientHolder, decidedStore, accountState));
+	router.use("/bundles", assignmentsRouter(state));
 	router.use("/queue", queueRouter(queue, state, decidedStore));
 	router.use("/shelf", shelfRouter(state, decidedStore));
 	router.use("/audit", auditRouter(auditStore));

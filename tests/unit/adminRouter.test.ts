@@ -96,7 +96,7 @@ describe("adminRouter POST /reset", () => {
 		await queue.enqueue(makeBundle("b-3"));
 
 		const decidedStore = new DecidedPrStore(join(dir, "decided-prs.json"));
-		await decidedStore.markDecided(["pr-1"], "reject");
+		await decidedStore.markDecided(["pr-1"], "reject", { decidedBy: "tester", bundleId: "test-bundle" });
 
 		const app = express();
 		app.use(stubMembership("owner"));

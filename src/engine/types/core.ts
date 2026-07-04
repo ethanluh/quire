@@ -44,6 +44,12 @@ export interface Bundle {
 	// `direction` — declaredDirection is a label for humans, not a verdict input (INV-1).
 	effectSummary: string;
 	members: ReadonlyArray<PullRequest>;
+	// Bundle-level, not per-PR: a human's actionable unit here is the bundle (one directional
+	// decision per bundle), so who's responsible for that decision is tracked at the same
+	// grain. undefined = up for grabs by anyone on the team.
+	assignedTo?: string;
+	assignedAt?: string;
+	assignedBy?: string; // self-assign: assignedBy === assignedTo
 }
 
 export interface Effect {

@@ -12,6 +12,11 @@ const SwitchTeamSchema = z.object({ teamId: z.string().min(1) });
 const JoinTeamSchema = z.object({ token: z.string().min(1) });
 const LeaveTeamSchema = z.object({ teamId: z.string().min(1) });
 const ChangeRoleSchema = z.object({ role: z.enum(["owner", "admin", "member"]) });
+// Never "owner" — an invite grants membership, not top-level custody; promoting someone to
+// owner is always the separate, explicit POST /team/members/:login/role path. Optional (and
+// the whole schema wrapped optional below) so a client that posts no body at all — today's
+// only caller — still defaults to "member" rather than 400ing.
+const InviteSchema = z.object({ role: z.enum(["admin", "member"]).optional() }).optional();
 
 // Mounted right after resolveMembership and before resolveTenant (see index.ts) —
 // unlike githubAppRouter/llmAccountRouter, nothing here touches a TenantContext (GitHub
@@ -126,7 +131,7 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 		}
 	});
 
-	router.post("/invite", requireRole("owner", "admin"), async (_req, res, next) => {
+	router.post("/invite", requireRole("owner", "admin"), validateBody(InviteSchema), async (req, res, next) => {
 		try {
 			const membership = res.locals.membership;
 			const login = res.locals.login;
@@ -134,15 +139,17 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				res.status(401).json({ error: "Sign in required" });
 				return;
 			}
-			const { token, id } = createInvite(membership.teamId, login, sessionSecret);
+const role = (req.body as z.infer<typeof InviteSchema>)?.role ?? "member";
+			const { token, id } = createInvite(membership.teamId, login, role, sessionSecret);
 			const now = new Date();
 			await teamStore.addInvite(membership.teamId, {
 				id,
 				invitedBy: login,
 				issuedAt: now.toISOString(),
 				expiresAt: new Date(now.getTime() + INVITE_TTL_MS).toISOString(),
+				role,
 			});
-			res.json({ inviteUrl: `${publicUrl}/?joinTeam=${token}` });
+			res.json({ inviteUrl: `${publicUrl}/?joinTeam=${token}`, role });
 		} catch (err) {
 			next(err);
 		}
@@ -240,7 +247,7 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				await teamStore.addMember(payload.teamId, {
 					login,
 					teamId: payload.teamId,
-					role: "member",
+					role: payload.role,
 					joinedAt: new Date().toISOString(),
 				});
 			}

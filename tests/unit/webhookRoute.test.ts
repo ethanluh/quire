@@ -211,7 +211,7 @@ describe("webhookRouter", () => {
 		provider.queueCompletion('["adds OTP login"]');
 		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
 		const { refreshDeps } = await setup(client, provider);
-		await refreshDeps.decidedStore.markDecided(["123"], "reject");
+		await refreshDeps.decidedStore.markDecided(["123"], "reject", { decidedBy: "tester", bundleId: "test-bundle" });
 
 		const { status } = await post(pullRequestEventPayload("octocat", "hello-world", "synchronize", 123), "pull_request");
 

@@ -6,15 +6,15 @@ const SECRET = "test-secret";
 
 describe("signInvite / verifyInvite", () => {
 	it("round-trips a valid payload", () => {
-		const payload: InvitePayload = { id: "inv-1", teamId: "team-1", invitedBy: "alice", issuedAt: Date.now(), expiresAt: Date.now() + 60_000 };
+const payload: InvitePayload = { id: "inv-1", teamId: "team-1", invitedBy: "alice", issuedAt: Date.now(), expiresAt: Date.now() + 60_000, role: "member" };
 		const token = signInvite(payload, SECRET);
 
 		expect(verifyInvite(token, SECRET)).toEqual(payload);
 	});
 
 	it("rejects a token signed with a different secret", () => {
-		const token = signInvite(
-			{ id: "inv-1", teamId: "team-1", invitedBy: "alice", issuedAt: Date.now(), expiresAt: Date.now() + 60_000 },
+const token = signInvite(
+			{ id: "inv-1", teamId: "team-1", invitedBy: "alice", issuedAt: Date.now(), expiresAt: Date.now() + 60_000, role: "member" },
 			SECRET,
 		);
 
@@ -22,13 +22,13 @@ describe("signInvite / verifyInvite", () => {
 	});
 
 	it("rejects a tampered payload even if the signature format still parses", () => {
-		const token = signInvite(
-			{ id: "inv-1", teamId: "team-1", invitedBy: "alice", issuedAt: Date.now(), expiresAt: Date.now() + 60_000 },
+const token = signInvite(
+			{ id: "inv-1", teamId: "team-1", invitedBy: "alice", issuedAt: Date.now(), expiresAt: Date.now() + 60_000, role: "member" },
 			SECRET,
 		);
 		const [, signature] = token.split(".");
 		const tamperedBody = Buffer.from(
-			JSON.stringify({ id: "inv-1", teamId: "attacker-team", invitedBy: "alice", issuedAt: 0, expiresAt: Date.now() + 60_000 }),
+JSON.stringify({ id: "inv-1", teamId: "attacker-team", invitedBy: "alice", issuedAt: 0, expiresAt: Date.now() + 60_000, role: "member" }),
 		).toString("base64url");
 
 		expect(verifyInvite(`${tamperedBody}.${signature}`, SECRET)).toBeUndefined();
@@ -41,8 +41,8 @@ describe("signInvite / verifyInvite", () => {
 	});
 
 	it("rejects an expired payload", () => {
-		const token = signInvite(
-			{ id: "inv-1", teamId: "team-1", invitedBy: "alice", issuedAt: Date.now() - 1000, expiresAt: Date.now() - 1 },
+const token = signInvite(
+			{ id: "inv-1", teamId: "team-1", invitedBy: "alice", issuedAt: Date.now() - 1000, expiresAt: Date.now() - 1, role: "member" },
 			SECRET,
 		);
 
@@ -56,7 +56,7 @@ describe("createInvite", () => {
 	});
 
 	it("creates an invite that verifies successfully for the given team", () => {
-		const { token, id } = createInvite("team-1", "alice", SECRET);
+const { token, id } = createInvite("team-1", "alice", "member", SECRET);
 		const payload = verifyInvite(token, SECRET);
 
 		expect(payload?.id).toBe(id);
@@ -76,7 +76,7 @@ describe("createInvite", () => {
 		let now = Date.now();
 		jest.spyOn(Date, "now").mockImplementation(() => now);
 
-		const { token } = createInvite("team-1", "alice", SECRET);
+const { token } = createInvite("team-1", "alice", "member", SECRET);
 		expect(verifyInvite(token, SECRET)).toBeDefined();
 
 		now += 8 * 24 * 60 * 60 * 1000;
