@@ -2,15 +2,19 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 
+async function ensureDir(path: string): Promise<void> {
+	await mkdir(dirname(path), { recursive: true });
+}
+
 // Assumes sequential callers (e.g. one await per write, as every current caller does) —
 // concurrent appendFile calls to the same path can interleave and corrupt a line.
 export async function appendNdjson(path: string, record: unknown): Promise<void> {
-	await mkdir(dirname(path), { recursive: true });
+	await ensureDir(path);
 	await appendFile(path, JSON.stringify(record) + "\n", "utf8");
 }
 
 export async function truncateNdjson(path: string): Promise<void> {
-	await mkdir(dirname(path), { recursive: true });
+	await ensureDir(path);
 	await writeFile(path, "", "utf8");
 }
 
