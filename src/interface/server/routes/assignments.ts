@@ -13,10 +13,11 @@ const AssignSchema = z.object({ login: z.string().min(1) });
 export function assignmentsRouter(state: ServerState): Router {
 	const router = Router({ mergeParams: true });
 
-	// Shared preamble for both assign routes: resolve the bundle, the actor, and whether the
-	// actor may act on a bundle currently assigned to someone else. Writes the 404/401/403
-	// response itself and returns undefined in that case, so callers just early-return; a
-	// non-undefined return is the narrowed context both handlers need.
+	// Shared preamble for both assign routes: resolve the bundle and the actor. Writes the
+	// 404/401 response itself and returns undefined in that case, so callers just early-return;
+	// a non-undefined return is the narrowed context both handlers need. The assigned-to-someone-
+	// else 403 guard is intentionally NOT hoisted here: in POST it must fire *after* the
+	// "assign to someone else" 403, so each route keeps that guard inline at its original spot.
 	function resolveAssignmentContext(
 		req: Request,
 		res: Response,
@@ -34,10 +35,6 @@ export function assignmentsRouter(state: ServerState): Router {
 			return undefined;
 		}
 		const isPrivileged = membership.role === "owner" || membership.role === "admin";
-		if (bundle.assignedTo !== undefined && bundle.assignedTo !== actorLogin && !isPrivileged) {
-			res.status(403).json({ error: "This bundle is assigned to another team member", assignedTo: bundle.assignedTo });
-			return undefined;
-		}
 		return { bundle, actorLogin, isPrivileged };
 	}
 
@@ -49,6 +46,10 @@ export function assignmentsRouter(state: ServerState): Router {
 
 		if (targetLogin !== actorLogin && !isPrivileged) {
 			res.status(403).json({ error: "Only owners/admins can assign a bundle to someone else" });
+			return;
+		}
+		if (bundle.assignedTo !== undefined && bundle.assignedTo !== actorLogin && !isPrivileged) {
+			res.status(403).json({ error: "This bundle is assigned to another team member", assignedTo: bundle.assignedTo });
 			return;
 		}
 
@@ -65,7 +66,12 @@ export function assignmentsRouter(state: ServerState): Router {
 	router.delete("/:bundleId/assign", (req, res) => {
 		const ctx = resolveAssignmentContext(req, res);
 		if (ctx === undefined) return;
-		const { bundle } = ctx;
+		const { bundle, actorLogin, isPrivileged } = ctx;
+
+		if (bundle.assignedTo !== undefined && bundle.assignedTo !== actorLogin && !isPrivileged) {
+			res.status(403).json({ error: "This bundle is assigned to another team member", assignedTo: bundle.assignedTo });
+			return;
+		}
 
 		const { assignedTo: _assignedTo, assignedAt: _assignedAt, assignedBy: _assignedBy, ...rest } = bundle;
 		state.bundles.set(bundle.id, rest);
