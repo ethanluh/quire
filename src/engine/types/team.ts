@@ -38,9 +38,17 @@ export interface InviteRecord {
 	revokedAt?: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isOptionalString(value: unknown): boolean {
+	return value === undefined || typeof value === "string";
+}
+
 export function isTeam(value: unknown): value is Team {
-	if (typeof value !== "object" || value === null) return false;
-	const record = value as Record<string, unknown>;
+	if (!isRecord(value)) return false;
+	const record = value;
 	return (
 		typeof record["teamId"] === "string" &&
 		typeof record["name"] === "string" &&
@@ -49,13 +57,13 @@ export function isTeam(value: unknown): value is Team {
 	);
 }
 
-function isTeamRole(value: unknown): value is TeamRole {
+export function isTeamRole(value: unknown): value is TeamRole {
 	return value === "owner" || value === "admin" || value === "member";
 }
 
 function isTeamMembership(value: unknown): value is TeamMembership {
-	if (typeof value !== "object" || value === null) return false;
-	const record = value as Record<string, unknown>;
+	if (!isRecord(value)) return false;
+	const record = value;
 	return (
 		typeof record["login"] === "string" &&
 		typeof record["teamId"] === "string" &&
@@ -69,8 +77,8 @@ export function isTeamMembershipList(value: unknown): value is ReadonlyArray<Tea
 }
 
 export function isLoginMembershipIndex(value: unknown): value is LoginMembershipIndex {
-	if (typeof value !== "object" || value === null) return false;
-	const record = value as Record<string, unknown>;
+	if (!isRecord(value)) return false;
+	const record = value;
 	return (
 		Array.isArray(record["teamIds"]) &&
 		record["teamIds"].every((id) => typeof id === "string") &&
@@ -79,17 +87,17 @@ export function isLoginMembershipIndex(value: unknown): value is LoginMembership
 }
 
 function isInviteRecord(value: unknown): value is InviteRecord {
-	if (typeof value !== "object" || value === null) return false;
-	const record = value as Record<string, unknown>;
+	if (!isRecord(value)) return false;
+	const record = value;
 	return (
 		typeof record["id"] === "string" &&
 		typeof record["invitedBy"] === "string" &&
 		typeof record["issuedAt"] === "string" &&
 		typeof record["expiresAt"] === "string" &&
 		(record["role"] === undefined || isTeamRole(record["role"])) &&
-		(record["redeemedBy"] === undefined || typeof record["redeemedBy"] === "string") &&
-		(record["redeemedAt"] === undefined || typeof record["redeemedAt"] === "string") &&
-		(record["revokedAt"] === undefined || typeof record["revokedAt"] === "string")
+		isOptionalString(record["redeemedBy"]) &&
+		isOptionalString(record["redeemedAt"]) &&
+		isOptionalString(record["revokedAt"])
 	);
 }
 

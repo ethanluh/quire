@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { signToken, verifyToken } from "./signedToken.js";
+import { isTeamRole } from "../../engine/types/team.js";
 import type { TeamRole } from "../../engine/types/team.js";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -17,10 +18,6 @@ export interface InvitePayload {
 	// since the invite payload itself has no concept of who's creating it or what they're
 	// allowed to grant.
 	role: TeamRole;
-}
-
-function isTeamRole(value: unknown): value is TeamRole {
-	return value === "owner" || value === "admin" || value === "member";
 }
 
 function isInvitePayload(value: unknown): value is InvitePayload {
