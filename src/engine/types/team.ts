@@ -32,6 +32,7 @@ export interface InviteRecord {
 	invitedBy: string; // login, audit only
 	issuedAt: string;
 	expiresAt: string;
+	role?: TeamRole;
 	redeemedBy?: string;
 	redeemedAt?: string;
 	revokedAt?: string;
@@ -85,6 +86,7 @@ function isInviteRecord(value: unknown): value is InviteRecord {
 		typeof record["invitedBy"] === "string" &&
 		typeof record["issuedAt"] === "string" &&
 		typeof record["expiresAt"] === "string" &&
+		(record["role"] === undefined || isTeamRole(record["role"])) &&
 		(record["redeemedBy"] === undefined || typeof record["redeemedBy"] === "string") &&
 		(record["redeemedAt"] === undefined || typeof record["redeemedAt"] === "string") &&
 		(record["revokedAt"] === undefined || typeof record["revokedAt"] === "string")

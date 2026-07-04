@@ -139,7 +139,7 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				res.status(401).json({ error: "Sign in required" });
 				return;
 			}
-const role = (req.body as z.infer<typeof InviteSchema>)?.role ?? "member";
+			const role = (req.body as z.infer<typeof InviteSchema>)?.role ?? "member";
 			const { token, id } = createInvite(membership.teamId, login, role, sessionSecret);
 			const now = new Date();
 			await teamStore.addInvite(membership.teamId, {
