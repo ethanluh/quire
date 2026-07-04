@@ -475,6 +475,21 @@ describe("assignmentsRouter", () => {
 		expect(res.status).toBe(403);
 	});
 
+	it("prefers the 'assign to someone else' 403 when a member both targets a third party and the bundle is already taken", async () => {
+		// Both 403 guards apply here: actor is non-privileged, targets a third party ("target"),
+		// AND the bundle is already assigned to "owner". The "Only owners/admins can assign a
+		// bundle to someone else" guard must win, matching the original route ordering — the
+		// assigned-to-someone-else guard runs after it, so its body/assignedTo field must not leak.
+		state.bundles.set("b-4b", { ...makeBundle("b-4b"), assignedTo: "owner" });
+
+		const res = await assign("b-4b", "target");
+
+		expect(res.status).toBe(403);
+		const body = (await res.json()) as { error: string; assignedTo?: string };
+		expect(body.error).toBe("Only owners/admins can assign a bundle to someone else");
+		expect(body.assignedTo).toBeUndefined();
+	});
+
 	it("lets a member unassign their own bundle", async () => {
 		state.bundles.set("b-5", { ...makeBundle("b-5"), assignedTo: "actor" });
 

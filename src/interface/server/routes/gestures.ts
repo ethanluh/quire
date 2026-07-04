@@ -113,8 +113,8 @@ export function gesturesRouter(
 					await queue.enqueue(assignedBundle, card); // enqueues; merge (if any) happens below, not inline
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
-await decidedStore.markDecided(memberPrIds, action, decisionContext);
-				postCardToMembers(github, action, assignedBundle, card);
+					await decidedStore.markDecided(memberPrIds, action, decisionContext);
+					postCardToMembers(github, action, assignedBundle, card);
 				// autoMergeOnAccept is itself owner-gated (POST /account/github/repos/:owner/:name/settings
 				// requires requireRole("owner")) — turning it on IS the authorization decision for
 				// every accept that follows to drain the queue, deliberately, regardless of which
