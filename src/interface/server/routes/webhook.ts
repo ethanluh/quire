@@ -22,6 +22,10 @@ interface PullRequestEvent {
 	repoName: string;
 	pullRequestId: string;
 	installationId: number | undefined;
+	// Only meaningful once action === "closed" — GitHub sends this boolean on every
+	// pull_request payload, but it only distinguishes a real merge from a plain close/reject
+	// at that point.
+	merged: boolean;
 }
 
 function parsePullRequestEvent(body: unknown): PullRequestEvent | undefined {
@@ -51,8 +55,9 @@ function parsePullRequestEvent(body: unknown): PullRequestEvent | undefined {
 	const installationIdRaw =
 		typeof installation === "object" && installation !== null ? (installation as Record<string, unknown>)["id"] : undefined;
 	const installationId = typeof installationIdRaw === "number" ? installationIdRaw : undefined;
+	const merged = (pullRequest as Record<string, unknown>)["merged"] === true;
 
-	return { action, repoOwner: ownerLogin, repoName, pullRequestId: String(prId), installationId };
+	return { action, repoOwner: ownerLogin, repoName, pullRequestId: String(prId), installationId, merged };
 }
 
 // Mounted at /webhooks/github, guarded by verifyGithubSignature (HMAC, not localOnly — see
@@ -114,6 +119,16 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 				// conflict and leave landing to a "Process" click.
 				const reattempted = await refreshDeps.queue.reattemptForPr(parsed.pullRequestId);
 				if (reattempted !== undefined && watchedRepo.autoMergeOnAccept === true) {
+					await refreshDeps.queue.dequeueNext();
+				}
+			}
+			if (parsed.action === "closed" && parsed.merged) {
+				// A human (or another tool) merged this PR directly on GitHub instead of
+				// through Quire's own dequeueNext() — keep the queue's view of reality accurate
+				// instead of waiting for the next Process click to notice via
+				// ensureMergeable()'s alreadyMerged check.
+				const updated = await refreshDeps.queue.recordExternalMerge(parsed.pullRequestId);
+				if (updated !== undefined && watchedRepo.autoMergeOnAccept === true) {
 					await refreshDeps.queue.dequeueNext();
 				}
 			}
