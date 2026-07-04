@@ -1,10 +1,6 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname } from "node:path";
-
-async function ensureDir(path: string): Promise<void> {
-	await mkdir(dirname(path), { recursive: true });
-}
+import { ensureDir } from "../jsonFile.js";
 
 // Assumes sequential callers (e.g. one await per write, as every current caller does) —
 // concurrent appendFile calls to the same path can interleave and corrupt a line.
