@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
 import type { InviteRecord, LoginMembershipIndex, Team, TeamMembership, TeamRole } from "../types/team.js";
 import { isInviteRecordList, isLoginMembershipIndex, isTeam, isTeamMembershipList } from "../types/team.js";
+import { createKeyedLock } from "../util/keyedLock.js";
+import { sanitizeIdentifier } from "../util/identifier.js";
 
 // Thrown by revokeInvite when the target invite has already been redeemed — nothing left to
 // revoke, and silently succeeding would misleadingly suggest the link stopped working.
@@ -12,15 +14,11 @@ export class InviteAlreadyRedeemedError extends Error {}
 // verified GitHub identity), which GitHub itself restricts to alphanumeric characters and
 // hyphens — but it's still externally supplied input joined straight into a filesystem
 // path below, so it's validated defensively rather than trusted blindly, the same way
-// tenant.ts's sanitizeTeamId validates the (internally-minted) teamId before an identical
-// kind of join.
-const VALID_LOGIN = /^[A-Za-z0-9-]+$/;
-
+// tenant.ts validates the (internally-minted) teamId before an identical kind of join. Both
+// go through the shared sanitizeIdentifier (util/identifier.ts), keeping their distinct
+// error messages via the kind argument.
 function sanitizeLogin(login: string): string {
-	if (!VALID_LOGIN.test(login)) {
-		throw new Error(`Refusing to scope team data to unexpected login: ${JSON.stringify(login)}`);
-	}
-	return login;
+	return sanitizeIdentifier(login, { scope: "team data", label: "login" });
 }
 
 // Thrown by removeMember/setMemberRole when the change would leave a team that still has
@@ -86,31 +84,13 @@ export class TeamStore {
 		});
 	}
 
-	// Chains async work per key onto whatever's already pending for that key (the same
-	// per-key-promise-chaining pattern refreshRepoQueue.ts's enqueueRefresh uses for its
-	// coalescing lock) — every roster mutation below runs through `teamLocks`, every
-	// membership-index mutation through `loginLocks`, so two concurrent calls for the same
-	// team/login can never both read the same stale snapshot before either writes.
-	private readonly teamLocks = new Map<string, Promise<unknown>>();
-	private readonly loginLocks = new Map<string, Promise<unknown>>();
-
-	private lockOn<T>(locks: Map<string, Promise<unknown>>, key: string, fn: () => Promise<T>): Promise<T> {
-		const previous = locks.get(key) ?? Promise.resolve();
-		const run = previous.catch(() => undefined).then(fn);
-		locks.set(key, run);
-		run.finally(() => {
-			if (locks.get(key) === run) locks.delete(key);
-		}).catch(() => undefined);
-		return run;
-	}
-
-	private withTeamLock<T>(teamId: string, fn: () => Promise<T>): Promise<T> {
-		return this.lockOn(this.teamLocks, teamId, fn);
-	}
-
-	private withLoginLock<T>(login: string, fn: () => Promise<T>): Promise<T> {
-		return this.lockOn(this.loginLocks, login, fn);
-	}
+	// Chains async work per key onto whatever's already pending for that key (the shared
+	// createKeyedLock, util/keyedLock.ts) — every roster mutation below runs through
+	// `withTeamLock`, every membership-index mutation through `withLoginLock`, each with its
+	// own independent lock namespace, so two concurrent calls for the same team/login can
+	// never both read the same stale snapshot before either writes.
+	private readonly withTeamLock = createKeyedLock();
+	private readonly withLoginLock = createKeyedLock();
 
 	async addMember(teamId: string, membership: TeamMembership): Promise<void> {
 		return this.updateMembers(teamId, (existing) => {

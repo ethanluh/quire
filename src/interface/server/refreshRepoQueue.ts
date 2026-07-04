@@ -10,6 +10,7 @@ import type { MergeQueue } from "../../engine/queue/mergeQueue.js";
 import type { AccountState } from "./accountState.js";
 import { installationForRepo } from "./accountState.js";
 import { notifyStateChanged } from "./changeEvents.js";
+import { createKeyedLock } from "../../engine/util/keyedLock.js";
 import { ingestIntoQueue } from "./ingestIntoQueue.js";
 import type { IngestSummary, PipelineDeps } from "./ingestIntoQueue.js";
 import type { ServerState } from "./state.js";
@@ -116,24 +117,19 @@ export async function refreshRepoQueue(
 // racing the reconciliation poll) instead of letting them race on clearRepoFromQueue's and
 // ingestIntoQueue's state mutations — see the concurrency note in refreshRepoQueue's design.
 // Keyed by tenant too: two different tenants independently selecting the same owner/name
-// must never coalesce onto each other's refresh.
-const inFlight = new Map<string, Promise<RefreshRepoQueueResult>>();
+// must never coalesce onto each other's refresh. Uses the shared createKeyedLock
+// (util/keyedLock.ts); the notifyStateChanged post-step stays *inside* the locked callback so
+// it remains part of the same serialized region (and runs before the lock's own delete
+// guard) exactly as it did when this was a hand-rolled promise chain.
+const refreshLock = createKeyedLock();
 
 export function enqueueRefresh(owner: string, name: string, deps: RefreshDeps): Promise<RefreshRepoQueueResult> {
 	const key = `${deps.tenantKey ?? ""}:${owner}/${name}`;
-	const previous = inFlight.get(key) ?? Promise.resolve();
-	const run = previous
-		.catch(() => undefined)
-		.then(() => refreshRepoQueue(owner, name, deps))
-		.then((result) => {
-			// Single choke point for both the webhook route and the reconciliation timer —
-			// tells any open SSE connection to re-fetch instead of waiting for its next poll tick.
-			notifyStateChanged();
-			return result;
-		});
-	inFlight.set(key, run);
-	run.finally(() => {
-		if (inFlight.get(key) === run) inFlight.delete(key);
-	}).catch(() => undefined);
-	return run;
+	return refreshLock(key, async () => {
+		const result = await refreshRepoQueue(owner, name, deps);
+		// Single choke point for both the webhook route and the reconciliation timer —
+		// tells any open SSE connection to re-fetch instead of waiting for its next poll tick.
+		notifyStateChanged();
+		return result;
+	});
 }

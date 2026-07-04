@@ -66,8 +66,8 @@ export class MergeQueue {
 	// human's manual "Process" click, autoMergeOnAccept, and the review UI's retry/abort
 	// buttons) that don't coordinate with each other. Chaining every call through this lock
 	// serializes them onto `this.state` instead of letting two land concurrently and silently
-	// drop one side's update — mirrors refreshRepoQueue.ts's per-repo `inFlight` map, collapsed
-	// to a single chain since only one queue entry is ever actively processed at a time.
+	// drop one side's update — mirrors refreshRepoQueue.ts's per-repo keyed refresh lock,
+	// collapsed to a single chain since only one queue entry is ever actively processed at a time.
 	private lock: Promise<unknown> = Promise.resolve();
 	private withLock<T>(fn: () => Promise<T>): Promise<T> {
 		const run = this.lock.then(fn, fn);
