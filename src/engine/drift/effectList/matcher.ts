@@ -2,6 +2,17 @@ import type { Effect } from "../../types/core.js";
 import type { LlmProvider } from "./provider.js";
 import { stripCodeFence } from "./stripCodeFence.js";
 
+function isEffectShape(item: unknown): item is { clause: string; matchedDirection: boolean } {
+	return (
+		typeof item === "object" &&
+		item !== null &&
+		"clause" in item &&
+		"matchedDirection" in item &&
+		typeof (item as Record<string, unknown>)["clause"] === "string" &&
+		typeof (item as Record<string, unknown>)["matchedDirection"] === "boolean"
+	);
+}
+
 const SYSTEM_PROMPT = `You are a code analyst. You will be given a bundle direction and a list of effect clauses extracted from a PR diff.
 For each clause, decide whether it matches the stated direction (true) or is an orphan — an effect with no directional home in the bundle's declared intent (false).
 Output a JSON array of objects with shape: [{"clause": string, "matchedDirection": boolean}]
@@ -26,18 +37,8 @@ export async function matchEffectsToDirection(
 		if (Array.isArray(parsed)) {
 			const result: Effect[] = [];
 			for (const item of parsed) {
-				if (
-					typeof item === "object" &&
-					item !== null &&
-					"clause" in item &&
-					"matchedDirection" in item &&
-					typeof (item as Record<string, unknown>)["clause"] === "string" &&
-					typeof (item as Record<string, unknown>)["matchedDirection"] === "boolean"
-				) {
-					result.push({
-						clause: (item as Record<string, unknown>)["clause"] as string,
-						matchedDirection: (item as Record<string, unknown>)["matchedDirection"] as boolean,
-					});
+				if (isEffectShape(item)) {
+					result.push({ clause: item.clause, matchedDirection: item.matchedDirection });
 				}
 			}
 			if (result.length === effects.length) return result;
