@@ -292,4 +292,116 @@ describe("webhookRouter", () => {
 		expect(status).toBe(200);
 		expect(body).toEqual({ ignored: true });
 	});
+
+	function pullRequestClosedPayload(owner: string, repo: string, merged: boolean, prId = 123, installationId = BINDING.installationId): unknown {
+		return {
+			action: "closed",
+			repository: { owner: { login: owner }, name: repo },
+			pull_request: { id: prId, merged },
+			installation: { id: installationId },
+		};
+	}
+
+	it("lands a queued bundle whose only PR was merged directly on GitHub", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+		const pr = makeQueuedPr("123");
+		await queue.enqueue(makeBundleFor(pr));
+
+		const { status } = await post(pullRequestClosedPayload("octocat", "hello-world", true, 123), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("landed");
+		expect(client.mergedPrs).toEqual([]); // GitHub already merged it; Quire must not merge again
+	});
+
+	it("clears a matching \"conflict\" queue entry to \"queued\" on a manual merge, without draining the rest when autoMergeOnAccept is off", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+		const pr1 = makeQueuedPr("123");
+		const pr2 = { ...makeQueuedPr("456"), number: 2 };
+		const pr3 = { ...makeQueuedPr("789"), number: 3 };
+		client.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "blocked" }));
+		const bundle: Bundle = {
+			id: "bundle-123",
+			direction: pr1.declaredDirection,
+			effectSummary: "adds OTP-based login",
+			members: [pr1, pr2, pr3],
+		};
+		await queue.enqueue(bundle);
+		const blocked = await queue.dequeueNext(); // merges pr1, blocks (conflict) on pr2; pr3 never attempted
+		expect(blocked?.status).toBe("conflict");
+		expect(blocked?.conflict?.prId).toBe("456");
+
+		const { status } = await post(pullRequestClosedPayload("octocat", "hello-world", true, 456), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		const entry = await queue.getEntry("bundle-123");
+		expect(entry?.status).toBe("queued");
+		expect(entry?.mergedPrIds.slice().sort()).toEqual(["123", "456"]);
+		expect(client.mergedPrs).toEqual([`${pr1.repoOwner}/${pr1.repoName}/${pr1.number}`]); // pr2 not re-merged
+	});
+
+	it("also drains the rest of the bundle on a manual merge when autoMergeOnAccept is on", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { refreshDeps, queue } = await setup(client);
+		refreshDeps.accountState.current = {
+			...refreshDeps.accountState.current,
+			repos: refreshDeps.accountState.current.repos.map((r) => ({ ...r, autoMergeOnAccept: true })),
+		};
+		const pr1 = makeQueuedPr("123");
+		const pr2 = { ...makeQueuedPr("456"), number: 2 };
+		const pr3 = { ...makeQueuedPr("789"), number: 3 };
+		client.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "blocked" }));
+		const bundle: Bundle = {
+			id: "bundle-123",
+			direction: pr1.declaredDirection,
+			effectSummary: "adds OTP-based login",
+			members: [pr1, pr2, pr3],
+		};
+		await queue.enqueue(bundle);
+		const blocked = await queue.dequeueNext(); // merges pr1, blocks (conflict) on pr2; pr3 never attempted
+		expect(blocked?.status).toBe("conflict");
+
+		const { status } = await post(pullRequestClosedPayload("octocat", "hello-world", true, 456), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		const entry = await queue.getEntry("bundle-123");
+		expect(entry?.status).toBe("landed"); // dequeueNext continued and landed pr3 too
+		expect(client.mergedPrs.sort()).toEqual(
+			[`${pr1.repoOwner}/${pr1.repoName}/${pr1.number}`, `${pr3.repoOwner}/${pr3.repoName}/${pr3.number}`].sort(),
+		);
+	});
+
+	it("does not touch the queue on a closed event that isn't a merge", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+		const pr = makeQueuedPr("123");
+		await queue.enqueue(makeBundleFor(pr));
+
+		const { status } = await post(pullRequestClosedPayload("octocat", "hello-world", false, 123), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("queued");
+	});
+
+	it("is a no-op on the queue when a manually-merged PR has no matching queue entry", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+
+		const { status } = await post(pullRequestClosedPayload("octocat", "hello-world", true, 123), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(await queue.listEntries()).toHaveLength(0);
+	});
 });

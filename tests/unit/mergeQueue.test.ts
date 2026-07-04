@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "@jest/globals";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
@@ -574,6 +574,170 @@ describe("MergeQueue.reattemptForPr", () => {
 	});
 });
 
+describe("MergeQueue.recordExternalMerge", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	async function setup(): Promise<{ github: StubGitHubClient; queue: MergeQueue }> {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		return { github, queue };
+	}
+
+	it("lands a single-member bundle whose only PR was merged externally, without calling GitHub's merge API", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		const updated = await queue.recordExternalMerge(pr.id);
+
+		expect(updated?.status).toBe("landed");
+		expect(updated?.mergedPrIds).toEqual([pr.id]);
+		expect(updated?.landedAt).toEqual(expect.any(String));
+		expect(github.mergedPrs).toEqual([]);
+	});
+
+	it("keeps a multi-member bundle queued when only one member was merged externally", async () => {
+		const { queue } = await setup();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2]));
+
+		const updated = await queue.recordExternalMerge(pr1.id);
+
+		expect(updated?.status).toBe("queued");
+		expect(updated?.mergedPrIds).toEqual([pr1.id]);
+	});
+
+	it("clears a conflict recorded against the externally-merged PR and requeues the bundle when a member is still pending", async () => {
+		const { github, queue } = await setup();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		const pr3 = makePr({ id: "pr-3", number: 3 });
+		github.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2, pr3]));
+		const blocked = await queue.dequeueNext(); // merges pr1, blocks on pr2; pr3 never attempted
+		expect(blocked?.status).toBe("conflict");
+		expect(blocked?.conflict?.prId).toBe(pr2.id);
+
+		// The human resolves the branch-protection block by merging pr2 themselves.
+		const updated = await queue.recordExternalMerge(pr2.id);
+
+		expect(updated?.status).toBe("queued");
+		expect(updated?.conflict).toBeUndefined();
+		expect(updated?.mergedPrIds.slice().sort()).toEqual([pr1.id, pr2.id].sort());
+	});
+
+	it("does not clear a conflict when a different, unrelated pending member is merged externally", async () => {
+		const { github, queue } = await setup();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		const pr3 = makePr({ id: "pr-3", number: 3 });
+		github.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2, pr3]));
+		const blocked = await queue.dequeueNext(); // merges pr1, blocks on pr2; pr3 never attempted
+		expect(blocked?.status).toBe("conflict");
+
+		// pr3 merges for unrelated reasons — pr2's conflict was never actually resolved.
+		const updated = await queue.recordExternalMerge(pr3.id);
+
+		expect(updated?.status).toBe("conflict");
+		expect(updated?.conflict?.prId).toBe(pr2.id);
+		expect(updated?.mergedPrIds.slice().sort()).toEqual([pr1.id, pr3.id].sort());
+	});
+
+	it("does not carry a stale abortedAt into a bundle that lands after its last pending member merges externally", async () => {
+		const { github, queue } = await setup();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		github.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2]));
+		await queue.dequeueNext(); // merges pr1, blocks (conflict) on pr2
+		const aborted = await queue.abort("bundle-1");
+		expect(aborted?.abortedAt).toEqual(expect.any(String));
+
+		const updated = await queue.recordExternalMerge(pr2.id);
+
+		expect(updated?.status).toBe("landed");
+		expect(updated?.abortedAt).toBeUndefined();
+	});
+
+	it("leaves a bundle mid-'landing' untouched in status, so a resumed dequeueNext skips the externally-merged member", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const statePath = join(dir, "queue.json");
+		const github = new StubGitHubClient();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		const bundle = makeBundle("bundle-1", [pr1, pr2]);
+		// Simulates a crash mid-dequeueNext(): status flipped to "landing" but no member merged yet.
+		await writeFile(
+			statePath,
+			JSON.stringify({
+				entries: [
+					{
+						bundleId: "bundle-1",
+						bundle,
+						enqueuedAt: new Date(0).toISOString(),
+						status: "landing",
+						revertedPrIds: [],
+						mergedPrIds: [],
+					},
+				],
+			}),
+			"utf8",
+		);
+		const queue = new MergeQueue(statePath, github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+
+		// pr2 gets merged by a human directly on GitHub while Quire's own landing attempt is
+		// presumed crashed or stalled.
+		const updated = await queue.recordExternalMerge(pr2.id);
+		expect(updated?.status).toBe("landing");
+		expect(updated?.mergedPrIds).toEqual([pr2.id]);
+
+		const landed = await queue.dequeueNext();
+		expect(landed?.status).toBe("landed");
+		expect(landed?.mergedPrIds.slice().sort()).toEqual([pr1.id, pr2.id].sort());
+		expect(github.mergedPrs).toEqual(["org/repo/1"]); // only pr1 actually merged through Quire
+	});
+
+	it("records an externally-merged member on an aborted bundle without reviving it, when a member is still pending", async () => {
+		const { github, queue } = await setup();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		const pr3 = makePr({ id: "pr-3", number: 3 });
+		github.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2, pr3]));
+		await queue.dequeueNext(); // merges pr1, blocks (conflict) on pr2; pr3 never attempted
+		await queue.abort("bundle-1");
+
+		const updated = await queue.recordExternalMerge(pr2.id);
+
+		expect(updated?.status).toBe("aborted");
+		expect(updated?.mergedPrIds.slice().sort()).toEqual([pr1.id, pr2.id].sort());
+	});
+
+	it("is idempotent — a PR already recorded as merged matches no entry", async () => {
+		const { queue } = await setup();
+		const pr = makePr();
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.recordExternalMerge(pr.id); // lands it
+
+		await expect(queue.recordExternalMerge(pr.id)).resolves.toBeUndefined();
+	});
+
+	it("returns undefined when no queue entry contains the PR", async () => {
+		const { queue } = await setup();
+
+		await expect(queue.recordExternalMerge("pr-missing")).resolves.toBeUndefined();
+	});
+});
+
 describe("MergeQueue.abort", () => {
 	let dir: string;
 
@@ -927,5 +1091,76 @@ describe("MergeQueue deep conflict investigation", () => {
 		expect(rejected?.status).toBe("conflict");
 		expect(rejected?.investigations?.[0]?.status).toBe("rejected");
 		expect(github.commitResolvedFilesCalls).toHaveLength(0);
+	});
+});
+
+describe("MergeQueue.recordExternalMerge — deep investigation interaction", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	const agentRef = { agentId: "agent-1", agentVersion: 1, environmentId: "env-1" };
+
+	function deepInvestigationDeps(client: ManagedAgentsClient): DeepInvestigationDeps {
+		return {
+			shouldEnable: () => true,
+			getClient: () => client,
+			ensureAgent: async () => agentRef,
+			mintRepoToken: async () => "repo-token",
+		};
+	}
+
+	async function setup(): Promise<{ queue: MergeQueue; pr1: PullRequest; pr2: PullRequest }> {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const client = new StubManagedAgentsClient();
+		const queue = new MergeQueue(
+			join(dir, "queue.json"),
+			github,
+			llmHolder(),
+			join(dir, "conflict.ndjson"),
+			undefined,
+			undefined,
+			deepInvestigationDeps(client),
+		);
+		await queue.load();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		const base = "line1\nline2";
+		const ours = "line1-ours\nline2";
+		const theirs = "line1-theirs\nline2";
+		github.setBlobContent("base-sha", base);
+		github.setBlobContent("ours-sha", ours);
+		github.setBlobContent("theirs-sha", theirs);
+		github.setConflictTrees(pr1.repoOwner, pr1.repoName, pr1.number, makeConflictTrees("src/auth.ts", "base-sha", "ours-sha", "theirs-sha"));
+		github.setMergeability(pr1.repoOwner, pr1.repoName, pr1.number, makeMergeability({ state: "dirty" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2]));
+		return { queue, pr1, pr2 };
+	}
+
+	it("marks the in-flight investigation rejected and requeues when the investigated PR itself merges externally", async () => {
+		const { queue, pr1 } = await setup();
+		const blocked = await queue.dequeueNext(); // pr1 low-confidence conflict -> investigating; pr2 never attempted
+		expect(blocked?.status).toBe("investigating");
+
+		const updated = await queue.recordExternalMerge(pr1.id);
+
+		expect(updated?.status).toBe("queued");
+		expect(updated?.investigations?.[0]).toMatchObject({ prId: pr1.id, status: "rejected" });
+		expect(updated?.mergedPrIds).toEqual([pr1.id]);
+	});
+
+	it("leaves an in-flight investigation running when an unrelated pending member merges externally", async () => {
+		const { queue, pr1, pr2 } = await setup();
+		const blocked = await queue.dequeueNext(); // pr1 low-confidence conflict -> investigating; pr2 never attempted
+		expect(blocked?.status).toBe("investigating");
+
+		const updated = await queue.recordExternalMerge(pr2.id);
+
+		expect(updated?.status).toBe("investigating");
+		expect(updated?.investigations?.[0]).toMatchObject({ prId: pr1.id, status: "running" });
+		expect(updated?.mergedPrIds).toEqual([pr2.id]);
 	});
 });

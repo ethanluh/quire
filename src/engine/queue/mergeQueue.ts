@@ -363,6 +363,62 @@ export class MergeQueue {
 		return retried;
 	}
 
+	// A human (or another tool) merged a member PR directly on GitHub instead of going
+	// through dequeueNext() — the webhook on a `closed` event with `merged: true` calls this
+	// to keep the queue's view of reality accurate instead of waiting for the next
+	// dequeueNext()/ensureMergeable() pass to notice via `alreadyMerged`. Idempotent: a PR
+	// already recorded in mergedPrIds (Quire's own merge, or a redelivered webhook) matches no
+	// entry below and this is a no-op.
+	async recordExternalMerge(prId: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.recordExternalMergeLocked(prId));
+	}
+
+	private async recordExternalMergeLocked(prId: string): Promise<MergeQueueEntry | undefined> {
+		const found = this.state.entries.find((e) => e.bundle.members.some((m) => m.id === prId) && !e.mergedPrIds.includes(prId));
+		if (found === undefined) return undefined;
+
+		const mergedPrIds = [...found.mergedPrIds, prId];
+		// A live deep-investigation session tied to exactly this PR is moot now — the human
+		// resolved it by merging directly rather than through the session's eventual proposal.
+		// Marking it "rejected" (the same terminal state rejectInvestigation uses) keeps it
+		// from being silently orphaned if the entry's status moves off "investigating" below,
+		// since pollInvestigationsLocked only ever polls that status.
+		const investigations = found.investigations?.map((inv): FileInvestigation =>
+			inv.prId === prId && (inv.status === "running" || inv.status === "awaitingReview") ? { ...inv, status: "rejected" } : inv,
+		);
+		const entry: MergeQueueEntry = investigations !== undefined ? { ...found, investigations } : found;
+		// Strips abortedAt too (not just conflict), matching clearToQueued — otherwise a bundle
+		// that lands here straight from "aborted" would keep a stale abortedAt on a "landed"
+		// entry, contradicting that field's "set only when status is aborted" contract.
+		const { conflict: _conflict, abortedAt: _abortedAt, ...rest } = entry;
+
+		if (entry.bundle.members.every((m) => mergedPrIds.includes(m.id))) {
+			const landed: MergeQueueEntry = { ...rest, mergedPrIds, status: "landed", landedAt: new Date().toISOString() };
+			await this.setEntry(entry.bundleId, landed);
+			return landed;
+		}
+
+		// Other members are still pending. Only clear "conflict"/"investigating" back to
+		// "queued" when the externally merged PR is the exact one that was blocking — same
+		// matching reattemptForPr makes for a synchronize push. An unrelated still-pending
+		// member merging shouldn't discard a currently-valid conflict/investigation recorded
+		// against a different PR. Leave "landing" alone (a resume is already in flight;
+		// dequeueNext's per-member mergedPrIds.includes skip already handles it) and "aborted"
+		// alone (an explicit human give-up, same exclusion reattemptForPr already makes for a
+		// stray push).
+		const blockedOnThisPr =
+			(entry.status === "conflict" && entry.conflict?.prId === prId) ||
+			(entry.status === "investigating" &&
+				found.investigations?.some((inv) => inv.prId === prId && (inv.status === "running" || inv.status === "awaitingReview")) === true);
+		const updated: MergeQueueEntry = {
+			...(blockedOnThisPr ? rest : entry),
+			mergedPrIds,
+			status: blockedOnThisPr ? "queued" : entry.status,
+		};
+		await this.setEntry(entry.bundleId, updated);
+		return updated;
+	}
+
 	// A human gave up waiting on a bundle stuck mid-landing (possibly with some members
 	// already merged) or blocked on conflict — moves it to a terminal "aborted" state so it
 	// stops being retried by dequeueNext()/reattempt(). Does not revert mergedPrIds (INV-4:
