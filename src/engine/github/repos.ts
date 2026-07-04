@@ -63,26 +63,31 @@ const PINNED_REPOS_QUERY = `
 	}
 `;
 
-async function fetchStarredRepoNames(octokit: Octokit): Promise<Set<string>> {
+// Best-effort name lookup: on any failure, warn with `label` and degrade to an empty Set
+// rather than failing the caller — starred/pinned status is decorative, never load-bearing.
+async function bestEffortNames(label: string, fetch: () => Promise<Set<string>>): Promise<Set<string>> {
 	try {
-		const starred = await octokit.paginate(octokit.rest.activity.listReposStarredByAuthenticatedUser, {
-			per_page: 100,
-		});
-		return new Set(starred.map((r) => r.full_name));
+		return await fetch();
 	} catch (err) {
-		console.warn("Starred-repo lookup failed, defaulting to none:", err);
+		console.warn(label, err);
 		return new Set();
 	}
 }
 
-async function fetchPinnedRepoNames(octokit: Octokit): Promise<Set<string>> {
-	try {
+function fetchStarredRepoNames(octokit: Octokit): Promise<Set<string>> {
+	return bestEffortNames("Starred-repo lookup failed, defaulting to none:", async () => {
+		const starred = await octokit.paginate(octokit.rest.activity.listReposStarredByAuthenticatedUser, {
+			per_page: 100,
+		});
+		return new Set(starred.map((r) => r.full_name));
+	});
+}
+
+function fetchPinnedRepoNames(octokit: Octokit): Promise<Set<string>> {
+	return bestEffortNames("Pinned-repo lookup failed, defaulting to none:", async () => {
 		const result = await octokit.graphql<PinnedItemsResponse>(PINNED_REPOS_QUERY);
 		return new Set(result.viewer.pinnedItems.nodes.map((n) => n.nameWithOwner));
-	} catch (err) {
-		console.warn("Pinned-repo lookup failed, defaulting to none:", err);
-		return new Set();
-	}
+	});
 }
 
 const priority = (r: RepoSummary): number => (r.starred ? 0 : r.pinned ? 1 : 2);

@@ -1,4 +1,5 @@
 import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
+import { createKeyedLock } from "./keyedLock.js";
 
 // Persists best-effort GitHub-collaborator-sync failures so an owner/admin has something
 // queryable beyond a server log line (see team.ts's logCollaboratorSyncResults) — the sync
@@ -41,17 +42,7 @@ function isCollaboratorSyncIssueList(value: unknown): value is ReadonlyArray<Col
 // Per-path promise chaining, same pattern teamStore.ts's withTeamLock uses — needed since
 // several fire-and-forget syncs for the same team can otherwise race a load-modify-save of
 // this same file into a lost update.
-const locks = new Map<string, Promise<unknown>>();
-
-function withLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
-	const previous = locks.get(path) ?? Promise.resolve();
-	const run = previous.catch(() => undefined).then(fn);
-	locks.set(path, run);
-	run.finally(() => {
-		if (locks.get(path) === run) locks.delete(path);
-	}).catch(() => undefined);
-	return run;
-}
+const withLock = createKeyedLock();
 
 export async function listCollaboratorSyncIssues(path: string): Promise<ReadonlyArray<CollaboratorSyncIssue>> {
 	return (await readJsonFile(path, isCollaboratorSyncIssueList)) ?? [];

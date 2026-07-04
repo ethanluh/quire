@@ -11,6 +11,7 @@ import type {
 import { BinaryFileError } from "./client.js";
 import type { ConflictTrees, MergeabilityResult, MergeabilityState, ResolvedFile, TreeEntry } from "../types/mergeability.js";
 import { NotFastForwardError } from "../types/mergeability.js";
+import { settleWithConcurrency } from "../util/concurrency.js";
 
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
 // declares direction in an HTML comment so it renders invisibly in the PR body.
@@ -56,30 +57,6 @@ interface PullRequestRef {
 // independent, but listing every open PR in a repo unbounded would fan out to GitHub
 // all at once — cap how many run concurrently to stay clear of secondary rate limits.
 const MAX_CONCURRENT_PR_FETCHES = 5;
-
-async function mapWithConcurrency<T, R>(
-	items: ReadonlyArray<T>,
-	limit: number,
-	fn: (item: T) => Promise<R>,
-): Promise<ReadonlyArray<PromiseSettledResult<R>>> {
-	const results: PromiseSettledResult<R>[] = new Array(items.length);
-	let next = 0;
-
-	async function worker(): Promise<void> {
-		while (next < items.length) {
-			const index = next++;
-			const item = items[index] as T;
-			try {
-				results[index] = { status: "fulfilled", value: await fn(item) };
-			} catch (reason) {
-				results[index] = { status: "rejected", reason };
-			}
-		}
-	}
-
-	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-	return results;
-}
 
 // Exported so other GitHub-error call sites (e.g. collaborators.ts) share this same 404
 // detection instead of re-deriving it locally.
@@ -172,7 +149,7 @@ export class OctokitGitHubClient implements GitHubClient {
 
 	async listOpenPullRequests(owner: string, repo: string): Promise<ListOpenPullRequestsResult> {
 		const prs = await this.octokit.paginate(this.octokit.rest.pulls.list, { owner, repo, state: "open" });
-		const results = await mapWithConcurrency(prs, MAX_CONCURRENT_PR_FETCHES, (pr) =>
+		const results = await settleWithConcurrency(prs, MAX_CONCURRENT_PR_FETCHES, (pr) =>
 			this.toRawPRPayload(owner, repo, pr),
 		);
 

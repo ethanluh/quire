@@ -1,3 +1,5 @@
+import { createKeyedLock } from "./keyedLock.js";
+
 // Serializes every operation that reads or writes a team's installation.json against every
 // other such operation for the same team. Without this, a collaborator-sync read (see
 // collaborators.ts's callers in team.ts/githubApp.ts) can race a concurrent repo bind/unbind
@@ -7,14 +9,4 @@
 // construction. Mirrors teamStore.ts's own per-key promise-chaining lock, kept as a separate
 // module since it guards a different file (installation.json, not members.json/
 // membership.json) with different, unrelated callers.
-const locks = new Map<string, Promise<unknown>>();
-
-export function withInstallationLock<T>(teamId: string, fn: () => Promise<T>): Promise<T> {
-	const previous = locks.get(teamId) ?? Promise.resolve();
-	const run = previous.catch(() => undefined).then(fn);
-	locks.set(teamId, run);
-	run.finally(() => {
-		if (locks.get(teamId) === run) locks.delete(teamId);
-	}).catch(() => undefined);
-	return run;
-}
+export const withInstallationLock = createKeyedLock();

@@ -54,24 +54,37 @@ function buildTemplateContent(existing: string | undefined): string {
 	return `${DECLARED_DIRECTION_SECTION}\n${existing}`;
 }
 
-// The PR template is a user-owned file Quire only appends a section to, so conformance there
-// just checks the section is present. The workflow file is wholly generated and owned by
-// Quire, so a stale copy needs to be treated as non-conforming and re-pushed — otherwise
-// re-running setup after a Quire upgrade can never repair it.
-function conforms(template: { content: string } | undefined, workflow: { content: string } | undefined): boolean {
-	const templateConforms = template !== undefined && template.content.includes(DECLARED_DIRECTION_SUBSTRING);
-	const workflowConforms = workflow !== undefined && workflow.content === WORKFLOW_CONTENT;
-	return templateConforms && workflowConforms;
+interface ConventionState {
+	template: { content: string } | undefined;
+	workflow: { content: string } | undefined;
+	templateConforms: boolean;
+	workflowConforms: boolean;
+}
+
+// Fetches both convention files once and derives their conformance. The PR template is a
+// user-owned file Quire only appends a section to, so conformance there just checks the
+// section is present. The workflow file is wholly generated and owned by Quire, so a stale
+// copy is treated as non-conforming and re-pushed — otherwise re-running setup after a Quire
+// upgrade can never repair it. Both callers derive overall conformance as
+// templateConforms && workflowConforms from the same object.
+async function readConventionState(client: GitHubClient, owner: string, name: string): Promise<ConventionState> {
+	const [template, workflow] = await Promise.all([
+		client.getFileContent(owner, name, PR_TEMPLATE_PATH),
+		client.getFileContent(owner, name, WORKFLOW_PATH),
+	]);
+	return {
+		template,
+		workflow,
+		templateConforms: template !== undefined && template.content.includes(DECLARED_DIRECTION_SUBSTRING),
+		workflowConforms: workflow !== undefined && workflow.content === WORKFLOW_CONTENT,
+	};
 }
 
 // Read-only: lets a caller check whether a repo needs the setup PR before committing to
 // opening one, e.g. to skip a confirmation prompt when there's nothing to do.
 export async function checkDeclaredDirectionConvention(client: GitHubClient, owner: string, name: string): Promise<boolean> {
-	const [template, workflow] = await Promise.all([
-		client.getFileContent(owner, name, PR_TEMPLATE_PATH),
-		client.getFileContent(owner, name, WORKFLOW_PATH),
-	]);
-	return conforms(template, workflow);
+	const { templateConforms, workflowConforms } = await readConventionState(client, owner, name);
+	return templateConforms && workflowConforms;
 }
 
 export async function setUpDeclaredDirectionConvention(
@@ -79,15 +92,9 @@ export async function setUpDeclaredDirectionConvention(
 	owner: string,
 	name: string,
 ): Promise<RepoSetupResult> {
-	const [template, workflow] = await Promise.all([
-		client.getFileContent(owner, name, PR_TEMPLATE_PATH),
-		client.getFileContent(owner, name, WORKFLOW_PATH),
-	]);
+	const { template, templateConforms, workflowConforms } = await readConventionState(client, owner, name);
 
-	const templateConforms = template !== undefined && template.content.includes(DECLARED_DIRECTION_SUBSTRING);
-	const workflowConforms = workflow !== undefined && workflow.content === WORKFLOW_CONTENT;
-
-	if (conforms(template, workflow)) {
+	if (templateConforms && workflowConforms) {
 		return { status: "already-set-up" };
 	}
 
