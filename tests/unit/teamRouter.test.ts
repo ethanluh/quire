@@ -698,5 +698,94 @@ describe("teamRouter", () => {
 			await settle();
 			expect(removeCollaboratorMock).not.toHaveBeenCalled();
 		});
+
+		it("POST /members/:login/role re-syncs GitHub permission for the new role, not just future joins", async () => {
+			const teamId = await signIn("owner");
+			await bindRepo(teamId);
+			await store.addMember(teamId, { login: "bob", teamId, role: "member", joinedAt: "t1" });
+
+			const res = await fetch(`${baseUrl}/account/team/members/bob/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "admin" }),
+			});
+			expect(res.status).toBe(200);
+
+			await waitFor(() => addCollaboratorMock.mock.calls.length > 0);
+			expect(addCollaboratorMock).toHaveBeenCalledWith({ owner: "acme-corp", repo: "widgets", username: "bob", permission: "push" });
+		});
+
+		it("POST /members/:login/role never syncs GitHub when the Quire-side role change itself fails (self-role-change block)", async () => {
+			const teamId = await signIn("owner");
+			await bindRepo(teamId);
+
+			const res = await fetch(`${baseUrl}/account/team/members/owner/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "admin" }),
+			});
+			expect(res.status).toBe(400); // blocked earlier: can't change your own role this way
+
+			await settle();
+			expect(addCollaboratorMock).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("GET /collaborator-sync-issues", () => {
+		class FakeHttpError extends Error {
+			readonly status: number;
+			constructor(message: string, status: number) {
+				super(message);
+				this.name = "HttpError";
+				this.status = status;
+			}
+		}
+
+		it("surfaces a failed sync and clears it once a later sync for the same login/repo succeeds", async () => {
+			const teamId = await signIn("owner");
+			await bindRepo(teamId);
+			addCollaboratorMock.mockImplementationOnce(async () => {
+				throw new FakeHttpError("Resource not accessible by integration", 403);
+			});
+			const { token } = createInvite(teamId, "owner", "member", SECRET);
+			currentLogin = "bob";
+			await store.createTeamForLogin("bob", "bob's team");
+
+			await fetch(`${baseUrl}/account/team/join`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ token }),
+			});
+			await waitFor(() => addCollaboratorMock.mock.calls.length > 0);
+
+			currentLogin = "owner";
+			const first = await fetch(`${baseUrl}/account/team/collaborator-sync-issues`);
+			expect(first.status).toBe(200);
+			const { issues: firstIssues } = (await first.json()) as { issues: Array<{ login: string; reason: string }> };
+			expect(firstIssues).toEqual([expect.objectContaining({ login: "bob", owner: "acme-corp", name: "widgets", reason: "insufficient-permission" })]);
+
+			// Re-approve (simulated by the mock no longer rejecting) and retry — a role change
+			// re-syncs the same (login, repo, action) key and should clear the earlier issue.
+			currentLogin = "owner";
+			await fetch(`${baseUrl}/account/team/members/bob/role`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ role: "member" }),
+			});
+			await waitFor(() => addCollaboratorMock.mock.calls.length > 1);
+
+			const second = await fetch(`${baseUrl}/account/team/collaborator-sync-issues`);
+			const { issues: secondIssues } = (await second.json()) as { issues: unknown[] };
+			expect(secondIssues).toEqual([]);
+		});
+
+		it("rejects a plain member with 403", async () => {
+			const teamId = await signIn("owner");
+			await addMemberWithIndex(teamId, "bob", "member");
+			currentLogin = "bob";
+
+			const res = await fetch(`${baseUrl}/account/team/collaborator-sync-issues`);
+			expect(res.status).toBe(403);
+		});
 	});
 });

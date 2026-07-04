@@ -187,4 +187,30 @@ describe("collaborators", () => {
 			{ owner: "acme-corp", name: "widgets", outcome: "failed", reason: "insufficient-permission", error: expect.anything() },
 		]);
 	});
+
+	it("caps concurrent in-flight GitHub calls instead of firing every bound repo's call at once", async () => {
+		const path = await tempInstallationPath();
+		const repos = Array.from({ length: 10 }, (_, i) =>
+			repoBindingFixture({ owner: "acme-corp", name: `repo-${i}`, installationId: 42 }),
+		);
+		await saveInstallation(path, { installations: [BINDING], repos });
+
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const addCollaborator = jest.fn(async () => {
+			inFlight++;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			inFlight--;
+		});
+		const octokit = { rest: { repos: { addCollaborator } } } as unknown as Octokit;
+		const buildOctokit = jest.fn(() => octokit) as unknown as BuildOctokit;
+
+		const results = await addTeamMemberAsCollaborator(buildOctokit, path, "bob", "member");
+
+		expect(results).toHaveLength(10);
+		expect(addCollaborator).toHaveBeenCalledTimes(10);
+		expect(maxInFlight).toBeLessThanOrEqual(4);
+		expect(maxInFlight).toBeGreaterThan(1); // still genuinely concurrent, not serialized to 1
+	});
 });

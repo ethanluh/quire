@@ -7,6 +7,7 @@ import type { AccessibleInstallation, InstallationAccount } from "../../../engin
 import { isInstallationRevoked } from "../../../engine/github/installationClient.js";
 import { removeCollaboratorsFromRepo } from "../../../engine/github/collaborators.js";
 import type { BuildOctokit, CollaboratorSyncResult } from "../../../engine/github/collaborators.js";
+import { withInstallationLock } from "../../../engine/github/installationLock.js";
 import type { OAuthDeps } from "../../../engine/github/oauth.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
 import { checkDeclaredDirectionConvention, setUpDeclaredDirectionConvention } from "../../../engine/github/repoSetup.js";
@@ -422,16 +423,26 @@ export function githubAppRouter(
 		try {
 			const owner = req.params["owner"] ?? "";
 			const name = req.params["name"] ?? "";
-			const current = accountState.current;
-			const target = current.repos.find((r) => r.owner === owner && r.name === name);
+			// Locked per-team against team.ts's collaborator-sync reads (see installationLock.ts)
+			// so a concurrent join/leave can never read a pre-removal snapshot of `repos` while
+			// this write is in flight. The revoke call below deliberately runs AFTER the lock is
+			// released — once this write lands, no later-locked read can re-add anyone to the
+			// now-unbound repo, so revoking doesn't itself need to hold the lock through its own
+			// (potentially slow) GitHub API calls.
+			const target = await withInstallationLock(teamId, async () => {
+				const current = accountState.current;
+				const found = current.repos.find((r) => r.owner === owner && r.name === name);
+				if (found === undefined) return undefined;
+				const updated: InstallationAccountState = { ...current, repos: current.repos.filter((r) => r !== found) };
+				accountState.current = updated;
+				clearRepoFromQueue(refreshDeps.state, found);
+				await saveInstallation(accountPath, updated);
+				return found;
+			});
 			if (target === undefined) {
 				res.status(404).json({ error: "That repo isn't currently added" });
 				return;
 			}
-			const updated: InstallationAccountState = { ...current, repos: current.repos.filter((r) => r !== target) };
-			accountState.current = updated;
-			clearRepoFromQueue(refreshDeps.state, target);
-			await saveInstallation(accountPath, updated);
 			revokeAccessOnUnbind([target]);
 			res.json({ removed: true });
 		} catch (err) {
@@ -507,28 +518,34 @@ export function githubAppRouter(
 				res.status(400).json({ error: "Invalid installation id" });
 				return;
 			}
-			const current = accountState.current;
-			const remaining = current.installations.filter((i) => i.installationId !== installationId);
-			const orphanedRepos = current.repos.filter((r) => r.installationId === installationId);
-			const remainingRepos = current.repos.filter((r) => r.installationId !== installationId);
+			// Locked per-team against team.ts's collaborator-sync reads — see the DELETE
+			// /repos/:owner/:name handler above for why the revoke call itself runs after the
+			// lock is released rather than inside it.
+			const { remaining, orphanedRepos } = await withInstallationLock(teamId, async () => {
+				const current = accountState.current;
+				const remaining = current.installations.filter((i) => i.installationId !== installationId);
+				const orphanedRepos = current.repos.filter((r) => r.installationId === installationId);
+				const remainingRepos = current.repos.filter((r) => r.installationId !== installationId);
 
-			const updated: InstallationAccountState =
-				remaining.length === 0 ? { installations: [], repos: [] } : { installations: remaining, repos: remainingRepos };
-			accountState.current = updated;
-			for (const repo of orphanedRepos) {
-				clearRepoFromQueue(refreshDeps.state, repo);
-			}
-			// Once the last installation is gone, tear down the file the same way disconnect-all
-			// does (rather than leaving behind a near-empty `{"installations":[],"repos":[]}`) —
-			// functionally equivalent on next load, but avoids two disconnect routes disagreeing
-			// about what "no installations bound" looks like on disk.
-			if (remaining.length === 0) {
-				repoListCache.clear();
-				await clearInstallation(accountPath);
-			} else {
-				repoListCache.delete(installationId);
-				await saveInstallation(accountPath, updated);
-			}
+				const updated: InstallationAccountState =
+					remaining.length === 0 ? { installations: [], repos: [] } : { installations: remaining, repos: remainingRepos };
+				accountState.current = updated;
+				for (const repo of orphanedRepos) {
+					clearRepoFromQueue(refreshDeps.state, repo);
+				}
+				// Once the last installation is gone, tear down the file the same way disconnect-all
+				// does (rather than leaving behind a near-empty `{"installations":[],"repos":[]}`) —
+				// functionally equivalent on next load, but avoids two disconnect routes disagreeing
+				// about what "no installations bound" looks like on disk.
+				if (remaining.length === 0) {
+					repoListCache.clear();
+					await clearInstallation(accountPath);
+				} else {
+					repoListCache.delete(installationId);
+					await saveInstallation(accountPath, updated);
+				}
+				return { remaining, orphanedRepos };
+			});
 			revokeAccessOnUnbind(orphanedRepos);
 			res.json({ disconnected: installationId, remaining: remaining.length, reposRemoved: orphanedRepos.length });
 		} catch (err) {
@@ -540,13 +557,19 @@ export function githubAppRouter(
 	// persisted file itself, distinct from unbinding one installation at a time above.
 	router.post("/disconnect-all", async (_req, res, next) => {
 		try {
-			const previousRepos = accountState.current.repos;
-			accountState.current = { installations: [], repos: [] };
-			repoListCache.clear();
-			for (const repo of previousRepos) {
-				clearRepoFromQueue(refreshDeps.state, repo);
-			}
-			await clearInstallation(accountPath);
+			// Locked per-team against team.ts's collaborator-sync reads — see the DELETE
+			// /repos/:owner/:name handler above for why the revoke call itself runs after the
+			// lock is released rather than inside it.
+			const previousRepos = await withInstallationLock(teamId, async () => {
+				const previousRepos = accountState.current.repos;
+				accountState.current = { installations: [], repos: [] };
+				repoListCache.clear();
+				for (const repo of previousRepos) {
+					clearRepoFromQueue(refreshDeps.state, repo);
+				}
+				await clearInstallation(accountPath);
+				return previousRepos;
+			});
 			revokeAccessOnUnbind(previousRepos);
 			res.json({ connected: false });
 		} catch (err) {

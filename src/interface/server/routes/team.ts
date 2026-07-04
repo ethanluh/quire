@@ -5,6 +5,12 @@ import type { TeamStore } from "../../../engine/team/teamStore.js";
 import { InviteAlreadyRedeemedError, LastOwnerError, NotAMemberError } from "../../../engine/team/teamStore.js";
 import { addTeamMemberAsCollaborator, removeTeamMemberAsCollaborator } from "../../../engine/github/collaborators.js";
 import type { BuildOctokit, CollaboratorSyncResult } from "../../../engine/github/collaborators.js";
+import { withInstallationLock } from "../../../engine/github/installationLock.js";
+import {
+	clearCollaboratorSyncIssue,
+	listCollaboratorSyncIssues,
+	recordCollaboratorSyncFailure,
+} from "../../../engine/github/collaboratorSyncLog.js";
 import type { TeamRole } from "../../../engine/types/team.js";
 import { createInvite, verifyInvite, INVITE_TTL_MS } from "../invite.js";
 import { validateBody } from "../middleware/validation.js";
@@ -40,48 +46,68 @@ export function teamRouter(
 		return join(dataDir, "teams", teamId, "installation.json");
 	}
 
-	// Logs the outcome of a fire-and-forget GitHub collaborator sync. An empty results array
-	// means the team has no repos bound yet — a no-op, not an error. Each per-repo failure is
-	// split further so an operator can tell "the App's permission isn't approved" (points at
-	// the README) from any other GitHub-side error (logs the raw error for debugging).
-	function logCollaboratorSyncResults(
+	function collaboratorSyncIssuesPathFor(teamId: string): string {
+		return join(dataDir, "teams", teamId, "collaborator-sync-issues.json");
+	}
+
+	// Logs AND persists the outcome of a fire-and-forget GitHub collaborator sync — logging
+	// alone would leave an owner/admin with no way to discover a stale sync short of tailing
+	// server logs (see GET /collaborator-sync-issues below for how this gets read back). An
+	// empty results array means the team has no repos bound yet — a no-op, not an error, so
+	// nothing is persisted for it. Each per-repo failure is split further so an operator can
+	// tell "the App's permission isn't approved" (points at the README) from any other
+	// GitHub-side error. A later success for the same (login, repo, action) clears whatever
+	// issue a previous failed attempt recorded, so a resolved problem doesn't linger.
+	async function recordCollaboratorSyncResults(
 		action: "add" | "remove",
 		teamId: string,
 		login: string,
 		results: ReadonlyArray<CollaboratorSyncResult>,
-	): void {
+	): Promise<void> {
 		if (results.length === 0) {
 			console.log(`Skipped GitHub collaborator ${action} for ${login} on team ${teamId}: no repos bound yet`);
 			return;
 		}
+		const issuesPath = collaboratorSyncIssuesPathFor(teamId);
 		for (const result of results) {
-			if (result.outcome !== "failed") continue;
-			if (result.reason === "insufficient-permission") {
-				console.error(
-					`GitHub collaborator ${action} failed for ${login} on team ${teamId} (${result.owner}/${result.name}): the GitHub ` +
-						`App is missing the "Administration: Read & write" permission (or an existing installation hasn't re-approved ` +
-						`it yet). See README.md's "GitHub App setup" section.`,
-				);
-			} else {
-				console.error(
-					`GitHub collaborator ${action} failed for ${login} on team ${teamId} (${result.owner}/${result.name}):`,
-					result.error,
-				);
+			if (result.outcome !== "failed") {
+				await clearCollaboratorSyncIssue(issuesPath, login, result.owner, result.name, action);
+				continue;
 			}
+			const message =
+				result.reason === "insufficient-permission"
+					? `The GitHub App is missing the "Administration: Read & write" permission (or an existing installation hasn't re-approved it yet). See README.md's "GitHub App setup" section.`
+					: String(result.error);
+			console.error(
+				`GitHub collaborator ${action} failed for ${login} on team ${teamId} (${result.owner}/${result.name}): ${message}`,
+			);
+			await recordCollaboratorSyncFailure(issuesPath, {
+				login,
+				owner: result.owner,
+				name: result.name,
+				action,
+				reason: result.reason,
+				message,
+				occurredAt: new Date().toISOString(),
+			});
 		}
 	}
 
+	// Locked per-team against githubApp.ts's repo bind/unbind routes (see installationLock.ts)
+	// so this read of installation.json's `repos` can never land on a stale snapshot that a
+	// concurrent unbind is in the middle of replacing — without it, a join could still add a
+	// member to a repo the team is simultaneously dropping.
 	function syncCollaboratorAdd(teamId: string, login: string, role: TeamRole): void {
-		addTeamMemberAsCollaborator(buildOctokit, installationPathFor(teamId), login, role)
-			.then((results) => logCollaboratorSyncResults("add", teamId, login, results))
+		withInstallationLock(teamId, () => addTeamMemberAsCollaborator(buildOctokit, installationPathFor(teamId), login, role))
+			.then((results) => recordCollaboratorSyncResults("add", teamId, login, results))
 			.catch((err: unknown) =>
 				console.error(`Unexpected error syncing GitHub collaborator add for ${login} on team ${teamId}:`, err),
 			);
 	}
 
 	function syncCollaboratorRemove(teamId: string, login: string): void {
-		removeTeamMemberAsCollaborator(buildOctokit, installationPathFor(teamId), login)
-			.then((results) => logCollaboratorSyncResults("remove", teamId, login, results))
+		withInstallationLock(teamId, () => removeTeamMemberAsCollaborator(buildOctokit, installationPathFor(teamId), login))
+			.then((results) => recordCollaboratorSyncResults("remove", teamId, login, results))
 			.catch((err: unknown) =>
 				console.error(`Unexpected error syncing GitHub collaborator removal for ${login} on team ${teamId}:`, err),
 			);
@@ -241,6 +267,25 @@ export function teamRouter(
 								: "pending",
 			}));
 			res.json({ invites: withStatus });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// Owner/admin only, same protection level as the roster/invite reads above — surfaces
+	// what GET /invites' sibling comment calls the residual: a GitHub-side collaborator sync
+	// that failed and hasn't since resolved (see recordCollaboratorSyncResults). Reads
+	// straight off disk on every call rather than caching, since this is a low-traffic
+	// diagnostic view, not a hot path.
+	router.get("/collaborator-sync-issues", requireRole("owner", "admin"), async (_req, res, next) => {
+		try {
+			const membership = res.locals.membership;
+			if (membership === undefined) {
+				res.status(401).json({ error: "Sign in required" });
+				return;
+			}
+			const issues = await listCollaboratorSyncIssues(collaboratorSyncIssuesPathFor(membership.teamId));
+			res.json({ issues });
 		} catch (err) {
 			next(err);
 		}
@@ -412,6 +457,14 @@ export function teamRouter(
 				}
 				throw err;
 			}
+
+			// Best-effort, never awaited into the response — see syncCollaboratorAdd. GitHub's
+			// addCollaborator upserts an existing collaborator's permission rather than erroring,
+			// so re-adding with the new role's permission is exactly what re-syncing a role
+			// change needs — a member promoted to admin actually gets push access immediately,
+			// not only the next time they leave and rejoin.
+			syncCollaboratorAdd(membership.teamId, targetLogin, newRole);
+
 			res.json({ login: targetLogin, role: newRole });
 		} catch (err) {
 			next(err);
