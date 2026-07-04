@@ -62,30 +62,48 @@ const INSTALLATION_LIST_CONCURRENCY = 4;
 // both identity and API credential; an installation is a structurally different kind of
 // grant (org/repo-level, not person-level), with its own state machine and its own
 // callback shape (a Setup URL redirect, not an OAuth callback).
-export function githubAppRouter(
-	refreshDeps: RefreshDeps,
-	appSlug: string,
-	listInstallationRepos: (installationId: number, accountLogin: string) => Promise<ReadonlyArray<RepoSummary>>,
-	getInstallationAccount: (installationId: number) => Promise<InstallationAccount>,
-	secureCookies: boolean,
-	userTokenCache: UserTokenCache,
-	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>,
-	listInstallationsForUser: (accessToken: string) => Promise<ReadonlyArray<AccessibleInstallation>>,
+export interface GithubAppRouterOptions {
+	refreshDeps: RefreshDeps;
+	appSlug: string;
+	listInstallationRepos: (installationId: number, accountLogin: string) => Promise<ReadonlyArray<RepoSummary>>;
+	getInstallationAccount: (installationId: number) => Promise<InstallationAccount>;
+	secureCookies: boolean;
+	userTokenCache: UserTokenCache;
+	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>;
+	listInstallationsForUser: (accessToken: string) => Promise<ReadonlyArray<AccessibleInstallation>>;
 	// Multi-tenant only: lets this team's router refuse to bind an installation another
 	// team already has bound, so findByInstallationId's lookup in tenant.ts never has to
 	// pick a winner between two teams claiming the same installation. Undefined in
 	// single-tenant contexts/tests, where there's only ever one team to begin with.
-	isInstallationBoundToAnotherTeam: ((installationId: number) => boolean) | undefined,
+	isInstallationBoundToAnotherTeam: ((installationId: number) => boolean) | undefined;
 	// A team's router can field requests from any of its member logins, so the persisted
 	// refresh token lives at a per-login path (mirroring routes/account.ts's own
 	// userTokenPath), computed per-request from the signed-in login rather than baked in
 	// once at router-construction time the way accountPath/queuePath etc. are.
-	dataDir: string,
-	oauth: OAuthDeps,
-	buildOctokit: BuildOctokit,
-	listTeamMemberLogins: (teamId: string) => Promise<ReadonlyArray<string>>,
-	teamId: string,
-): Router {
+	dataDir: string;
+	oauth: OAuthDeps;
+	buildOctokit: BuildOctokit;
+	listTeamMemberLogins: (teamId: string) => Promise<ReadonlyArray<string>>;
+	teamId: string;
+}
+
+export function githubAppRouter(options: GithubAppRouterOptions): Router {
+	const {
+		refreshDeps,
+		appSlug,
+		listInstallationRepos,
+		getInstallationAccount,
+		secureCookies,
+		userTokenCache,
+		enrichWithUserToken,
+		listInstallationsForUser,
+		isInstallationBoundToAnotherTeam,
+		dataDir,
+		oauth,
+		buildOctokit,
+		listTeamMemberLogins,
+		teamId,
+	} = options;
 	const router = Router();
 	const { accountState, accountPath, clientHolder } = refreshDeps;
 

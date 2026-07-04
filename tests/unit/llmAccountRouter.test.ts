@@ -101,10 +101,16 @@ describe("llmAccountRouter", () => {
 		app.use(express.json());
 		app.use(
 			"/account/llm",
-			llmAccountRouter(state, accountPath, holder, buildProvider, () => ({
-				provider: fallback,
-				description: "fallback",
-			})),
+			llmAccountRouter({
+				llmAccountState: state,
+				accountPath,
+				llmProviderHolder: holder,
+				buildProvider,
+				resolveFallback: () => ({
+					provider: fallback,
+					description: "fallback",
+				}),
+			}),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
@@ -188,13 +194,13 @@ describe("llmAccountRouter", () => {
 		app.use(express.json());
 		app.use(
 			"/account/llm",
-			llmAccountRouter(
-				state,
-				badAccountPath,
-				holder,
-				() => ({ provider, description: "anthropic" }),
-				() => ({ provider: workingProvider("fallback"), description: "fallback" }),
-			),
+			llmAccountRouter({
+				llmAccountState: state,
+				accountPath: badAccountPath,
+				llmProviderHolder: holder,
+				buildProvider: () => ({ provider, description: "anthropic" }),
+				resolveFallback: () => ({ provider: workingProvider("fallback"), description: "fallback" }),
+			}),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
@@ -297,15 +303,15 @@ describe("llmAccountRouter", () => {
 		app.use(express.json());
 		app.use(
 			"/account/llm",
-			llmAccountRouter(
-				state,
+			llmAccountRouter({
+				llmAccountState: state,
 				accountPath,
-				holder,
-				() => ({ provider: workingProvider("anthropic"), description: "anthropic" }),
-				() => {
+				llmProviderHolder: holder,
+				buildProvider: () => ({ provider: workingProvider("anthropic"), description: "anthropic" }),
+				resolveFallback: () => {
 					throw new Error("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY to be set");
 				},
-			),
+			}),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);

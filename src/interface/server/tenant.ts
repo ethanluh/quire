@@ -241,27 +241,33 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	);
 	router.use(
 		"/account/github",
-		githubAppRouter(
+		githubAppRouter({
 			refreshDeps,
-			shared.appSlug,
-			(installationId, accountLogin) =>
+			appSlug: shared.appSlug,
+			listInstallationRepos: (installationId, accountLogin) =>
 				listInstallationRepositories(buildInstallationOctokit(shared.appConfig, installationId), installationId, accountLogin),
-			(installationId) => getInstallationAccount(shared.appConfig, installationId),
-			shared.isProduction,
-			shared.userTokenCache,
-			shared.enrichWithUserToken,
+			getInstallationAccount: (installationId) => getInstallationAccount(shared.appConfig, installationId),
+			secureCookies: shared.isProduction,
+			userTokenCache: shared.userTokenCache,
+			enrichWithUserToken: shared.enrichWithUserToken,
 			listInstallationsForUser,
-			(installationId) => registry.isInstallationBoundToOtherTeam(installationId, teamId),
-			shared.dataDir,
-			shared.oauth,
-			(installationId) => buildInstallationOctokit(shared.appConfig, installationId),
-			async (forTeamId) => (await shared.teamStore.listMembers(forTeamId)).map((member) => member.login),
+			isInstallationBoundToAnotherTeam: (installationId) => registry.isInstallationBoundToOtherTeam(installationId, teamId),
+			dataDir: shared.dataDir,
+			oauth: shared.oauth,
+			buildOctokit: (installationId) => buildInstallationOctokit(shared.appConfig, installationId),
+			listTeamMemberLogins: async (forTeamId) => (await shared.teamStore.listMembers(forTeamId)).map((member) => member.login),
 			teamId,
-		),
+		}),
 	);
 	router.use(
 		"/account/llm",
-		llmAccountRouter(llmAccountState, llmAccountPath, llmProviderHolder, buildLlmProviderFromAccount, shared.resolveDefaultLlmProvider),
+		llmAccountRouter({
+			llmAccountState,
+			accountPath: llmAccountPath,
+			llmProviderHolder,
+			buildProvider: buildLlmProviderFromAccount,
+			resolveFallback: shared.resolveDefaultLlmProvider,
+		}),
 	);
 
 	return {
