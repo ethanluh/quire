@@ -6,6 +6,7 @@ import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { Bundle, GestureAction, ReviewCard } from "../../../engine/types/core.js";
 import type { ServerState } from "../state.js";
 import type { AccountState } from "../accountState.js";
+import { repoBinding } from "../accountState.js";
 import { logDefer } from "../../../engine/instrumentation/logger.js";
 import { validateBody } from "../middleware/validation.js";
 import { notifyStateChanged } from "../changeEvents.js";
@@ -112,16 +113,21 @@ export function gesturesRouter(
 					await queue.enqueue(assignedBundle, card); // enqueues; merge (if any) happens below, not inline
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
-					await decidedStore.markDecided(memberPrIds, action, decisionContext);
-					postCardToMembers(github, action, assignedBundle, card);
-					// autoMergeOnAccept is itself owner-gated (POST /account/github/settings requires
-					// requireRole("owner")) — turning it on IS the authorization decision for every
-					// accept that follows to drain the queue, deliberately, regardless of which member
-					// performs the accept. This route itself stays open to every member on purpose
+await decidedStore.markDecided(memberPrIds, action, decisionContext);
+				postCardToMembers(github, action, assignedBundle, card);
+				// autoMergeOnAccept is itself owner-gated (POST /account/github/repos/:owner/:name/settings
+				// requires requireRole("owner")) — turning it on IS the authorization decision for
+				// every accept that follows to drain the queue, deliberately, regardless of which
+				// member performs the accept. This route itself stays open to every member on purpose
 					// (INV-5: an unaccepted bundle never merges), and dequeueNext only ever processes
 					// bundles someone has already accepted, whether that's this one or another already
-					// waiting in the shared queue.
-					if (accountState.current?.autoMergeOnAccept === true) {
+					// waiting in the shared queue. Per-repo, not team-wide — a bundle's members all
+					// belong to one repo (see isBundleForRepo), so the first member is representative.
+					const firstMember = bundle.members[0];
+					const autoMergeOnAccept =
+						firstMember !== undefined &&
+						repoBinding(accountState.current, firstMember.repoOwner, firstMember.repoName)?.autoMergeOnAccept === true;
+					if (autoMergeOnAccept) {
 						// Don't block the response on the full merge (GitHub mergeability polling can
 						// take many seconds) — the bundle must appear in the merge queue immediately.
 						// The merge progresses in the background; notifyStateChanged() wakes any open

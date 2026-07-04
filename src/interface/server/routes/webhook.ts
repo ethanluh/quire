@@ -87,15 +87,11 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 		const parsed = parsePullRequestEvent(payload);
 		const tenant = parsed?.installationId !== undefined ? findTenant(parsed.installationId) : undefined;
 		const refreshDeps = tenant?.refreshDeps;
-		const selected = refreshDeps?.accountState.current.selectedRepo;
-		if (
-			parsed === undefined ||
-			refreshDeps === undefined ||
-			selected === undefined ||
-			selected.owner !== parsed.repoOwner ||
-			selected.name !== parsed.repoName ||
-			!TRIGGER_ACTIONS.has(parsed.action)
-		) {
+		const watchedRepo =
+			parsed !== undefined
+				? refreshDeps?.accountState.current.repos.find((r) => r.owner === parsed.repoOwner && r.name === parsed.repoName)
+				: undefined;
+		if (parsed === undefined || refreshDeps === undefined || watchedRepo === undefined || !TRIGGER_ACTIONS.has(parsed.action)) {
 			res.status(200).json({ ignored: true });
 			return;
 		}
@@ -117,7 +113,7 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 				// only auto-merge if the account opted into it, otherwise just clear the
 				// conflict and leave landing to a "Process" click.
 				const reattempted = await refreshDeps.queue.reattemptForPr(parsed.pullRequestId);
-				if (reattempted !== undefined && refreshDeps.accountState.current.autoMergeOnAccept === true) {
+				if (reattempted !== undefined && watchedRepo.autoMergeOnAccept === true) {
 					await refreshDeps.queue.dequeueNext();
 				}
 			}

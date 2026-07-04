@@ -103,7 +103,9 @@ describe("refreshRepoQueue", () => {
 		return {
 			accountState: createAccountState({
 				installations: [binding],
-				selectedRepo: { owner: "octocat", name: "hello-world", installationId: binding.installationId },
+				repos: [
+					{ owner: "octocat", name: "hello-world", installationId: binding.installationId, addedAt: "2026-06-30T00:00:00.000Z", addedBy: "alice" },
+				],
 			}),
 			accountPath: join(dir, "installation.json"),
 			clientHolder: new GitHubClientHolder(client),
@@ -174,11 +176,11 @@ describe("refreshRepoQueue", () => {
 
 		const refreshPromise = refreshRepoQueue("octocat", "hello-world", deps);
 		await new Promise((resolve) => setImmediate(resolve));
-		deps.accountState.current = { installations: [] }; // simulates a concurrent /disconnect-all
+		deps.accountState.current = { installations: [], repos: [] }; // simulates a concurrent /disconnect-all
 
 		releaseFetch();
 		await expect(refreshPromise).rejects.toBeInstanceOf(AccountChangedError);
-		expect(deps.accountState.current).toEqual({ installations: [] });
+		expect(deps.accountState.current).toEqual({ installations: [], repos: [] });
 	});
 
 	it("does not abort when an unrelated installation is bound mid-flight, only when the active one/repo changes", async () => {
@@ -245,7 +247,7 @@ describe("enqueueRefresh", () => {
 		const deps: RefreshDeps = {
 			accountState: createAccountState({
 				installations: [BASE_BINDING],
-				selectedRepo: { owner: "octocat", name: "hello-world", installationId: BASE_BINDING.installationId },
+				repos: [{ owner: "octocat", name: "hello-world", installationId: BASE_BINDING.installationId, addedAt: "2026-06-30T00:00:00.000Z", addedBy: "alice" }],
 			}),
 			accountPath: join(dir, "installation.json"),
 			clientHolder: new GitHubClientHolder(client),
@@ -279,7 +281,7 @@ describe("enqueueRefresh", () => {
 		const deps: RefreshDeps = {
 			accountState: createAccountState({
 				installations: [BASE_BINDING],
-				selectedRepo: { owner: "octocat", name: "hello-world", installationId: BASE_BINDING.installationId },
+				repos: [{ owner: "octocat", name: "hello-world", installationId: BASE_BINDING.installationId, addedAt: "2026-06-30T00:00:00.000Z", addedBy: "alice" }],
 			}),
 			accountPath: join(dir, "installation.json"),
 			clientHolder: new GitHubClientHolder(new StubGitHubClient()),

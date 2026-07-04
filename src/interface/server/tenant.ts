@@ -2,9 +2,8 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Router } from "express";
-import type { GitHubClient } from "../../engine/github/client.js";
 import { GitHubClientHolder } from "../../engine/github/clientHolder.js";
-import { StubGitHubClient } from "../../engine/github/stubClient.js";
+import { MultiRepoGitHubClient } from "../../engine/github/multiRepoClient.js";
 import { loadInstallation } from "../../engine/github/installation.js";
 import {
 	buildInstallationClient,
@@ -31,7 +30,7 @@ import type { StaticAnalyzer } from "../../engine/drift/footprint/analyzer.js";
 import { loadAccount as loadLlmAccount } from "../../engine/llm/account.js";
 import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
-import { createAccountState, activeInstallation } from "./accountState.js";
+import { createAccountState, installationForRepo, repoBinding } from "./accountState.js";
 import type { AccountState } from "./accountState.js";
 import { createLlmAccountState } from "./llmAccountState.js";
 import type { LlmAccountState } from "./llmAccountState.js";
@@ -151,14 +150,16 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	]);
 	const accountState = createAccountState(installationAccountState);
 
-	let initialClient: GitHubClient;
-	const active = activeInstallation(accountState.current);
-	if (active !== undefined) {
-		initialClient = buildInstallationClient(shared.appConfig, active.installationId);
-	} else {
-		initialClient = new StubGitHubClient();
-	}
-	const clientHolder = new GitHubClientHolder(initialClient);
+	// One client per team, dispatching every call to whichever installation backs the
+	// (owner, repo) it concerns — resolved live against accountState.current.repos on every
+	// call, so adding/removing a watched repo or rebinding an installation just works without
+	// ever repointing this holder (see MultiRepoGitHubClient's own comment).
+	const clientHolder = new GitHubClientHolder(
+		new MultiRepoGitHubClient(
+			(owner, name) => installationForRepo(accountState.current, owner, name)?.installationId,
+			(installationId) => buildInstallationClient(shared.appConfig, installationId),
+		),
+	);
 
 	// Resolved before MergeQueue below, which needs a provider for conflict resolution.
 	const llmAccountState = createLlmAccountState(connectedLlmAccount);
@@ -171,15 +172,15 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	// per-account state.
 	const deepResolverAgentPath = join(dir, "deep-resolver-agent.json");
 	const deepInvestigation: DeepInvestigationDeps = {
-		shouldEnable: () => accountState.current.enableDeepConflictInvestigation === true,
+		shouldEnable: (owner, name) => repoBinding(accountState.current, owner, name)?.enableDeepConflictInvestigation === true,
 		// This tier is Anthropic-only (see the design decision it implements): a Gemini or
 		// stub-backed account has nothing for it to run against.
 		getClient: () =>
 			llmAccountState.current?.provider === "anthropic" ? new AnthropicManagedAgentsClient(llmAccountState.current.apiKey) : undefined,
 		ensureAgent: (client) => ensureDeepResolverAgent(client, deepResolverAgentPath),
-		mintRepoToken: (_owner, repo) => {
-			const installationId = activeInstallation(accountState.current)?.installationId;
-			if (installationId === undefined) throw new Error("No GitHub App installation bound — cannot mint a repo token");
+		mintRepoToken: (owner, repo) => {
+			const installationId = installationForRepo(accountState.current, owner, repo)?.installationId;
+			if (installationId === undefined) throw new Error(`No GitHub App installation bound for ${owner}/${repo}`);
 			return mintScopedRepoToken(shared.appConfig, installationId, repo);
 		},
 	};
@@ -190,7 +191,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		llmProviderHolder,
 		conflictLogPath,
 		DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
-		() => accountState.current.flagConflictsForFleet === true,
+		(owner, name) => repoBinding(accountState.current, owner, name)?.flagConflictsForFleet === true,
 		deepInvestigation,
 	);
 	await queue.load();
@@ -238,7 +239,6 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		githubAppRouter(
 			refreshDeps,
 			shared.appSlug,
-			(installationId) => buildInstallationClient(shared.appConfig, installationId),
 			(installationId, accountLogin) =>
 				listInstallationRepositories(buildInstallationOctokit(shared.appConfig, installationId), installationId, accountLogin),
 			(installationId) => getInstallationAccount(shared.appConfig, installationId),

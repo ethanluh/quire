@@ -109,7 +109,15 @@ describe("webhookRouter", () => {
 		const refreshDeps: RefreshDeps = {
 			accountState: createAccountState({
 				installations: [BINDING],
-				selectedRepo: { owner: "octocat", name: "hello-world", installationId: BINDING.installationId },
+				repos: [
+					{
+						owner: "octocat",
+						name: "hello-world",
+						installationId: BINDING.installationId,
+						addedAt: new Date(0).toISOString(),
+						addedBy: "test-user",
+					},
+				],
 			}),
 			accountPath: join(dir, "installation.json"),
 			clientHolder: new GitHubClientHolder(client),
@@ -244,7 +252,10 @@ describe("webhookRouter", () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
 		const client = new StubGitHubClient();
 		const { refreshDeps, queue } = await setup(client);
-		refreshDeps.accountState.current.autoMergeOnAccept = true;
+		refreshDeps.accountState.current = {
+			...refreshDeps.accountState.current,
+			repos: refreshDeps.accountState.current.repos.map((r) => ({ ...r, autoMergeOnAccept: true })),
+		};
 		const pr = makeQueuedPr("123");
 		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
 		await queue.enqueue(makeBundleFor(pr));

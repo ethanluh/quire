@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadInstallation, saveInstallation, clearInstallation } from "../../src/engine/github/installation.js";
-import type { InstallationAccountState, InstallationBinding } from "../../src/engine/github/installation.js";
+import type { InstallationAccountState, InstallationBinding, RepoBinding } from "../../src/engine/github/installation.js";
 
 const BINDING_A: InstallationBinding = {
 	installationId: 42,
@@ -35,7 +35,7 @@ describe("github installation persistence", () => {
 	it("round-trips a saved single-installation state, creating parent dirs as needed", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-installation-"));
 		const path = join(dir, "nested", "installation.json");
-		const state: InstallationAccountState = { installations: [BINDING_A] };
+		const state: InstallationAccountState = { installations: [BINDING_A], repos: [] };
 
 		await saveInstallation(path, state);
 		const loaded = await loadInstallation(path);
@@ -43,13 +43,28 @@ describe("github installation persistence", () => {
 		expect(loaded).toEqual(state);
 	});
 
-	it("round-trips multiple bound installations plus a selected repo and autoMergeOnAccept", async () => {
+	it("round-trips multiple bound installations plus multiple watched repos with per-repo settings", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-installation-"));
 		const path = join(dir, "installation.json");
+		const repoA: RepoBinding = {
+			owner: "acme-corp",
+			name: "widgets",
+			installationId: 43,
+			autoMergeOnAccept: true,
+			addedAt: "2026-06-30T00:00:00.000Z",
+			addedBy: "alice",
+		};
+		const repoB: RepoBinding = {
+			owner: "octocat",
+			name: "gadgets",
+			installationId: 42,
+			flagConflictsForFleet: true,
+			addedAt: "2026-06-30T00:00:00.000Z",
+			addedBy: "bob",
+		};
 		const state: InstallationAccountState = {
 			installations: [BINDING_A, BINDING_B],
-			selectedRepo: { owner: "acme-corp", name: "widgets", installationId: 43 },
-			autoMergeOnAccept: true,
+			repos: [repoA, repoB],
 		};
 
 		await saveInstallation(path, state);
@@ -61,7 +76,7 @@ describe("github installation persistence", () => {
 	it("treats a corrupted file as not connected", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-installation-"));
 		const path = join(dir, "installation.json");
-		await saveInstallation(path, { installations: [BINDING_A] });
+		await saveInstallation(path, { installations: [BINDING_A], repos: [] });
 		await rm(path);
 		await writeFile(path, "not json", "utf8");
 
@@ -80,10 +95,24 @@ describe("github installation persistence", () => {
 		expect(loaded).toBeUndefined();
 	});
 
+	it("treats the pre-multi-repo shape (selectedRepo/autoMergeOnAccept at the top level) as not connected (no migration path)", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-installation-"));
+		const path = join(dir, "installation.json");
+		await writeFile(
+			path,
+			JSON.stringify({ installations: [BINDING_A], selectedRepo: { owner: "octocat", name: "widgets", installationId: 42 } }),
+			"utf8",
+		);
+
+		const loaded = await loadInstallation(path);
+
+		expect(loaded).toBeUndefined();
+	});
+
 	it("clearInstallation removes the file without throwing if it never existed", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-installation-"));
 		const path = join(dir, "installation.json");
-		await saveInstallation(path, { installations: [BINDING_A] });
+		await saveInstallation(path, { installations: [BINDING_A], repos: [] });
 
 		await clearInstallation(path);
 		await expect(clearInstallation(path)).resolves.toBeUndefined();
