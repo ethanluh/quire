@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, jest } from "@jest/globals";
+import type { Octokit } from "@octokit/rest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,7 @@ import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 import type { PipelineDeps } from "../../src/interface/server/ingestIntoQueue.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
 import type { AccessibleInstallation, InstallationAccount } from "../../src/engine/github/installationClient.js";
+import type { BuildOctokit } from "../../src/engine/github/collaborators.js";
 import { RequestError } from "@octokit/request-error";
 import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
 import type { UserTokenCache } from "../../src/engine/github/userTokenCache.js";
@@ -51,6 +53,17 @@ function repo(overrides: Partial<RepoSummary> & { fullName: string; installation
 		pinned: false,
 		...overrides,
 	};
+}
+
+// Lets an unbind route's fire-and-forget revokeAccessOnUnbind chain (see githubApp.ts) settle
+// before assertions run — the route responds before that chain resolves, same as team.ts's
+// syncCollaboratorAdd/Remove (see teamRouter.test.ts's identical helper).
+async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+	const start = Date.now();
+	while (!predicate()) {
+		if (Date.now() - start > timeoutMs) return;
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
 }
 
 function repoBindingFixture(overrides: Partial<RepoBinding> & { owner: string; name: string; installationId: number }): RepoBinding {
@@ -182,6 +195,14 @@ describe("githubAppRouter", () => {
 			},
 			redirectUri: "http://localhost:3000/account/github/oauth/callback",
 		},
+		// Only exercised by tests that unbind a repo/installation while the team has members —
+		// every other test's revokeAccessOnUnbind call short-circuits on an empty repo list
+		// before this is ever invoked, so throwing by default catches an unintended real call.
+		buildOctokit: BuildOctokit = () => {
+			throw new Error("buildOctokit should not be called in this test");
+		},
+		listTeamMemberLogins: (forTeamId: string) => Promise<ReadonlyArray<string>> = async () => [],
+		teamId = "test-team",
 	): { accountPath: string; dataDir: string; state: ServerState; refreshDeps: RefreshDeps; userTokenCache: UserTokenCache } {
 		const accountPath = join(dir, "installation.json");
 		const holder = new GitHubClientHolder(client);
@@ -232,6 +253,9 @@ describe("githubAppRouter", () => {
 				isInstallationBoundToAnotherTeam,
 				dir,
 				oauth,
+				buildOctokit,
+				listTeamMemberLogins,
+				teamId,
 			),
 		);
 		app.use(errorHandler);
@@ -938,6 +962,44 @@ describe("githubAppRouter", () => {
 
 			expect(status).toBe(404);
 			expect(body["error"]).toBe("That repo isn't currently added");
+		});
+
+		it("revokes every current team member's GitHub collaborator access on the unbound repo", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const removeCollaborator = jest.fn(async () => undefined);
+			const buildOctokit = jest.fn(() => ({ rest: { repos: { removeCollaborator } } }) as unknown as Octokit);
+			const listTeamMemberLogins = jest.fn(async () => ["alice", "bob"]);
+			setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{
+					installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+					repos: [
+						repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+						repoBindingFixture({ owner: "acme-corp", name: "gadgets", installationId: 555 }),
+					],
+				},
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				buildOctokit,
+				listTeamMemberLogins,
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(server, "DELETE", "/account/github/repos/acme-corp/widgets");
+			expect(status).toBe(200);
+
+			await waitFor(() => removeCollaborator.mock.calls.length > 0);
+			// Only the unbound repo (widgets), not the one still watched (gadgets).
+			expect(removeCollaborator).toHaveBeenCalledWith({ owner: "acme-corp", repo: "widgets", username: "alice" });
+			expect(removeCollaborator).toHaveBeenCalledWith({ owner: "acme-corp", repo: "widgets", username: "bob" });
+			expect(removeCollaborator).toHaveBeenCalledTimes(2);
 		});
 	});
 

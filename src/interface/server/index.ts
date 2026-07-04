@@ -2,7 +2,7 @@ import express from "express";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
-import { InstallationRevokedError, buildUserOctokit } from "../../engine/github/installationClient.js";
+import { InstallationRevokedError, buildInstallationOctokit, buildUserOctokit } from "../../engine/github/installationClient.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
 import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
 import { enrichWithStarredAndPinned } from "../../engine/github/repos.js";
@@ -114,6 +114,12 @@ async function main(): Promise<void> {
 	const enrichWithUserToken = (repos: ReadonlyArray<RepoSummary>, accessToken: string) =>
 		enrichWithStarredAndPinned(repos, buildUserOctokit(accessToken));
 
+	// Constructed before sharedConfig (rather than alongside registry below) so
+	// TenantSharedConfig can hand the same instance to every tenant's githubAppRouter —
+	// needed there to look up a team's current roster when a repo is unbound (see
+	// githubApp.ts's revokeAccessOnUnbind).
+	const teamStore = new TeamStore(DATA_DIR);
+
 	const sharedConfig: TenantSharedConfig = {
 		dataDir: DATA_DIR,
 		appConfig,
@@ -125,6 +131,7 @@ async function main(): Promise<void> {
 		userTokenCache,
 		enrichWithUserToken,
 		oauth: oauthDeps,
+		teamStore,
 	};
 
 	// Every team gets its own isolated GitHub App installation, repo selection, PR queue,
@@ -133,7 +140,6 @@ async function main(): Promise<void> {
 	// regardless of who was signed in. A login resolves to a team via resolveMembership,
 	// mounted ahead of resolveTenant below.
 	const registry = new TenantRegistry(sharedConfig);
-	const teamStore = new TeamStore(DATA_DIR);
 	await migrateLegacyData(DATA_DIR, teamStore, allowedLogins);
 	await registry.hydrateExisting();
 	console.log(`Loaded ${registry.all().length} existing team(s) from ${join(DATA_DIR, "teams")}`);
@@ -189,7 +195,16 @@ async function main(): Promise<void> {
 	// membership index and team roster, not on anything a TenantContext holds — mounted
 	// here, ahead of resolveTenant, so it never pays for (or depends on) resolving a
 	// team's GitHub client/queue/LLM account just to manage who's on the team.
-	app.use("/account/team", teamRouter(teamStore, sessionSecret, publicUrl ?? `http://localhost:${PORT}`));
+	app.use(
+		"/account/team",
+		teamRouter(
+			teamStore,
+			sessionSecret,
+			publicUrl ?? `http://localhost:${PORT}`,
+			(installationId) => buildInstallationOctokit(appConfig, installationId),
+			DATA_DIR,
+		),
+	);
 
 	app.use(resolveTenant(registry));
 

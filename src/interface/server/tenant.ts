@@ -18,6 +18,7 @@ import type { OAuthDeps } from "../../engine/github/oauth.js";
 import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../engine/github/repos.js";
 import type { RepoSummary } from "../../engine/github/repos.js";
 import type { UserTokenCache } from "../../engine/github/userTokenCache.js";
+import type { TeamStore } from "../../engine/team/teamStore.js";
 import { MergeQueue, DEFAULT_MERGEABILITY_POLL_DELAYS_MS } from "../../engine/queue/mergeQueue.js";
 import type { DeepInvestigationDeps } from "../../engine/queue/mergeQueue.js";
 import { ensureDeepResolverAgent } from "../../engine/queue/deepConflictInvestigation.js";
@@ -76,6 +77,11 @@ export interface TenantSharedConfig {
 	// tenant load (see refreshUserTokenFromDisk in userToken.ts) — the same OAuth app config
 	// routes/account.ts uses for the initial exchange.
 	oauth: OAuthDeps;
+	// The same process-wide TeamStore instance index.ts hands teamRouter — needed here so a
+	// repo-unbind route (see githubAppRouter's listTeamMemberLogins) can look up the team's
+	// current roster and revoke GitHub collaborator access for every member on the repo
+	// being unbound, not just whoever happens to leave/rejoin afterward.
+	teamStore: TeamStore;
 }
 
 // Everything that used to be a single process-wide singleton (accountState, the GitHub
@@ -249,6 +255,9 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 			(installationId) => registry.isInstallationBoundToOtherTeam(installationId, teamId),
 			shared.dataDir,
 			shared.oauth,
+			(installationId) => buildInstallationOctokit(shared.appConfig, installationId),
+			async (forTeamId) => (await shared.teamStore.listMembers(forTeamId)).map((member) => member.login),
+			teamId,
 		),
 	);
 	router.use(

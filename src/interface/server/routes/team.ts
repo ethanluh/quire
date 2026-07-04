@@ -1,7 +1,11 @@
+import { join } from "node:path";
 import { Router } from "express";
 import { z } from "zod";
 import type { TeamStore } from "../../../engine/team/teamStore.js";
 import { InviteAlreadyRedeemedError, LastOwnerError, NotAMemberError } from "../../../engine/team/teamStore.js";
+import { addTeamMemberAsCollaborator, removeTeamMemberAsCollaborator } from "../../../engine/github/collaborators.js";
+import type { BuildOctokit, CollaboratorSyncResult } from "../../../engine/github/collaborators.js";
+import type { TeamRole } from "../../../engine/types/team.js";
 import { createInvite, verifyInvite, INVITE_TTL_MS } from "../invite.js";
 import { validateBody } from "../middleware/validation.js";
 import { requireRole } from "../middleware/requireRole.js";
@@ -23,8 +27,65 @@ const InviteSchema = z.object({ role: z.enum(["admin", "member"]).optional() }).
 // client, merge queue, ...), only the login-level membership index and the team roster,
 // so there's no reason to pay for resolving/loading a tenant just to manage team
 // membership.
-export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUrl: string): Router {
+export function teamRouter(
+	teamStore: TeamStore,
+	sessionSecret: string,
+	publicUrl: string,
+	buildOctokit: BuildOctokit,
+	dataDir: string,
+): Router {
 	const router = Router();
+
+	function installationPathFor(teamId: string): string {
+		return join(dataDir, "teams", teamId, "installation.json");
+	}
+
+	// Logs the outcome of a fire-and-forget GitHub collaborator sync. An empty results array
+	// means the team has no repos bound yet — a no-op, not an error. Each per-repo failure is
+	// split further so an operator can tell "the App's permission isn't approved" (points at
+	// the README) from any other GitHub-side error (logs the raw error for debugging).
+	function logCollaboratorSyncResults(
+		action: "add" | "remove",
+		teamId: string,
+		login: string,
+		results: ReadonlyArray<CollaboratorSyncResult>,
+	): void {
+		if (results.length === 0) {
+			console.log(`Skipped GitHub collaborator ${action} for ${login} on team ${teamId}: no repos bound yet`);
+			return;
+		}
+		for (const result of results) {
+			if (result.outcome !== "failed") continue;
+			if (result.reason === "insufficient-permission") {
+				console.error(
+					`GitHub collaborator ${action} failed for ${login} on team ${teamId} (${result.owner}/${result.name}): the GitHub ` +
+						`App is missing the "Administration: Read & write" permission (or an existing installation hasn't re-approved ` +
+						`it yet). See README.md's "GitHub App setup" section.`,
+				);
+			} else {
+				console.error(
+					`GitHub collaborator ${action} failed for ${login} on team ${teamId} (${result.owner}/${result.name}):`,
+					result.error,
+				);
+			}
+		}
+	}
+
+	function syncCollaboratorAdd(teamId: string, login: string, role: TeamRole): void {
+		addTeamMemberAsCollaborator(buildOctokit, installationPathFor(teamId), login, role)
+			.then((results) => logCollaboratorSyncResults("add", teamId, login, results))
+			.catch((err: unknown) =>
+				console.error(`Unexpected error syncing GitHub collaborator add for ${login} on team ${teamId}:`, err),
+			);
+	}
+
+	function syncCollaboratorRemove(teamId: string, login: string): void {
+		removeTeamMemberAsCollaborator(buildOctokit, installationPathFor(teamId), login)
+			.then((results) => logCollaboratorSyncResults("remove", teamId, login, results))
+			.catch((err: unknown) =>
+				console.error(`Unexpected error syncing GitHub collaborator removal for ${login} on team ${teamId}:`, err),
+			);
+	}
 
 	router.get("/", async (_req, res, next) => {
 		try {
@@ -257,6 +318,14 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				activeTeamId: payload.teamId,
 			}));
 			await teamStore.markInviteRedeemed(payload.teamId, payload.id, login);
+
+			// Best-effort, never awaited into the response — see syncCollaboratorAdd. Uses the
+			// login's actual current role, not payload.role: invites are reusable (nothing
+			// checks redeemedAt on redemption, only revokedAt), so a still-valid higher-role
+			// invite re-redeemed by an existing lower-role member must not grant them a GitHub
+			// permission above what Quire itself records for them.
+			syncCollaboratorAdd(payload.teamId, login, existingMembership?.role ?? payload.role);
+
 			res.json({ teamId: payload.teamId, name: team.name });
 		} catch (err) {
 			next(err);
@@ -292,6 +361,9 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 			// own first-login behavior. Shared with an owner/admin removing someone else (see
 			// routes in the roles PR) so both go through one "never teamless" guarantee.
 			const updated = await teamStore.releaseLoginFromTeam(login, teamId);
+
+			syncCollaboratorRemove(teamId, login);
+
 			res.json({ activeTeamId: updated.activeTeamId });
 		} catch (err) {
 			next(err);
@@ -386,6 +458,9 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 			}
 
 			await teamStore.releaseLoginFromTeam(targetLogin, membership.teamId);
+
+			syncCollaboratorRemove(membership.teamId, targetLogin);
+
 			res.json({ login: targetLogin, removed: true });
 		} catch (err) {
 			next(err);

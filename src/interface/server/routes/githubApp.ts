@@ -5,6 +5,8 @@ import type { InstallationAccountState, InstallationBinding, RepoBinding } from 
 import { saveInstallation, clearInstallation } from "../../../engine/github/installation.js";
 import type { AccessibleInstallation, InstallationAccount } from "../../../engine/github/installationClient.js";
 import { isInstallationRevoked } from "../../../engine/github/installationClient.js";
+import { removeCollaboratorsFromRepo } from "../../../engine/github/collaborators.js";
+import type { BuildOctokit, CollaboratorSyncResult } from "../../../engine/github/collaborators.js";
 import type { OAuthDeps } from "../../../engine/github/oauth.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
 import { checkDeclaredDirectionConvention, setUpDeclaredDirectionConvention } from "../../../engine/github/repoSetup.js";
@@ -79,10 +81,41 @@ export function githubAppRouter(
 	// once at router-construction time the way accountPath/queuePath etc. are.
 	dataDir: string,
 	oauth: OAuthDeps,
+	buildOctokit: BuildOctokit,
+	listTeamMemberLogins: (teamId: string) => Promise<ReadonlyArray<string>>,
+	teamId: string,
 ): Router {
 	const router = Router();
 	const { accountState, accountPath, clientHolder } = refreshDeps;
 	const userTokenPath = (login: string) => join(dataDir, "users", login, "github-user-token.json");
+
+	// Best-effort, fire-and-forget — same shape as team.ts's syncCollaboratorAdd/Remove: a
+	// repo being unbound must never block the unbind response on a GitHub round-trip, and a
+	// sync failure (permission not yet approved, GitHub unreachable) must not undo the
+	// Quire-side unbind that already succeeded. Revokes every *current* team member's GitHub
+	// collaborator access on a repo the moment it's unwatched, since removeTeamMemberAsCollaborator
+	// (fired later by an individual leave) only ever loops over repos still bound at that time —
+	// it can never retroactively clean up a repo that's already gone from installation.json.
+	function revokeAccessOnUnbind(repos: ReadonlyArray<RepoBinding>): void {
+		if (repos.length === 0) return;
+		listTeamMemberLogins(teamId)
+			.then((logins) =>
+				Promise.all(
+					repos.map((repo) =>
+						removeCollaboratorsFromRepo(buildOctokit, repo, logins).then((results) => {
+							const failed = results.filter((r): r is Extract<CollaboratorSyncResult, { outcome: "failed" }> => r.outcome === "failed");
+							for (const failure of failed) {
+								console.error(
+									`GitHub collaborator removal failed for ${repo.owner}/${repo.name} on team ${teamId} unbind (${failure.reason}):`,
+									failure.error,
+								);
+							}
+						}),
+					),
+				),
+			)
+			.catch((err: unknown) => console.error(`Unexpected error revoking GitHub collaborator access on unbind for team ${teamId}:`, err));
+	}
 
 	// Upserts one installation's binding into the account-wide state — shared by the
 	// GitHub-redirect callback below and the redirect-free /connect route, which both end up
@@ -399,6 +432,7 @@ export function githubAppRouter(
 			accountState.current = updated;
 			clearRepoFromQueue(refreshDeps.state, target);
 			await saveInstallation(accountPath, updated);
+			revokeAccessOnUnbind([target]);
 			res.json({ removed: true });
 		} catch (err) {
 			next(err);
@@ -495,6 +529,7 @@ export function githubAppRouter(
 				repoListCache.delete(installationId);
 				await saveInstallation(accountPath, updated);
 			}
+			revokeAccessOnUnbind(orphanedRepos);
 			res.json({ disconnected: installationId, remaining: remaining.length, reposRemoved: orphanedRepos.length });
 		} catch (err) {
 			next(err);
@@ -512,6 +547,7 @@ export function githubAppRouter(
 				clearRepoFromQueue(refreshDeps.state, repo);
 			}
 			await clearInstallation(accountPath);
+			revokeAccessOnUnbind(previousRepos);
 			res.json({ connected: false });
 		} catch (err) {
 			next(err);

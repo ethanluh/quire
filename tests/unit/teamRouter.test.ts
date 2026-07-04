@@ -1,15 +1,48 @@
-import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
+import type { Octokit } from "@octokit/rest";
 import express from "express";
 import type { Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { teamRouter } from "../../src/interface/server/routes/team.js";
+import type { BuildOctokit } from "../../src/engine/github/collaborators.js";
+import { saveInstallation } from "../../src/engine/github/installation.js";
+import type { InstallationBinding, RepoBinding } from "../../src/engine/github/installation.js";
 import { TeamStore } from "../../src/engine/team/teamStore.js";
 import { createInvite } from "../../src/interface/server/invite.js";
 
 const SECRET = "test-secret";
 const PUBLIC_URL = "http://localhost:3000";
+
+const BINDING: InstallationBinding = {
+	installationId: 42,
+	accountLogin: "octocat",
+	accountType: "Organization",
+	boundAt: "2026-06-30T00:00:00.000Z",
+};
+
+function repoBindingFixture(overrides: Partial<RepoBinding> & { owner: string; name: string; installationId: number }): RepoBinding {
+	return { addedAt: "2026-06-30T00:00:00.000Z", addedBy: "octocat", ...overrides };
+}
+
+// Lets the unawaited GitHub-collaborator-sync promise chain (see team.ts's syncCollaboratorAdd/
+// syncCollaboratorRemove) settle before assertions run — the route responds before that chain
+// resolves, and the chain itself starts with a real fs.readFile (loadInstallation), so a single
+// setImmediate/microtask flush isn't reliably enough to observe its side effects; poll instead.
+async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+	const start = Date.now();
+	while (!predicate()) {
+		if (Date.now() - start > timeoutMs) return;
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+}
+
+// For asserting a call never happens: there's no condition to poll for, so just give the
+// fire-and-forget chain a comparable window to have run.
+function settle(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 50));
+}
 
 describe("teamRouter", () => {
 	let server: Server;
@@ -17,11 +50,34 @@ describe("teamRouter", () => {
 	let dataDir: string;
 	let store: TeamStore;
 	let currentLogin: string | undefined;
+	let addCollaboratorMock: jest.Mock;
+	let removeCollaboratorMock: jest.Mock;
+	let buildOctokit: BuildOctokit;
+
+	function installationPathFor(teamId: string): string {
+		return join(dataDir, "teams", teamId, "installation.json");
+	}
+
+	// Binds one repo to the team so the sync path actually reaches addCollaborator/
+	// removeCollaborator instead of short-circuiting on "no repos bound yet" — most tests
+	// below don't call this and rely on that short-circuit, since they're only asserting on
+	// the Quire-side team mutation.
+	async function bindRepo(teamId: string, overrides: Partial<RepoBinding> = {}): Promise<void> {
+		const repo = repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 42, ...overrides });
+		await saveInstallation(installationPathFor(teamId), { installations: [BINDING], repos: [repo] });
+	}
 
 	beforeEach(async () => {
 		dataDir = await mkdtemp(join(tmpdir(), "quire-teamrouter-"));
 		store = new TeamStore(dataDir);
 		currentLogin = undefined;
+
+		addCollaboratorMock = jest.fn(async () => undefined);
+		removeCollaboratorMock = jest.fn(async () => undefined);
+		const fakeOctokit = {
+			rest: { repos: { addCollaborator: addCollaboratorMock, removeCollaborator: removeCollaboratorMock } },
+		} as unknown as Octokit;
+		buildOctokit = jest.fn(() => fakeOctokit);
 
 		const app = express();
 		app.use(express.json());
@@ -41,7 +97,7 @@ describe("teamRouter", () => {
 			}
 			next();
 		});
-		app.use("/account/team", teamRouter(store, SECRET, PUBLIC_URL));
+		app.use("/account/team", teamRouter(store, SECRET, PUBLIC_URL, buildOctokit, dataDir));
 
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, resolve);
@@ -483,6 +539,164 @@ describe("teamRouter", () => {
 
 			const res = await fetch(`${baseUrl}/account/team/members/bob/remove`, { method: "POST" });
 			expect(res.status).toBe(403);
+		});
+	});
+
+	describe("GitHub collaborator sync", () => {
+		it("POST /join adds the joining login as a collaborator on every bound repo, mapping role to permission", async () => {
+			const ownerTeamId = await signIn("owner");
+			await bindRepo(ownerTeamId);
+			const { token } = createInvite(ownerTeamId, "owner", "admin", SECRET);
+			currentLogin = "bob";
+			await store.createTeamForLogin("bob", "bob's team");
+
+			const res = await fetch(`${baseUrl}/account/team/join`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ token }),
+			});
+			expect(res.status).toBe(200);
+
+			await waitFor(() => addCollaboratorMock.mock.calls.length > 0);
+			expect(buildOctokit).toHaveBeenCalledWith(42);
+			expect(addCollaboratorMock).toHaveBeenCalledWith({ owner: "acme-corp", repo: "widgets", username: "bob", permission: "push" });
+		});
+
+		it("POST /join re-redeemed by an existing lower-role member syncs their actual role, not the invite's — no privilege escalation", async () => {
+			const ownerTeamId = await signIn("owner");
+			await bindRepo(ownerTeamId);
+			// A still-valid admin-role invite (unexpired, unrevoked) — invites are reusable
+			// since nothing checks redeemedAt on redemption, only revokedAt.
+			const { token } = createInvite(ownerTeamId, "owner", "admin", SECRET);
+			currentLogin = "bob";
+			await addMemberWithIndex(ownerTeamId, "bob", "member");
+
+			const res = await fetch(`${baseUrl}/account/team/join`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ token }),
+			});
+			expect(res.status).toBe(200);
+
+			// Quire's own record must not change (rejoin is a no-op for role)...
+			expect((await store.getMembership(ownerTeamId, "bob"))?.role).toBe("member");
+			// ...and the GitHub sync must grant only what that unchanged role warrants, not
+			// the higher role embedded in the reused invite token.
+			await waitFor(() => addCollaboratorMock.mock.calls.length > 0);
+			expect(addCollaboratorMock).toHaveBeenCalledWith({ owner: "acme-corp", repo: "widgets", username: "bob", permission: "pull" });
+		});
+
+		it("POST /join is a no-op (not an error) when the team has no repos bound yet", async () => {
+			const ownerTeamId = await signIn("owner");
+			const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
+			currentLogin = "bob";
+			await store.createTeamForLogin("bob", "bob's team");
+
+			const res = await fetch(`${baseUrl}/account/team/join`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ token }),
+			});
+			expect(res.status).toBe(200);
+
+			await settle();
+			expect(buildOctokit).not.toHaveBeenCalled();
+			expect(addCollaboratorMock).not.toHaveBeenCalled();
+		});
+
+		it("POST /join never syncs GitHub when the Quire-side join itself fails (invalid token)", async () => {
+			await signIn("bob");
+
+			const res = await fetch(`${baseUrl}/account/team/join`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ token: "not-a-real-token" }),
+			});
+			expect(res.status).toBe(400);
+
+			await settle();
+			expect(addCollaboratorMock).not.toHaveBeenCalled();
+		});
+
+		it("POST /join responds before the GitHub sync settles (never blocks on it)", async () => {
+			const ownerTeamId = await signIn("owner");
+			await bindRepo(ownerTeamId);
+			const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
+			currentLogin = "bob";
+			await store.createTeamForLogin("bob", "bob's team");
+
+			let releaseGitHubCall: () => void = () => undefined;
+			addCollaboratorMock.mockImplementation(() => new Promise((resolve) => (releaseGitHubCall = () => resolve(undefined))));
+
+			// If the route awaited the GitHub sync before responding, this fetch would hang
+			// until releaseGitHubCall() is invoked below — it isn't yet, so getting a response
+			// at all here is itself the proof the sync never blocks the request.
+			const res = await fetch(`${baseUrl}/account/team/join`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ token }),
+			});
+			expect(res.status).toBe(200);
+
+			await waitFor(() => addCollaboratorMock.mock.calls.length > 0);
+			releaseGitHubCall();
+		});
+
+		it("POST /leave removes the login as a collaborator on every bound repo", async () => {
+			const first = await signIn("alice", "First");
+			const second = await store.createTeamForLogin("alice", "Second", { keepExistingTeams: true });
+			await bindRepo(second.teamId);
+			await store.saveMembershipIndex("alice", { teamIds: [first, second.teamId], activeTeamId: second.teamId });
+
+			const res = await fetch(`${baseUrl}/account/team/leave`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ teamId: second.teamId }),
+			});
+			expect(res.status).toBe(200);
+
+			await waitFor(() => removeCollaboratorMock.mock.calls.length > 0);
+			expect(buildOctokit).toHaveBeenCalledWith(42);
+			expect(removeCollaboratorMock).toHaveBeenCalledWith({ owner: "acme-corp", repo: "widgets", username: "alice" });
+		});
+
+		it("POST /leave never syncs GitHub when the Quire-side leave itself fails (not a member)", async () => {
+			await signIn("alice");
+
+			const res = await fetch(`${baseUrl}/account/team/leave`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ teamId: "not-my-team" }),
+			});
+			expect(res.status).toBe(400);
+
+			await settle();
+			expect(removeCollaboratorMock).not.toHaveBeenCalled();
+		});
+
+		it("POST /members/:login/remove removes the target as a collaborator on every bound repo", async () => {
+			const teamId = await signIn("owner");
+			await bindRepo(teamId);
+			await store.addMember(teamId, { login: "bob", teamId, role: "member", joinedAt: "t1" });
+			await store.saveMembershipIndex("bob", { teamIds: [teamId], activeTeamId: teamId });
+
+			const res = await fetch(`${baseUrl}/account/team/members/bob/remove`, { method: "POST" });
+			expect(res.status).toBe(200);
+
+			await waitFor(() => removeCollaboratorMock.mock.calls.length > 0);
+			expect(buildOctokit).toHaveBeenCalledWith(42);
+			expect(removeCollaboratorMock).toHaveBeenCalledWith({ owner: "acme-corp", repo: "widgets", username: "bob" });
+		});
+
+		it("POST /members/:login/remove never syncs GitHub when the Quire-side removal itself fails (404 unknown login)", async () => {
+			const teamId = await signIn("owner");
+			await bindRepo(teamId);
+
+			const res = await fetch(`${baseUrl}/account/team/members/stranger/remove`, { method: "POST" });
+			expect(res.status).toBe(404);
+
+			await settle();
+			expect(removeCollaboratorMock).not.toHaveBeenCalled();
 		});
 	});
 });
