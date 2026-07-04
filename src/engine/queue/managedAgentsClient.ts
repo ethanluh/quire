@@ -101,58 +101,52 @@ export class AnthropicManagedAgentsClient implements ManagedAgentsClient {
 		};
 	}
 
-	async createAgent(params: CreateAgentParams): Promise<AgentRef> {
-		const res = await fetchWithRetry("Anthropic", `${this.baseUrl}/v1/agents`, {
-			method: "POST",
+	private request(method: string, path: string, body?: string): Promise<Response> {
+		return fetchWithRetry("Anthropic", `${this.baseUrl}${path}`, {
+			method,
 			headers: this.headers(),
-			body: JSON.stringify(params),
+			...(body !== undefined ? { body } : {}),
 		});
+	}
+
+	async createAgent(params: CreateAgentParams): Promise<AgentRef> {
+		const res = await this.request("POST", "/v1/agents", JSON.stringify(params));
 		const data = (await res.json()) as CreateAgentResponse;
 		return { id: data.id, version: data.version };
 	}
 
 	async createEnvironment(params: { name: string }): Promise<EnvironmentRef> {
-		const res = await fetchWithRetry("Anthropic", `${this.baseUrl}/v1/environments`, {
-			method: "POST",
-			headers: this.headers(),
-			body: JSON.stringify({ name: params.name, config: { type: "cloud", networking: { type: "unrestricted" } } }),
-		});
+		const res = await this.request(
+			"POST",
+			"/v1/environments",
+			JSON.stringify({ name: params.name, config: { type: "cloud", networking: { type: "unrestricted" } } }),
+		);
 		const data = (await res.json()) as CreateEnvironmentResponse;
 		return { id: data.id };
 	}
 
 	async createSession(params: CreateSessionParams): Promise<{ id: string }> {
-		const res = await fetchWithRetry("Anthropic", `${this.baseUrl}/v1/sessions`, {
-			method: "POST",
-			headers: this.headers(),
-			body: JSON.stringify(params),
-		});
+		const res = await this.request("POST", "/v1/sessions", JSON.stringify(params));
 		const data = (await res.json()) as CreateSessionResponse;
 		return { id: data.id };
 	}
 
 	async sendUserMessage(sessionId: string, text: string): Promise<void> {
-		await fetchWithRetry("Anthropic", `${this.baseUrl}/v1/sessions/${sessionId}/events`, {
-			method: "POST",
-			headers: this.headers(),
-			body: JSON.stringify({ events: [{ type: "user.message", content: [{ type: "text", text }] }] }),
-		});
+		await this.request(
+			"POST",
+			`/v1/sessions/${sessionId}/events`,
+			JSON.stringify({ events: [{ type: "user.message", content: [{ type: "text", text }] }] }),
+		);
 	}
 
 	async getSession(sessionId: string): Promise<ManagedAgentsSession> {
-		const res = await fetchWithRetry("Anthropic", `${this.baseUrl}/v1/sessions/${sessionId}`, {
-			method: "GET",
-			headers: this.headers(),
-		});
+		const res = await this.request("GET", `/v1/sessions/${sessionId}`);
 		const data = (await res.json()) as GetSessionResponse;
 		return { id: data.id, status: data.status };
 	}
 
 	async listEvents(sessionId: string): Promise<ReadonlyArray<ManagedAgentsEvent>> {
-		const res = await fetchWithRetry("Anthropic", `${this.baseUrl}/v1/sessions/${sessionId}/events`, {
-			method: "GET",
-			headers: this.headers(),
-		});
+		const res = await this.request("GET", `/v1/sessions/${sessionId}/events`);
 		const data = (await res.json()) as ListEventsResponse;
 		return data.data;
 	}
