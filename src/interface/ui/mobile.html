@@ -1306,38 +1306,6 @@ async function loadHeaderRepo() {
   renderHeaderRepo(status.selectedRepo);
 }
 
-const ACCOUNT_SETTING_CHECKBOX_IDS = {
-  autoMergeOnAccept: 'chk-auto-merge',
-  flagConflictsForFleet: 'chk-flag-conflicts-for-fleet',
-  enableDeepConflictInvestigation: 'chk-deep-investigation',
-};
-
-async function updateAccountSetting(key, value) {
-  const checkbox = document.getElementById(ACCOUNT_SETTING_CHECKBOX_IDS[key]);
-  checkbox.disabled = true;
-  try {
-    const body = {};
-    for (const [settingKey, elementId] of Object.entries(ACCOUNT_SETTING_CHECKBOX_IDS)) {
-      body[settingKey] = document.getElementById(elementId).checked;
-    }
-    body[key] = value;
-    await api('POST', '/account/github/settings', body);
-  } finally {
-    checkbox.disabled = false;
-  }
-}
-
-document.getElementById('chk-auto-merge').addEventListener('change', (e) => {
-  updateAccountSetting('autoMergeOnAccept', e.target.checked);
-});
-
-document.getElementById('chk-flag-conflicts-for-fleet').addEventListener('change', (e) => {
-  updateAccountSetting('flagConflictsForFleet', e.target.checked);
-});
-
-document.getElementById('chk-deep-investigation').addEventListener('change', (e) => {
-  updateAccountSetting('enableDeepConflictInvestigation', e.target.checked);
-});
 installBtn.addEventListener('click', async () => {
   installBtn.disabled = true;
   const resultEl = document.getElementById('account-result');
