@@ -29,13 +29,16 @@ async function verifyProviderWorks(resolved: ResolvedLlmProvider): Promise<void>
 	]);
 }
 
-export function llmAccountRouter(
-	llmAccountState: LlmAccountState,
-	accountPath: string,
-	llmProviderHolder: LlmProviderHolder,
-	buildProvider: (account: ConnectedLlmAccount) => ResolvedLlmProvider,
-	resolveFallback: () => ResolvedLlmProvider,
-): Router {
+export interface LlmAccountRouterOptions {
+	llmAccountState: LlmAccountState;
+	accountPath: string;
+	llmProviderHolder: LlmProviderHolder;
+	buildProvider: (account: ConnectedLlmAccount) => ResolvedLlmProvider;
+	resolveFallback: () => ResolvedLlmProvider;
+}
+
+export function llmAccountRouter(options: LlmAccountRouterOptions): Router {
+	const { llmAccountState, accountPath, llmProviderHolder, buildProvider, resolveFallback } = options;
 	const router = Router();
 
 	// Serializes connect attempts: without this, two concurrent POST /connect requests

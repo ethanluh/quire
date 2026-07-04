@@ -241,22 +241,22 @@ describe("githubAppRouter", () => {
 		}
 		app.use(
 			"/account/github",
-			githubAppRouter(
+			githubAppRouter({
 				refreshDeps,
-				"quire-review",
-				listRepos,
+				appSlug: "quire-review",
+				listInstallationRepos: listRepos,
 				getInstallationAccount,
-				false,
+				secureCookies: false,
 				userTokenCache,
 				enrichWithUserToken,
 				listInstallationsForUser,
 				isInstallationBoundToAnotherTeam,
-				dir,
+				dataDir: dir,
 				oauth,
 				buildOctokit,
 				listTeamMemberLogins,
 				teamId,
-			),
+			}),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
