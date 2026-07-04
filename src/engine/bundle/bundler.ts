@@ -3,6 +3,7 @@ import type { LlmProvider } from "../drift/effectList/provider.js";
 import { extractEffects } from "../drift/effectList/extractor.js";
 import { clusterPRs, type ClusteringFailure, type ClusterSeed } from "./similarity.js";
 import { settleWithConcurrency } from "../util/concurrency.js";
+import { errorMessage } from "../util/error.js";
 import { PrEffectCache } from "../cache/prCache.js";
 
 const EXTRACTION_CONCURRENCY = 4;
@@ -102,7 +103,7 @@ export async function buildBundles(
 		} else {
 			extractionFailures.push({
 				pr,
-				error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+				error: errorMessage(result.reason),
 			});
 		}
 	}

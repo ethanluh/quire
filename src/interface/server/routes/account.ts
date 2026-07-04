@@ -1,5 +1,4 @@
 import { parse } from "cookie";
-import { join } from "node:path";
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import type { Allowlist } from "../allowlist.js";
@@ -8,17 +7,21 @@ import { OAuthExchangeError } from "../../../engine/github/oauth.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
-import { saveUserToken, clearUserToken, DEFAULT_USER_TOKEN_TTL_MS } from "../../../engine/github/userToken.js";
+import { saveUserToken, clearUserToken, userTokenPath, DEFAULT_USER_TOKEN_TTL_MS } from "../../../engine/github/userToken.js";
 import { SESSION_COOKIE_NAME, SESSION_TTL_MS, createSession, verifySession } from "../session.js";
 import { cookieOptions, mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
 
 const OAUTH_STATE_COOKIE_NAME = "quire_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-// Where the OAuth callback sends the browser once it's done — GitHub's redirect is a
-// top-level navigation, so the result is reported via a query param on the app's own
-// page rather than a JSON response.
-function oauthResultRedirectUrl(status: "connected" | "error", reason: string | undefined): string {
+// Where a GitHub round-trip (OAuth sign-in here, or App install in routes/githubApp.ts)
+// sends the browser once it's done — the redirect is a top-level navigation, so the result
+// is reported via a query param on the app's own page rather than a JSON response. Exported
+// so githubApp.ts's install-callback redirects share one encoder instead of hand-concatenating
+// their own query strings: URLSearchParams.toString() serializes as application/x-www-form-urlencoded,
+// which encodes spaces as `+` (not %20) — byte-identical to the strings githubApp.ts used to
+// inline, and read back the same way by index.html/mobile.html via new URLSearchParams(location.search).
+export function accountResultRedirectUrl(status: "connected" | "error", reason: string | undefined): string {
 	const params = new URLSearchParams({ account: status });
 	if (reason !== undefined) params.set("reason", reason);
 	return `/?${params.toString()}`;
@@ -49,7 +52,6 @@ export function accountRouter(
 	dataDir: string,
 ): Router {
 	const router = Router();
-	const userTokenPath = (login: string) => join(dataDir, "users", login, "github-user-token.json");
 
 	// GET, not POST: unlike the old dual-purpose flow, this has no side effect worth CSRF
 	// protection — it only mints a nonce and returns GitHub's own authorize URL. GitHub's
@@ -78,7 +80,7 @@ export function accountRouter(
 			typeof returnedState !== "string" ||
 			returnedState !== pendingState
 		) {
-			res.redirect(oauthResultRedirectUrl("error", "the sign-in request expired or was invalid"));
+			res.redirect(accountResultRedirectUrl("error", "the sign-in request expired or was invalid"));
 			return;
 		}
 
@@ -92,7 +94,7 @@ export function accountRouter(
 
 			if (!allowlist.isAllowed(identity.login)) {
 				res.redirect(
-					oauthResultRedirectUrl("error", "this GitHub account is not authorized to use this Quire instance"),
+					accountResultRedirectUrl("error", "this GitHub account is not authorized to use this Quire instance"),
 				);
 				return;
 			}
@@ -100,17 +102,17 @@ export function accountRouter(
 			const expiresAt = tokenExpiresAt !== undefined ? new Date(tokenExpiresAt).getTime() : Date.now() + DEFAULT_USER_TOKEN_TTL_MS;
 			userTokenCache.set(identity.login, { accessToken, expiresAt });
 			if (refreshToken !== undefined) {
-				await saveUserToken(userTokenPath(identity.login), { refreshToken });
+				await saveUserToken(userTokenPath(dataDir, identity.login), { refreshToken });
 			}
 
 			res.cookie(SESSION_COOKIE_NAME, createSession(identity.login, sessionSecret), cookieOptions(secureCookies, SESSION_TTL_MS));
-			res.redirect(oauthResultRedirectUrl("connected", undefined));
+			res.redirect(accountResultRedirectUrl("connected", undefined));
 		} catch (err) {
 			const reason =
 				err instanceof OAuthExchangeError || err instanceof InvalidTokenError
 					? err.message
 					: "sign-in failed unexpectedly";
-			res.redirect(oauthResultRedirectUrl("error", reason));
+			res.redirect(accountResultRedirectUrl("error", reason));
 		}
 	});
 
@@ -127,7 +129,7 @@ export function accountRouter(
 		const payload = token !== undefined ? verifySession(token, sessionSecret) : undefined;
 		if (payload !== undefined) {
 			userTokenCache.clear(payload.login);
-			await clearUserToken(userTokenPath(payload.login));
+			await clearUserToken(userTokenPath(dataDir, payload.login));
 		}
 
 		res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });

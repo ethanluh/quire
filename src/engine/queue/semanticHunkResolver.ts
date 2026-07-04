@@ -2,6 +2,7 @@ import type { MergeRegion } from "node-diff3";
 import type { LlmMessage, LlmProvider } from "../drift/effectList/provider.js";
 import { stripCodeFence } from "../drift/effectList/stripCodeFence.js";
 import { checkSyntax } from "./checkSyntax.js";
+import { errorMessage } from "../util/error.js";
 import type { ConflictHunk } from "./conflictHunks.js";
 import { reconstructContent } from "./conflictHunks.js";
 
@@ -70,7 +71,7 @@ function parseAttempt(response: string): ParsedAttempt {
 	try {
 		parsed = JSON.parse(stripCodeFence(response));
 	} catch (err) {
-		return { byHunkId: new Map(), parseError: `your response was not valid JSON: ${err instanceof Error ? err.message : String(err)}` };
+		return { byHunkId: new Map(), parseError: `your response was not valid JSON: ${errorMessage(err)}` };
 	}
 	if (!Array.isArray(parsed)) {
 		return { byHunkId: new Map(), parseError: "your response must be a JSON array of hunk resolutions, not an object or other value" };
@@ -143,7 +144,7 @@ export async function resolveSemanticHunks(
 		try {
 			response = await provider.complete(messages);
 		} catch (err) {
-			lastIssues = [`the model call failed: ${err instanceof Error ? err.message : String(err)}`];
+			lastIssues = [`the model call failed: ${errorMessage(err)}`];
 			if (isLastAttempt) break;
 			continue;
 		}

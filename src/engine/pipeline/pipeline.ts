@@ -6,6 +6,7 @@ import type { StaticAnalyzer } from "../drift/footprint/analyzer.js";
 import type { AuditStore } from "../gate/auditStore.js";
 import { runGate } from "../gate/gate.js";
 import { buildBundles, type BundleConfig } from "../bundle/bundler.js";
+import { errorMessage } from "../util/error.js";
 import { runCheapScreen } from "../drift/screen.js";
 import { buildReviewCard, computeInputsHash, reuseReviewCard } from "../review/card.js";
 import { PrEffectCache } from "../cache/prCache.js";
@@ -91,7 +92,7 @@ export async function orchestratePipeline(
 				shadowed.push(pr);
 			}
 		} catch (err) {
-			const error = err instanceof Error ? err.message : String(err);
+			const error = errorMessage(err);
 			return { cards: [], bundles: [], rejected, shadowed, error };
 		}
 	}
@@ -157,7 +158,7 @@ export async function orchestratePipeline(
 			cards.push(buildReviewCard(bundle, driftVerdicts));
 		}
 	} catch (err) {
-		const error = err instanceof Error ? err.message : String(err);
+		const error = errorMessage(err);
 		return { cards, bundles, rejected, shadowed, error };
 	}
 
