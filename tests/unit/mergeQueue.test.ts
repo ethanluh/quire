@@ -218,6 +218,20 @@ describe("MergeQueue.listEntries — ordering", () => {
 		expect(entries.map((e) => e.bundleId)).toEqual(["bundle-1", "bundle-2"]);
 		expect(entries[1]?.status).toBe("queued");
 	});
+
+	it("sorts still-queued entries most-recently-enqueued first, beneath the landed group", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const statePath = join(dir, "queue.json");
+		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+
+		await queue.enqueue(makeBundle("bundle-1", [makePr({ id: "pr-1" })]));
+		await new Promise((resolve) => setTimeout(resolve, 2)); // force a distinct enqueuedAt millisecond
+		await queue.enqueue(makeBundle("bundle-2", [makePr({ id: "pr-2" })]));
+
+		const entries = await queue.listEntries();
+		expect(entries.map((e) => e.bundleId)).toEqual(["bundle-2", "bundle-1"]);
+	});
 });
 
 describe("MergeQueue.dequeueNext — mergeability handling", () => {
