@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { Router } from "express";
 import { z } from "zod";
 import type { InstallationAccountState, InstallationBinding, RepoBinding } from "../../../engine/github/installation.js";
@@ -12,7 +11,7 @@ import type { OAuthDeps } from "../../../engine/github/oauth.js";
 import type { RepoSummary } from "../../../engine/github/repos.js";
 import { checkDeclaredDirectionConvention, setUpDeclaredDirectionConvention } from "../../../engine/github/repoSetup.js";
 import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
-import { refreshUserTokenFromDisk } from "../../../engine/github/userToken.js";
+import { refreshUserTokenFromDisk, userTokenPath } from "../../../engine/github/userToken.js";
 import { settleWithConcurrency } from "../../../engine/util/concurrency.js";
 import { clearRepoFromQueue, enqueueRefresh } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
@@ -88,7 +87,6 @@ export function githubAppRouter(
 ): Router {
 	const router = Router();
 	const { accountState, accountPath, clientHolder } = refreshDeps;
-	const userTokenPath = (login: string) => join(dataDir, "users", login, "github-user-token.json");
 
 	// Best-effort, fire-and-forget — same shape as team.ts's syncCollaboratorAdd/Remove: a
 	// repo being unbound must never block the unbind response on a GitHub round-trip, and a
@@ -289,7 +287,7 @@ export function githubAppRouter(
 		try {
 			const login = res.locals.login;
 			if (login !== undefined && userTokenCache.get(login) === undefined) {
-				await refreshUserTokenFromDisk(login, userTokenPath(login), oauth, userTokenCache);
+				await refreshUserTokenFromDisk(login, userTokenPath(dataDir, login), oauth, userTokenCache);
 			}
 			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
 			if (userToken === undefined) {
@@ -358,7 +356,7 @@ export function githubAppRouter(
 			// in-memory access token expired mid-session while a still-good refresh token sits
 			// on disk, so try that silent path before falling back to unsorted.
 			if (login !== undefined && userTokenCache.get(login) === undefined) {
-				await refreshUserTokenFromDisk(login, userTokenPath(login), oauth, userTokenCache);
+				await refreshUserTokenFromDisk(login, userTokenPath(dataDir, login), oauth, userTokenCache);
 			}
 			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
 			const responseRepos = userToken !== undefined ? await enrichWithUserToken(repos, userToken) : repos;

@@ -1,5 +1,4 @@
 import { parse } from "cookie";
-import { join } from "node:path";
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import type { Allowlist } from "../allowlist.js";
@@ -8,7 +7,7 @@ import { OAuthExchangeError } from "../../../engine/github/oauth.js";
 import { InvalidTokenError } from "../../../engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../../engine/github/verifyToken.js";
 import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
-import { saveUserToken, clearUserToken, DEFAULT_USER_TOKEN_TTL_MS } from "../../../engine/github/userToken.js";
+import { saveUserToken, clearUserToken, userTokenPath, DEFAULT_USER_TOKEN_TTL_MS } from "../../../engine/github/userToken.js";
 import { SESSION_COOKIE_NAME, SESSION_TTL_MS, createSession, verifySession } from "../session.js";
 import { cookieOptions, mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
 
@@ -49,7 +48,6 @@ export function accountRouter(
 	dataDir: string,
 ): Router {
 	const router = Router();
-	const userTokenPath = (login: string) => join(dataDir, "users", login, "github-user-token.json");
 
 	// GET, not POST: unlike the old dual-purpose flow, this has no side effect worth CSRF
 	// protection — it only mints a nonce and returns GitHub's own authorize URL. GitHub's
@@ -100,7 +98,7 @@ export function accountRouter(
 			const expiresAt = tokenExpiresAt !== undefined ? new Date(tokenExpiresAt).getTime() : Date.now() + DEFAULT_USER_TOKEN_TTL_MS;
 			userTokenCache.set(identity.login, { accessToken, expiresAt });
 			if (refreshToken !== undefined) {
-				await saveUserToken(userTokenPath(identity.login), { refreshToken });
+				await saveUserToken(userTokenPath(dataDir, identity.login), { refreshToken });
 			}
 
 			res.cookie(SESSION_COOKIE_NAME, createSession(identity.login, sessionSecret), cookieOptions(secureCookies, SESSION_TTL_MS));
@@ -127,7 +125,7 @@ export function accountRouter(
 		const payload = token !== undefined ? verifySession(token, sessionSecret) : undefined;
 		if (payload !== undefined) {
 			userTokenCache.clear(payload.login);
-			await clearUserToken(userTokenPath(payload.login));
+			await clearUserToken(userTokenPath(dataDir, payload.login));
 		}
 
 		res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });

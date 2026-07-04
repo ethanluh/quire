@@ -2,6 +2,7 @@ import type { PullRequest } from "../types/core.js";
 import type { LlmProvider } from "../drift/effectList/provider.js";
 import { classifyBestMatch } from "../drift/effectList/clusterClassifier.js";
 import { settleWithConcurrency } from "../util/concurrency.js";
+import { errorMessage } from "../util/error.js";
 
 const CENTROID_COMPARISON_CONCURRENCY = 4;
 
@@ -174,7 +175,7 @@ export async function clusterPRs(
 		try {
 			bestIdx = await bestMatch(prEffectText);
 		} catch (err) {
-			failures.push({ pr, error: err instanceof Error ? err.message : String(err) });
+			failures.push({ pr, error: errorMessage(err) });
 			continue;
 		}
 

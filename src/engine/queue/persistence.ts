@@ -1,5 +1,5 @@
 import type { QueueState } from "../types/queue.js";
-import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
+import { createJsonStatePersistence } from "../util/jsonStatePersistence.js";
 
 const EMPTY_STATE: QueueState = { entries: [] };
 
@@ -12,14 +12,10 @@ function isQueueState(value: unknown): value is QueueState {
 	);
 }
 
-export async function loadState(path: string): Promise<QueueState> {
-	const state = await readJsonFile(path, isQueueState);
-	if (state === undefined) return EMPTY_STATE;
-	// Older persisted entries predate mergedPrIds - default it so dequeueNext() doesn't
-	// crash on .includes() against a missing field.
-	return { entries: state.entries.map((e) => ({ ...e, mergedPrIds: e.mergedPrIds ?? [] })) };
-}
-
-export async function saveState(path: string, state: QueueState): Promise<void> {
-	await writeJsonFileAtomic(path, state);
-}
+// Older persisted entries predate mergedPrIds - default it so dequeueNext() doesn't
+// crash on .includes() against a missing field.
+export const { loadState, saveState } = createJsonStatePersistence<QueueState>(
+	isQueueState,
+	EMPTY_STATE,
+	(state) => ({ entries: state.entries.map((e) => ({ ...e, mergedPrIds: e.mergedPrIds ?? [] })) }),
+);

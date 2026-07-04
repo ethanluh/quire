@@ -1,5 +1,5 @@
 import type { DecidedPrState } from "../types/decided.js";
-import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
+import { createJsonStatePersistence } from "../util/jsonStatePersistence.js";
 
 const EMPTY_STATE: DecidedPrState = { entries: [] };
 
@@ -12,10 +12,4 @@ function isDecidedPrState(value: unknown): value is DecidedPrState {
 	);
 }
 
-export async function loadState(path: string): Promise<DecidedPrState> {
-	return (await readJsonFile(path, isDecidedPrState)) ?? EMPTY_STATE;
-}
-
-export async function saveState(path: string, state: DecidedPrState): Promise<void> {
-	await writeJsonFileAtomic(path, state);
-}
+export const { loadState, saveState } = createJsonStatePersistence<DecidedPrState>(isDecidedPrState, EMPTY_STATE);

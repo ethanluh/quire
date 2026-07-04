@@ -1,4 +1,5 @@
 import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
 import { OAuthExchangeError } from "./oauth.js";
 import type { OAuthDeps } from "./oauth.js";
@@ -25,6 +26,14 @@ function isStoredUserToken(value: unknown): value is StoredUserToken {
 		value !== null &&
 		typeof (value as Record<string, unknown>)["refreshToken"] === "string"
 	);
+}
+
+// A signed-in user's persisted refresh token lives at a per-login path rather than per-team,
+// since any of a team's member logins can hit the router. Shared by routes/account.ts (the
+// OAuth exchange that first writes it) and routes/githubApp.ts (which refreshes it), so both
+// agree on the layout by construction instead of hand-rolling the same join twice.
+export function userTokenPath(dataDir: string, login: string): string {
+	return join(dataDir, "users", login, "github-user-token.json");
 }
 
 export async function loadUserToken(path: string): Promise<StoredUserToken | undefined> {
