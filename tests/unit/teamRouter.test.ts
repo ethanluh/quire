@@ -166,10 +166,9 @@ describe("teamRouter", () => {
 		expect(verifyInvite(token as string, SECRET)?.teamId).toBe(teamId);
 	});
 
-Theirs (target branch)
 	it("POST /join adds the invited login as a member and switches their active team to it", async () => {
 		const ownerTeamId = await signIn("owner");
-const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
+		const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
 
 		currentLogin = "bob";
 		await store.createTeamForLogin("bob", "bob's team"); // bob already has his own personal team
@@ -201,7 +200,7 @@ const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
 
 	it("POST /join is idempotent when the login is already a member", async () => {
 		const ownerTeamId = await signIn("owner");
-const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
+		const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
 		currentLogin = "bob";
 		await store.createTeamForLogin("bob", "bob's team");
 
