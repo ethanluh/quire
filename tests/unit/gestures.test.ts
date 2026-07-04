@@ -197,6 +197,13 @@ describe("gesturesRouter — review queue removal", () => {
 		state.bundles.set("b-1b", makeBundle("b-1b"));
 		state.cards.set("b-1b", makeCard("b-1b"));
 
+		// gestures.ts fires this in the background without awaiting it (see the comment there),
+		// and MergeQueue flips an entry's in-memory status to "landed" before its persist() write
+		// finishes — so polling getEntry() alone can observe "landed" while queue.json is still
+		// being written. Spying lets us await the real call so the write is guaranteed to have
+		// settled before this test (and afterEach's rm(dataDir)) proceeds.
+		const dequeueNextSpy = jest.spyOn(queue, "dequeueNext");
+
 		const res = await gesture("b-1b", "accept");
 
 		// The response must not block on the merge itself — same shape as the
@@ -208,6 +215,10 @@ describe("gesturesRouter — review queue removal", () => {
 		const landed = await waitForEntryStatus(queue, "b-1b", "landed");
 		expect(landed.status).toBe("landed");
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
+
+		// Wait for the background dequeueNext() call itself (and thus its queue.json
+		// persistence) to fully settle before returning control to afterEach.
+		await dequeueNextSpy.mock.results[0]?.value;
 	});
 
 	it("only enqueues on accept when autoMergeOnAccept is disabled", async () => {
