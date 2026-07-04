@@ -18,6 +18,7 @@ import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { validateBody } from "../middleware/validation.js";
 import { requireRole } from "../middleware/requireRole.js";
 import { mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
+import { accountResultRedirectUrl } from "./account.js";
 
 const SelectRepoSchema = z.object({
 	owner: z.string().min(1),
@@ -246,14 +247,14 @@ export function githubAppRouter(
 				typeof returnedState !== "string" ||
 				returnedState !== pendingState
 			) {
-				res.redirect("/?account=error&reason=the+installation+request+expired+or+was+invalid");
+				res.redirect(accountResultRedirectUrl("error", "the installation request expired or was invalid"));
 				return;
 			}
 
 			const installationId = Number(installationIdRaw);
 
 			if (isInstallationBoundToAnotherTeam?.(installationId) === true) {
-				res.redirect("/?account=error&reason=this+GitHub+installation+is+already+connected+to+a+different+Quire+team");
+				res.redirect(accountResultRedirectUrl("error", "this GitHub installation is already connected to a different Quire team"));
 				return;
 			}
 
@@ -262,7 +263,7 @@ export function githubAppRouter(
 				account = await getInstallationAccount(installationId);
 			} catch (err) {
 				if (isInstallationRevoked(err)) {
-					res.redirect("/?account=error&reason=the+installation+was+removed+or+is+no+longer+accessible");
+					res.redirect(accountResultRedirectUrl("error", "the installation was removed or is no longer accessible"));
 					return;
 				}
 				throw err;
@@ -271,7 +272,7 @@ export function githubAppRouter(
 			const updated = bindInstallation(installationId, account);
 			await saveInstallation(accountPath, updated);
 
-			res.redirect("/?account=connected");
+			res.redirect(accountResultRedirectUrl("connected", undefined));
 		} catch (err) {
 			next(err);
 		}

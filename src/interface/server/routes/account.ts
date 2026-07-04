@@ -14,10 +14,14 @@ import { cookieOptions, mintOrReuseStateCookie, consumeStateCookie } from "../st
 const OAUTH_STATE_COOKIE_NAME = "quire_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-// Where the OAuth callback sends the browser once it's done — GitHub's redirect is a
-// top-level navigation, so the result is reported via a query param on the app's own
-// page rather than a JSON response.
-function oauthResultRedirectUrl(status: "connected" | "error", reason: string | undefined): string {
+// Where a GitHub round-trip (OAuth sign-in here, or App install in routes/githubApp.ts)
+// sends the browser once it's done — the redirect is a top-level navigation, so the result
+// is reported via a query param on the app's own page rather than a JSON response. Exported
+// so githubApp.ts's install-callback redirects share one encoder instead of hand-concatenating
+// their own query strings: URLSearchParams.toString() serializes as application/x-www-form-urlencoded,
+// which encodes spaces as `+` (not %20) — byte-identical to the strings githubApp.ts used to
+// inline, and read back the same way by index.html/mobile.html via new URLSearchParams(location.search).
+export function accountResultRedirectUrl(status: "connected" | "error", reason: string | undefined): string {
 	const params = new URLSearchParams({ account: status });
 	if (reason !== undefined) params.set("reason", reason);
 	return `/?${params.toString()}`;
@@ -76,7 +80,7 @@ export function accountRouter(
 			typeof returnedState !== "string" ||
 			returnedState !== pendingState
 		) {
-			res.redirect(oauthResultRedirectUrl("error", "the sign-in request expired or was invalid"));
+			res.redirect(accountResultRedirectUrl("error", "the sign-in request expired or was invalid"));
 			return;
 		}
 
@@ -90,7 +94,7 @@ export function accountRouter(
 
 			if (!allowlist.isAllowed(identity.login)) {
 				res.redirect(
-					oauthResultRedirectUrl("error", "this GitHub account is not authorized to use this Quire instance"),
+					accountResultRedirectUrl("error", "this GitHub account is not authorized to use this Quire instance"),
 				);
 				return;
 			}
@@ -102,13 +106,13 @@ export function accountRouter(
 			}
 
 			res.cookie(SESSION_COOKIE_NAME, createSession(identity.login, sessionSecret), cookieOptions(secureCookies, SESSION_TTL_MS));
-			res.redirect(oauthResultRedirectUrl("connected", undefined));
+			res.redirect(accountResultRedirectUrl("connected", undefined));
 		} catch (err) {
 			const reason =
 				err instanceof OAuthExchangeError || err instanceof InvalidTokenError
 					? err.message
 					: "sign-in failed unexpectedly";
-			res.redirect(oauthResultRedirectUrl("error", reason));
+			res.redirect(accountResultRedirectUrl("error", reason));
 		}
 	});
 
