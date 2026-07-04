@@ -20,9 +20,15 @@ export async function readJsonFile<T>(path: string, isValid: (value: unknown) =>
 	return undefined;
 }
 
+// Ensures the parent directory of `path` exists (recursively), so a subsequent write to
+// `path` can't fail on a missing dir. Shared by writeJsonFileAtomic and the NDJSON append
+// path in instrumentation/store.ts, which need the identical guarantee.
+export async function ensureDir(path: string): Promise<void> {
+	await mkdir(dirname(path), { recursive: true });
+}
+
 export async function writeJsonFileAtomic(path: string, data: unknown): Promise<void> {
-	const dir = dirname(path);
-	await mkdir(dir, { recursive: true });
+	await ensureDir(path);
 	const tmp = `${path}.tmp`;
 	await writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
 	await rename(tmp, path);
