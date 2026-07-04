@@ -218,6 +218,25 @@ describe("resolveMergeConflict", () => {
 		expect(github.commitResolvedFilesCalls).toHaveLength(0);
 	});
 
+	it("discloses the syntax-check failure reason when retries never produce a parseable combined file", async () => {
+		const github = new StubGitHubClient();
+		setUpConflict(github, "line1\nline2\nline3", "line1\nline2-A\nline3", "line1\nline2-B\nline3");
+		const provider = new StubLlmProvider();
+		const badResponse = JSON.stringify([{ hunk_id: 1, resolution: "function broken( {", confidence: "high" }]);
+		provider.queueCompletion(badResponse);
+		provider.queueCompletion(badResponse);
+		provider.queueCompletion(badResponse);
+
+		const result = await resolveMergeConflict(makePr(), makeMergeability(), github, provider);
+
+		expect(result.status).toBe("failed");
+		if (result.status === "failed") {
+			expect(result.reason).toContain("why it couldn't be resolved");
+			expect(result.reason).toContain("does not parse as valid code");
+		}
+		expect(github.commitResolvedFilesCalls).toHaveLength(0);
+	});
+
 	it("reports every low-confidence hunk in a file, not just the first one hit", async () => {
 		const github = new StubGitHubClient();
 		setUpConflict(

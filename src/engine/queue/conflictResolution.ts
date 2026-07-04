@@ -100,6 +100,9 @@ function describeLowConfidenceHunk(hunk: ConflictHunk, resolution: SemanticHunkR
 			.split("\n")
 			.map((l) => `    ${l}`)
 			.join("\n")}`,
+		// Only set when this hunk hit the retry/syntax-check fallback rather than a plain
+		// model-reported low confidence — the specific mechanical reason it couldn't clear.
+		...(resolution.reason !== undefined ? [`  why it couldn't be resolved: ${resolution.reason}`] : []),
 	].join("\n");
 }
 
@@ -125,10 +128,12 @@ export type ConflictResolutionOutcome =
 // diff3 can on its own, commit if everything resolved that way. When a file survives diff3
 // with real conflict markers, extract the specific conflicting hunks and resolve those:
 // mechanical hunks (both sides agree modulo whitespace) resolve for free, semantic hunks go
-// through one batched LLM call, and any hunk the model isn't confident about fails the whole
-// attempt rather than guessing — per INV-6, surfaced to the human queue via the "failed"
-// status, same as every other unresolvable case in this function.
-// Never loops or retries internally — the caller (mergeQueue.ts) decides what happens next.
+// through one batched LLM call (which bounds its own retries internally — see
+// semanticHunkResolver.ts), and any hunk that's still not confident after those retries fails
+// the whole attempt rather than guessing — per INV-6, surfaced to the human queue via the
+// "failed" status, same as every other unresolvable case in this function.
+// This function itself never loops or retries — the caller (mergeQueue.ts) decides what
+// happens next once it fails.
 export async function resolveMergeConflict(
 	pr: PullRequest,
 	mergeability: MergeabilityResult,
@@ -183,7 +188,11 @@ export async function resolveMergeConflict(
 			}
 
 			if (semanticHunks.length > 0) {
-				const semanticResolutions = await resolveSemanticHunks(semanticHunks, pr.declaredDirection, provider);
+				const semanticResolutions = await resolveSemanticHunks(semanticHunks, pr.declaredDirection, provider, {
+					path: plan.path,
+					regions,
+					mechanicalResolutions: resolutions,
+				});
 				// Collect every low-confidence hunk before failing, rather than stopping at the
 				// first one — a file with several ambiguous hunks should disclose all of them in
 				// one pass instead of making a human retry repeatedly to discover each in turn.
