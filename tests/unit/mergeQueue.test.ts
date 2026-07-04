@@ -192,13 +192,41 @@ describe("MergeQueue.listEntries — ordering", () => {
 	it("puts the most recently landed bundle first, ahead of one landed earlier", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const statePath = join(dir, "queue.json");
-		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(statePath, github, llmHolder(), join(dir, "conflict.ndjson"));
 		await queue.load();
 
-		await queue.enqueue(makeBundle("bundle-1", [makePr({ id: "pr-1" })]));
-		await queue.dequeueNext(); // lands bundle-1 first
-		await queue.enqueue(makeBundle("bundle-2", [makePr({ id: "pr-2" })]));
-		await queue.dequeueNext(); // lands bundle-2 second, so it should sort above bundle-1
+		// landedAt values are written explicitly, distinct to the millisecond, rather than
+		// relying on two real dequeueNext() calls landing in different milliseconds — on a
+		// fast machine both calls can complete within the same millisecond, tying landedAt
+		// and letting the stable sort fall back to insertion order.
+		await writeFile(
+			statePath,
+			JSON.stringify({
+				entries: [
+					{
+						bundleId: "bundle-1",
+						bundle: makeBundle("bundle-1", [makePr({ id: "pr-1" })]),
+						enqueuedAt: new Date(0).toISOString(),
+						status: "landed",
+						landedAt: new Date(1).toISOString(),
+						revertedPrIds: [],
+						mergedPrIds: ["pr-1"],
+					},
+					{
+						bundleId: "bundle-2",
+						bundle: makeBundle("bundle-2", [makePr({ id: "pr-2" })]),
+						enqueuedAt: new Date(0).toISOString(),
+						status: "landed",
+						landedAt: new Date(2).toISOString(),
+						revertedPrIds: [],
+						mergedPrIds: ["pr-2"],
+					},
+				],
+			}),
+			"utf8",
+		);
+		await queue.load();
 
 		const entries = await queue.listEntries();
 		expect(entries.map((e) => e.bundleId)).toEqual(["bundle-2", "bundle-1"]);
