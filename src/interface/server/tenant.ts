@@ -17,6 +17,7 @@ import type { OAuthDeps } from "../../engine/github/oauth.js";
 import { listInstallationRepositories } from "../../engine/github/repos.js";
 import type { RepoSummary } from "../../engine/github/repos.js";
 import type { UserTokenCache } from "../../engine/github/userTokenCache.js";
+import { sanitizeIdentifier } from "../../engine/util/identifier.js";
 import type { TeamStore } from "../../engine/team/teamStore.js";
 import { MergeQueue, DEFAULT_MERGEABILITY_POLL_DELAYS_MS } from "../../engine/queue/mergeQueue.js";
 import type { DeepInvestigationDeps } from "../../engine/queue/mergeQueue.js";
@@ -53,8 +54,9 @@ import { llmAccountRouter } from "./routes/llmAccount.js";
 
 // A teamId is always one this process minted itself (see teamStore.ts's randomBytes hex
 // id), but it's joined straight into a filesystem path below, so it's validated
-// defensively rather than trusted blindly.
-const VALID_TEAM_ID = /^[A-Za-z0-9-]+$/;
+// defensively rather than trusted blindly — through the shared sanitizeIdentifier
+// (engine/util/identifier.ts), which teamStore.ts's sanitizeLogin also uses; the kind
+// argument keeps this call's distinct "tenant data / team id" error message.
 
 // Config shared by every tenant: the one GitHub App's own identity, the pipeline's
 // tuning, and the single static analyzer instance — none of this is per-account data,
@@ -114,10 +116,7 @@ export interface TenantContext {
 }
 
 function sanitizeTeamId(teamId: string): string {
-	if (!VALID_TEAM_ID.test(teamId)) {
-		throw new Error(`Refusing to scope tenant data to unexpected team id: ${JSON.stringify(teamId)}`);
-	}
-	return teamId;
+	return sanitizeIdentifier(teamId, { scope: "tenant data", label: "team id" });
 }
 
 async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: TenantRegistry): Promise<TenantContext> {

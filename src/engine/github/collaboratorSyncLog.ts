@@ -1,5 +1,5 @@
 import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
-import { createKeyedLock } from "./keyedLock.js";
+import { createKeyedLock } from "../util/keyedLock.js";
 
 // Persists best-effort GitHub-collaborator-sync failures so an owner/admin has something
 // queryable beyond a server log line (see team.ts's logCollaboratorSyncResults) — the sync
@@ -39,7 +39,7 @@ function isCollaboratorSyncIssueList(value: unknown): value is ReadonlyArray<Col
 	return Array.isArray(value) && value.every(isCollaboratorSyncIssue);
 }
 
-// Per-path promise chaining, same pattern teamStore.ts's withTeamLock uses — needed since
+// Per-path promise chaining (the shared createKeyedLock, keyed here by path) — needed since
 // several fire-and-forget syncs for the same team can otherwise race a load-modify-save of
 // this same file into a lost update.
 const withLock = createKeyedLock();
