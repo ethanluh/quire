@@ -193,14 +193,12 @@ export class MergeQueue {
 			return this.attemptResolution(bundleId, pr, mergeability);
 		}
 
-		const reason =
-			mergeability.state === "blocked"
-				? "blocked by branch protection or required reviews, not a merge conflict"
-				: mergeability.state === "unstable"
-					? "required status checks are failing or still pending, not a merge conflict"
-					: mergeability.state === "unknownPending"
-						? "GitHub did not finish computing mergeability in time"
-						: "GitHub reported an unrecognized mergeability state";
+		const reasonByState: Partial<Record<typeof mergeability.state, string>> = {
+			blocked: "blocked by branch protection or required reviews, not a merge conflict",
+			unstable: "required status checks are failing or still pending, not a merge conflict",
+			unknownPending: "GitHub did not finish computing mergeability in time",
+		};
+		const reason = reasonByState[mergeability.state] ?? "GitHub reported an unrecognized mergeability state";
 		await logConflictResolution(this.conflictLogPath, bundleId, pr.id, "unresolved", reason);
 		return { ok: false, reason };
 	}

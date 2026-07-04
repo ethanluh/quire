@@ -61,6 +61,22 @@ function retryFeedback(problem: string): LlmMessage {
 	};
 }
 
+interface RawHunkResolution {
+	hunk_id: number;
+	resolution: string;
+	confidence: HunkConfidence;
+}
+
+function isRawHunkResolution(item: unknown): item is RawHunkResolution {
+	if (typeof item !== "object" || item === null) return false;
+	const v = item as Record<string, unknown>;
+	return (
+		typeof v["hunk_id"] === "number" &&
+		typeof v["resolution"] === "string" &&
+		(v["confidence"] === "high" || v["confidence"] === "low")
+	);
+}
+
 interface ParsedAttempt {
 	byHunkId: Map<number, SemanticHunkResolution>;
 	parseError?: string;
@@ -79,20 +95,8 @@ function parseAttempt(response: string): ParsedAttempt {
 
 	const byHunkId = new Map<number, SemanticHunkResolution>();
 	for (const item of parsed) {
-		if (
-			typeof item === "object" &&
-			item !== null &&
-			"hunk_id" in item &&
-			"resolution" in item &&
-			"confidence" in item &&
-			typeof (item as Record<string, unknown>)["hunk_id"] === "number" &&
-			typeof (item as Record<string, unknown>)["resolution"] === "string" &&
-			((item as Record<string, unknown>)["confidence"] === "high" || (item as Record<string, unknown>)["confidence"] === "low")
-		) {
-			byHunkId.set((item as Record<string, unknown>)["hunk_id"] as number, {
-				resolution: (item as Record<string, unknown>)["resolution"] as string,
-				confidence: (item as Record<string, unknown>)["confidence"] as HunkConfidence,
-			});
+		if (isRawHunkResolution(item)) {
+			byHunkId.set(item.hunk_id, { resolution: item.resolution, confidence: item.confidence });
 		}
 	}
 	return { byHunkId };
