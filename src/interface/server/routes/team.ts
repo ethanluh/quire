@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { TeamStore } from "../../../engine/team/teamStore.js";
-import { LastOwnerError, NotAMemberError } from "../../../engine/team/teamStore.js";
-import { createInvite, verifyInvite } from "../invite.js";
+import { InviteAlreadyRedeemedError, LastOwnerError, NotAMemberError } from "../../../engine/team/teamStore.js";
+import { createInvite, verifyInvite, INVITE_TTL_MS } from "../invite.js";
 import { validateBody } from "../middleware/validation.js";
 import { requireRole } from "../middleware/requireRole.js";
 
@@ -12,6 +12,11 @@ const SwitchTeamSchema = z.object({ teamId: z.string().min(1) });
 const JoinTeamSchema = z.object({ token: z.string().min(1) });
 const LeaveTeamSchema = z.object({ teamId: z.string().min(1) });
 const ChangeRoleSchema = z.object({ role: z.enum(["owner", "admin", "member"]) });
+// Never "owner" — an invite grants membership, not top-level custody; promoting someone to
+// owner is always the separate, explicit POST /team/members/:login/role path. Optional (and
+// the whole schema wrapped optional below) so a client that posts no body at all — today's
+// only caller — still defaults to "member" rather than 400ing.
+const InviteSchema = z.object({ role: z.enum(["admin", "member"]).optional() }).optional();
 
 // Mounted right after resolveMembership and before resolveTenant (see index.ts) —
 // unlike githubAppRouter/llmAccountRouter, nothing here touches a TenantContext (GitHub
@@ -126,7 +131,7 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 		}
 	});
 
-	router.post("/invite", requireRole("owner", "admin"), async (_req, res, next) => {
+	router.post("/invite", requireRole("owner", "admin"), validateBody(InviteSchema), async (req, res, next) => {
 		try {
 			const membership = res.locals.membership;
 			const login = res.locals.login;
@@ -134,8 +139,75 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				res.status(401).json({ error: "Sign in required" });
 				return;
 			}
-			const token = createInvite(membership.teamId, login, sessionSecret);
-			res.json({ inviteUrl: `${publicUrl}/?joinTeam=${token}` });
+const role = (req.body as z.infer<typeof InviteSchema>)?.role ?? "member";
+			const { token, id } = createInvite(membership.teamId, login, role, sessionSecret);
+			const now = new Date();
+			await teamStore.addInvite(membership.teamId, {
+				id,
+				invitedBy: login,
+				issuedAt: now.toISOString(),
+				expiresAt: new Date(now.getTime() + INVITE_TTL_MS).toISOString(),
+				role,
+			});
+			res.json({ inviteUrl: `${publicUrl}/?joinTeam=${token}`, role });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	// Owner/admin only, matching every other roster-composition route — an invite link is a
+	// capability to join, so who's holding an unredeemed one is the same class of information
+	// as the roster itself. `status` is derived, not stored, so revocation/expiry/redemption
+	// never need reconciling against "now" in more than one place.
+	router.get("/invites", requireRole("owner", "admin"), async (_req, res, next) => {
+		try {
+			const membership = res.locals.membership;
+			if (membership === undefined) {
+				res.status(401).json({ error: "Sign in required" });
+				return;
+			}
+			const invites = await teamStore.listInvites(membership.teamId);
+			const now = Date.now();
+			const withStatus = invites.map((invite) => ({
+				...invite,
+				status:
+					invite.redeemedAt !== undefined
+						? "redeemed"
+						: invite.revokedAt !== undefined
+							? "revoked"
+							: new Date(invite.expiresAt).getTime() < now
+								? "expired"
+								: "pending",
+			}));
+			res.json({ invites: withStatus });
+		} catch (err) {
+			next(err);
+		}
+	});
+
+	router.delete("/invites/:id", requireRole("owner", "admin"), async (req, res, next) => {
+		try {
+			const membership = res.locals.membership;
+			if (membership === undefined) {
+				res.status(401).json({ error: "Sign in required" });
+				return;
+			}
+			const id = req.params["id"] ?? "";
+			const existing = await teamStore.getInvite(membership.teamId, id);
+			if (existing === undefined) {
+				res.status(404).json({ error: "Invite not found" });
+				return;
+			}
+			try {
+				await teamStore.revokeInvite(membership.teamId, id);
+			} catch (err) {
+				if (err instanceof InviteAlreadyRedeemedError) {
+					res.status(409).json({ error: "This invite was already redeemed — there's nothing left to revoke" });
+					return;
+				}
+				throw err;
+			}
+			res.json({ id, revoked: true });
 		} catch (err) {
 			next(err);
 		}
@@ -160,12 +232,22 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				return;
 			}
 
+			// A revoked invite's token still verifies (the signature alone can't know about a
+			// later revocation) — the persisted record is the only place that can be checked.
+			// A missing record (predates this feature, or the team's invites.json was reset)
+			// is not treated as revoked: the token's own signature is still sufficient proof.
+			const inviteRecord = await teamStore.getInvite(payload.teamId, payload.id);
+			if (inviteRecord?.revokedAt !== undefined) {
+				res.status(400).json({ error: "This invite has been revoked" });
+				return;
+			}
+
 			const existingMembership = await teamStore.getMembership(payload.teamId, login);
 			if (existingMembership === undefined) {
 				await teamStore.addMember(payload.teamId, {
 					login,
 					teamId: payload.teamId,
-					role: "member",
+					role: payload.role,
 					joinedAt: new Date().toISOString(),
 				});
 			}
@@ -174,6 +256,7 @@ export function teamRouter(teamStore: TeamStore, sessionSecret: string, publicUr
 				teamIds: [...new Set([...(current?.teamIds ?? []), payload.teamId])],
 				activeTeamId: payload.teamId,
 			}));
+			await teamStore.markInviteRedeemed(payload.teamId, payload.id, login);
 			res.json({ teamId: payload.teamId, name: team.name });
 		} catch (err) {
 			next(err);

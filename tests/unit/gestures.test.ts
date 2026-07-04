@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
 import express from "express";
 import type { Server } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Request, Response, NextFunction } from "express";
 import { createServerState } from "../../src/interface/server/state.js";
 import { bundlesRouter } from "../../src/interface/server/routes/bundles.js";
 import { gesturesRouter } from "../../src/interface/server/routes/gestures.js";
+import { assignmentsRouter } from "../../src/interface/server/routes/assignments.js";
+import type { TeamRole } from "../../src/engine/types/team.js";
 import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
@@ -97,6 +100,19 @@ async function waitForEntryStatus(
 	}
 }
 
+// Injects the acting login/role that resolveMembership would normally set, so a test can
+// exercise gesture/assignment gating without standing up the real session/membership stack.
+// `getActor` is read per-request (not captured once) so a single test can gesture as one
+// login then reassign as another.
+function actorMiddleware(getActor: () => { login: string; role: TeamRole }) {
+	return function (_req: Request, res: Response, next: NextFunction): void {
+		const actor = getActor();
+		res.locals.login = actor.login;
+		res.locals.membership = { teamId: "team-1", role: actor.role };
+		next();
+	};
+}
+
 function makeCard(bundleId: string): ReviewCard {
 	return {
 		bundleId,
@@ -119,6 +135,7 @@ describe("gesturesRouter — review queue removal", () => {
 	let queue: MergeQueue;
 	let decidedStore: DecidedPrStore;
 	let accountState: AccountState;
+	let currentActor: { login: string; role: TeamRole };
 
 	beforeEach(async () => {
 		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
@@ -129,14 +146,17 @@ describe("gesturesRouter — review queue removal", () => {
 		decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
 		await decidedStore.load();
 		accountState = createAccountState(undefined);
+		currentActor = { login: "actor", role: "owner" };
 
 		const app = express();
 		app.use(express.json());
+		app.use(actorMiddleware(() => currentActor));
 		app.use("/bundles", bundlesRouter(state));
 		app.use(
 			"/bundles",
 			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState),
 		);
+		app.use("/bundles", assignmentsRouter(state));
 
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, resolve);
@@ -242,7 +262,14 @@ describe("gesturesRouter — review queue removal", () => {
 
 		await gesture("b-3b", "defer");
 
-		expect(state.shelf.get("b-3b")?.bundle).toEqual(makeBundle("b-3b"));
+		// The shelved bundle carries the self-assign stamp from this gesture, on top of the
+		// original bundle fields.
+		expect(state.shelf.get("b-3b")?.bundle).toEqual({
+			...makeBundle("b-3b"),
+			assignedTo: "actor",
+			assignedAt: expect.any(String),
+			assignedBy: "actor",
+		});
 	});
 
 	it("posts a review card comment to each member PR on accept", async () => {
@@ -283,6 +310,202 @@ describe("gesturesRouter — review queue removal", () => {
 			expect.objectContaining({ owner: "org", repo: "repo", prNumber: 1, action: "defer" }),
 		]);
 	});
+
+	it("self-assigns an unassigned bundle to whoever gestures on it", async () => {
+		currentActor = { login: "carol", role: "member" };
+		state.bundles.set("b-7", makeBundle("b-7"));
+		state.cards.set("b-7", makeCard("b-7"));
+
+		await gesture("b-7", "defer");
+
+		const shelved = state.shelf.get("b-7")?.bundle;
+		expect(shelved?.assignedTo).toBe("carol");
+		expect(shelved?.assignedBy).toBe("carol");
+	});
+
+	it("lets the assignee gesture on their own bundle with no gate", async () => {
+		const bundle = { ...makeBundle("b-8"), assignedTo: "carol", assignedAt: new Date(0).toISOString(), assignedBy: "carol" };
+		state.bundles.set("b-8", bundle);
+		state.cards.set("b-8", makeCard("b-8"));
+		currentActor = { login: "carol", role: "member" };
+
+		const res = await gesture("b-8", "defer");
+
+		expect(res.status).toBe(200);
+	});
+
+	it("blocks a non-privileged member from gesturing on someone else's assigned bundle", async () => {
+		const bundle = { ...makeBundle("b-9"), assignedTo: "carol", assignedAt: new Date(0).toISOString(), assignedBy: "carol" };
+		state.bundles.set("b-9", bundle);
+		state.cards.set("b-9", makeCard("b-9"));
+		currentActor = { login: "dave", role: "member" };
+
+		const res = await gesture("b-9", "defer");
+
+		expect(res.status).toBe(403);
+		expect(await res.json()).toMatchObject({ assignedTo: "carol" });
+		expect(state.bundles.get("b-9")).toEqual(bundle);
+	});
+
+	it("409s an admin gesturing on someone else's assigned bundle without force", async () => {
+		const bundle = { ...makeBundle("b-10"), assignedTo: "carol", assignedAt: new Date(0).toISOString(), assignedBy: "carol" };
+		state.bundles.set("b-10", bundle);
+		state.cards.set("b-10", makeCard("b-10"));
+		currentActor = { login: "eve", role: "admin" };
+
+		const res = await gesture("b-10", "defer");
+
+		expect(res.status).toBe(409);
+		expect(state.bundles.get("b-10")).toEqual(bundle);
+	});
+
+	it("lets an admin override someone else's assignment with force=true", async () => {
+		const bundle = { ...makeBundle("b-11"), assignedTo: "carol", assignedAt: new Date(0).toISOString(), assignedBy: "carol" };
+		state.bundles.set("b-11", bundle);
+		state.cards.set("b-11", makeCard("b-11"));
+		currentActor = { login: "eve", role: "admin" };
+
+		const res = await fetch(`${baseUrl}/bundles/b-11/gesture?force=true`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ action: "defer" }),
+		});
+
+		expect(res.status).toBe(200);
+		expect(state.shelf.get("b-11")?.bundle?.assignedTo).toBe("eve");
+	});
+
+	it("records decidedBy/bundleId/wasAssignedTo/overrodeAssignment on accept", async () => {
+		const bundle = { ...makeBundle("b-12"), assignedTo: "carol", assignedAt: new Date(0).toISOString(), assignedBy: "carol" };
+		state.bundles.set("b-12", bundle);
+		state.cards.set("b-12", makeCard("b-12"));
+		currentActor = { login: "eve", role: "owner" };
+
+		await fetch(`${baseUrl}/bundles/b-12/gesture?force=true`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ action: "accept" }),
+		});
+
+		const decided = JSON.parse(await readFile(join(dataDir, "decided-prs.json"), "utf8")) as {
+			entries: ReadonlyArray<Record<string, unknown>>;
+		};
+		const entry = decided.entries.find((e) => e["prId"] === "b-12-pr-1");
+		expect(entry).toMatchObject({
+			decidedBy: "eve",
+			bundleId: "b-12",
+			wasAssignedTo: "carol",
+			overrodeAssignment: true,
+		});
+	});
+});
+
+describe("assignmentsRouter", () => {
+	let server: Server;
+	let baseUrl: string;
+	let state: ReturnType<typeof createServerState>;
+	let currentActor: { login: string; role: TeamRole };
+
+	beforeEach(async () => {
+		state = createServerState();
+		currentActor = { login: "actor", role: "member" };
+
+		const app = express();
+		app.use(express.json());
+		app.use(actorMiddleware(() => currentActor));
+		app.use("/bundles", assignmentsRouter(state));
+
+		await new Promise<void>((resolve) => {
+			server = app.listen(0, resolve);
+		});
+		const address = server.address();
+		const port = typeof address === "object" && address !== null ? address.port : 0;
+		baseUrl = `http://127.0.0.1:${port}`;
+	});
+
+	afterEach(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+
+	async function assign(bundleId: string, login: string) {
+		return fetch(`${baseUrl}/bundles/${bundleId}/assign`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ login }),
+		});
+	}
+
+	async function unassign(bundleId: string) {
+		return fetch(`${baseUrl}/bundles/${bundleId}/assign`, { method: "DELETE" });
+	}
+
+	it("lets a member self-assign an unassigned bundle", async () => {
+		state.bundles.set("b-1", makeBundle("b-1"));
+
+		const res = await assign("b-1", "actor");
+
+		expect(res.status).toBe(200);
+		expect(state.bundles.get("b-1")?.assignedTo).toBe("actor");
+	});
+
+	it("403s a member assigning a bundle to someone else", async () => {
+		state.bundles.set("b-2", makeBundle("b-2"));
+
+		const res = await assign("b-2", "someone-else");
+
+		expect(res.status).toBe(403);
+		expect(state.bundles.get("b-2")?.assignedTo).toBeUndefined();
+	});
+
+	it("lets an admin assign a bundle to someone else", async () => {
+		currentActor = { login: "admin-actor", role: "admin" };
+		state.bundles.set("b-3", makeBundle("b-3"));
+
+		const res = await assign("b-3", "someone-else");
+
+		expect(res.status).toBe(200);
+		expect(state.bundles.get("b-3")?.assignedTo).toBe("someone-else");
+	});
+
+	it("403s a member reassigning a bundle already assigned to someone else", async () => {
+		state.bundles.set("b-4", { ...makeBundle("b-4"), assignedTo: "someone-else" });
+
+		const res = await assign("b-4", "actor");
+
+		expect(res.status).toBe(403);
+	});
+
+	it("lets a member unassign their own bundle", async () => {
+		state.bundles.set("b-5", { ...makeBundle("b-5"), assignedTo: "actor" });
+
+		const res = await unassign("b-5");
+
+		expect(res.status).toBe(200);
+		expect(state.bundles.get("b-5")?.assignedTo).toBeUndefined();
+	});
+
+	it("403s a member unassigning someone else's bundle", async () => {
+		state.bundles.set("b-6", { ...makeBundle("b-6"), assignedTo: "someone-else" });
+
+		const res = await unassign("b-6");
+
+		expect(res.status).toBe(403);
+		expect(state.bundles.get("b-6")?.assignedTo).toBe("someone-else");
+	});
+
+	it("lets an admin unassign someone else's bundle", async () => {
+		currentActor = { login: "admin-actor", role: "admin" };
+		state.bundles.set("b-7", { ...makeBundle("b-7"), assignedTo: "someone-else" });
+
+		const res = await unassign("b-7");
+
+		expect(res.status).toBe(200);
+	});
+
+	it("404s for a bundle that doesn't exist", async () => {
+		const res = await assign("does-not-exist", "actor");
+		expect(res.status).toBe(404);
+	});
 });
 
 describe("gesturesRouter — review card comment posting failures", () => {
@@ -305,6 +528,7 @@ describe("gesturesRouter — review card comment posting failures", () => {
 
 		const app = express();
 		app.use(express.json());
+		app.use(actorMiddleware(() => ({ login: "actor", role: "owner" })));
 		app.use(
 			"/bundles",
 			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState),
@@ -368,6 +592,7 @@ describe("gesturesRouter — reject GitHub close failures", () => {
 
 		const app = express();
 		app.use(express.json());
+		app.use(actorMiddleware(() => ({ login: "actor", role: "owner" })));
 		app.use("/bundles", bundlesRouter(state));
 		app.use(
 			"/bundles",

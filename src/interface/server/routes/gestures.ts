@@ -56,19 +56,69 @@ export function gesturesRouter(
 					return;
 				}
 
+				const login = res.locals.login;
+				const membership = res.locals.membership;
+				if (login === undefined || membership === undefined) {
+					res.status(401).json({ error: "Sign in required" });
+					return;
+				}
+
+				// Owner/admin, not owner-only: matches the same privilege level requireRole grants
+				// for membership management, since assignment is an organizational/triage-routing
+				// concern rather than a merge-queue-technical one (queue.process/settings stay
+				// owner-only elsewhere).
+				const isPrivileged = membership.role === "owner" || membership.role === "admin";
+				const forceRequested = req.query["force"] === "true";
+				let overrodeAssignment = false;
+
+				if (bundle.assignedTo !== undefined && bundle.assignedTo !== login) {
+					if (!isPrivileged) {
+						res.status(403).json({ error: "This bundle is assigned to another team member", assignedTo: bundle.assignedTo });
+						return;
+					}
+					if (!forceRequested) {
+						res.status(409).json({
+							error:
+								"This bundle is assigned to another team member. Reassign it to yourself first, or retry with force=true to override.",
+							assignedTo: bundle.assignedTo,
+						});
+						return;
+					}
+					overrodeAssignment = true;
+				}
+
+				const wasAssignedTo = bundle.assignedTo;
+				// Self-assign-on-gesture: stamped unconditionally, whether or not the gate above
+				// fired — this correctly handles both "already mine" (harmless re-stamp) and "was
+				// unassigned" (first stamp) in one path, rather than branching on assignedTo again.
+				const assignedBundle: Bundle = {
+					...bundle,
+					assignedTo: login,
+					assignedAt: new Date().toISOString(),
+					assignedBy: login,
+				};
+
 				const { action } = req.body as z.infer<typeof GestureSchema>;
 				const memberPrIds = bundle.members.map((m) => m.id);
+				// wasAssignedTo omitted entirely (not set to undefined) when the bundle had no prior
+				// assignee — exactOptionalPropertyTypes distinguishes "key absent" from "key: undefined".
+				const decisionContext = {
+					decidedBy: login,
+					bundleId,
+					overrodeAssignment,
+					...(wasAssignedTo !== undefined ? { wasAssignedTo } : {}),
+				};
 
 				if (action === "accept") {
-					await queue.enqueue(bundle, card); // enqueues; merge (if any) happens below, not inline
+					await queue.enqueue(assignedBundle, card); // enqueues; merge (if any) happens below, not inline
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
-					await decidedStore.markDecided(memberPrIds, action);
-					postCardToMembers(github, action, bundle, card);
-					// autoMergeOnAccept is itself owner-gated (POST /account/github/repos/:owner/:name/settings
-					// requires requireRole("owner")) — turning it on IS the authorization decision for
-					// every accept that follows to drain the queue, deliberately, regardless of which
-					// member performs the accept. This route itself stays open to every member on purpose
+await decidedStore.markDecided(memberPrIds, action, decisionContext);
+				postCardToMembers(github, action, assignedBundle, card);
+				// autoMergeOnAccept is itself owner-gated (POST /account/github/repos/:owner/:name/settings
+				// requires requireRole("owner")) — turning it on IS the authorization decision for
+				// every accept that follows to drain the queue, deliberately, regardless of which
+				// member performs the accept. This route itself stays open to every member on purpose
 					// (INV-5: an unaccepted bundle never merges), and dequeueNext only ever processes
 					// bundles someone has already accepted, whether that's this one or another already
 					// waiting in the shared queue. Per-repo, not team-wide — a bundle's members all
@@ -97,16 +147,16 @@ export function gesturesRouter(
 					}
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
-					await decidedStore.markDecided(memberPrIds, action);
-					postCardToMembers(github, action, bundle, card);
+					await decidedStore.markDecided(memberPrIds, action, decisionContext);
+					postCardToMembers(github, action, assignedBundle, card);
 					res.json({ status: "rejected", bundleId });
 				} else {
 					// defer
-					state.shelf.set(bundleId, { card, bundle, memberPrIds });
+					state.shelf.set(bundleId, { card, bundle: assignedBundle, memberPrIds });
 					state.cards.delete(bundleId);
-					await decidedStore.markDecided(memberPrIds, action);
+					await decidedStore.markDecided(memberPrIds, action, decisionContext);
 					await logDefer(deferLogPath, bundleId, card);
-					postCardToMembers(github, action, bundle, card);
+					postCardToMembers(github, action, assignedBundle, card);
 					res.json({ status: "deferred", bundleId, shelfPosition: state.shelf.size });
 				}
 			} catch (err) {
