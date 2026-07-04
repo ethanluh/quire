@@ -72,6 +72,20 @@ export class TeamStore {
 		await writeJsonFileAtomic(this.membersPath(teamId), members);
 	}
 
+	// load-under-lock, let the caller compute the next roster (it may throw to abort the
+	// save — that's how removeMember/setMemberRole enforce the last-owner invariant),
+	// save-under-lock. The members-file twin of updateMembershipIndex; serializing per
+	// team is what keeps a concurrent pair from both slipping past a stale owner check.
+	private updateMembers(
+		teamId: string,
+		update: (current: ReadonlyArray<TeamMembership>) => ReadonlyArray<TeamMembership>,
+	): Promise<void> {
+		return this.withTeamLock(teamId, async () => {
+			const existing = await this.listMembers(teamId);
+			await this.saveMembers(teamId, update(existing));
+		});
+	}
+
 	// Chains async work per key onto whatever's already pending for that key (the same
 	// per-key-promise-chaining pattern refreshRepoQueue.ts's enqueueRefresh uses for its
 	// coalescing lock) — every roster mutation below runs through `teamLocks`, every
@@ -99,10 +113,9 @@ export class TeamStore {
 	}
 
 	async addMember(teamId: string, membership: TeamMembership): Promise<void> {
-		return this.withTeamLock(teamId, async () => {
-			const existing = await this.listMembers(teamId);
+		return this.updateMembers(teamId, (existing) => {
 			const withoutLogin = existing.filter((m) => m.login !== membership.login);
-			await this.saveMembers(teamId, [...withoutLogin, membership]);
+			return [...withoutLogin, membership];
 		});
 	}
 
@@ -112,27 +125,25 @@ export class TeamStore {
 	// to be ownerless. Applies uniformly to /leave's self-removal and an owner/admin
 	// removing someone else, so both go through one invariant instead of two.
 	async removeMember(teamId: string, login: string): Promise<void> {
-		return this.withTeamLock(teamId, async () => {
-			const existing = await this.listMembers(teamId);
+		return this.updateMembers(teamId, (existing) => {
 			const removedWasOwner = existing.some((m) => m.login === login && m.role === "owner");
 			const remaining = existing.filter((m) => m.login !== login);
 			if (removedWasOwner && remaining.length > 0 && !remaining.some((m) => m.role === "owner")) {
 				throw new LastOwnerError(`Removing ${login} would leave team ${teamId} with members but no owner`);
 			}
-			await this.saveMembers(teamId, remaining);
+			return remaining;
 		});
 	}
 
 	async setMemberRole(teamId: string, login: string, role: TeamRole): Promise<void> {
-		return this.withTeamLock(teamId, async () => {
-			const existing = await this.listMembers(teamId);
+		return this.updateMembers(teamId, (existing) => {
 			const updated = existing.map((m) => (m.login === login ? { ...m, role } : m));
 			const hadOwner = existing.some((m) => m.role === "owner");
 			const stillHasOwner = updated.some((m) => m.role === "owner");
 			if (hadOwner && !stillHasOwner) {
 				throw new LastOwnerError(`Changing ${login}'s role would leave team ${teamId} with no owner`);
 			}
-			await this.saveMembers(teamId, updated);
+			return updated;
 		});
 	}
 
@@ -190,7 +201,8 @@ export class TeamStore {
 		const team = await this.createTeam(login, name);
 		await this.withLoginLock(login, async () => {
 			const previous = opts?.keepExistingTeams === true ? await this.loadMembershipIndex(login) : undefined;
-			const teamIds = [...(previous?.teamIds ?? []).filter((id) => id !== team.teamId), team.teamId];
+			const kept = (previous?.teamIds ?? []).filter((id) => id !== team.teamId);
+			const teamIds = [...kept, team.teamId];
 			await this.saveMembershipIndex(login, { teamIds, activeTeamId: team.teamId });
 		});
 		return team;
