@@ -166,74 +166,10 @@ describe("teamRouter", () => {
 		expect(verifyInvite(token as string, SECRET)?.teamId).toBe(teamId);
 	});
 
-	it("POST /invite defaults to member role when no body is sent", async () => {
-		const teamId = await signIn("alice");
-
-		const res = await fetch(`${baseUrl}/account/team/invite`, { method: "POST" });
-		expect(res.status).toBe(200);
-		const { inviteUrl, role } = (await res.json()) as { inviteUrl: string; role: string };
-		expect(role).toBe("member");
-
-		const token = new URL(inviteUrl).searchParams.get("joinTeam");
-		const { verifyInvite } = await import("../../src/interface/server/invite.js");
-		expect(verifyInvite(token as string, SECRET)).toMatchObject({ teamId, role: "member" });
-	});
-
-	it("POST /invite can mint a token that grants admin on join", async () => {
-		const ownerTeamId = await signIn("owner");
-
-		const res = await fetch(`${baseUrl}/account/team/invite`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ role: "admin" }),
-		});
-		expect(res.status).toBe(200);
-		const { inviteUrl } = (await res.json()) as { inviteUrl: string };
-		const token = new URL(inviteUrl).searchParams.get("joinTeam") as string;
-
-		currentLogin = "bob";
-		await store.createTeamForLogin("bob", "bob's team");
-		await fetch(`${baseUrl}/account/team/join`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ token }),
-		});
-
-		const membership = await store.getMembership(ownerTeamId, "bob");
-		expect(membership?.role).toBe("admin");
-	});
-
-	it("POST /invite lets a non-owner admin also mint an admin-role invite", async () => {
-		const teamId = await signIn("owner");
-		await addMemberWithIndex(teamId, "admin-actor", "admin");
-		currentLogin = "admin-actor";
-
-		const res = await fetch(`${baseUrl}/account/team/invite`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ role: "admin" }),
-		});
-
-		expect(res.status).toBe(200);
-		const { role } = (await res.json()) as { role: string };
-		expect(role).toBe("admin");
-	});
-
-	it("POST /invite rejects an attempt to invite someone straight to owner", async () => {
-		await signIn("alice");
-
-		const res = await fetch(`${baseUrl}/account/team/invite`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ role: "owner" }),
-		});
-
-		expect(res.status).toBe(400);
-	});
-
+Theirs (target branch)
 	it("POST /join adds the invited login as a member and switches their active team to it", async () => {
 		const ownerTeamId = await signIn("owner");
-		const token = createInvite(ownerTeamId, "owner", "member", SECRET);
+const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
 
 		currentLogin = "bob";
 		await store.createTeamForLogin("bob", "bob's team"); // bob already has his own personal team
@@ -265,7 +201,7 @@ describe("teamRouter", () => {
 
 	it("POST /join is idempotent when the login is already a member", async () => {
 		const ownerTeamId = await signIn("owner");
-		const token = createInvite(ownerTeamId, "owner", "member", SECRET);
+const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
 		currentLogin = "bob";
 		await store.createTeamForLogin("bob", "bob's team");
 

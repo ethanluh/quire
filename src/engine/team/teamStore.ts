@@ -1,8 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
-import type { LoginMembershipIndex, Team, TeamMembership, TeamRole } from "../types/team.js";
-import { isLoginMembershipIndex, isTeam, isTeamMembershipList } from "../types/team.js";
+import type { InviteRecord, LoginMembershipIndex, Team, TeamMembership, TeamRole } from "../types/team.js";
+import { isInviteRecordList, isLoginMembershipIndex, isTeam, isTeamMembershipList } from "../types/team.js";
+
+// Thrown by revokeInvite when the target invite has already been redeemed — nothing left to
+// revoke, and silently succeeding would misleadingly suggest the link stopped working.
+export class InviteAlreadyRedeemedError extends Error {}
 
 // A login is always a GitHub username here (requireSession only ever sets it from a
 // verified GitHub identity), which GitHub itself restricts to alphanumeric characters and
@@ -46,6 +50,10 @@ export class TeamStore {
 
 	private membershipIndexPath(login: string): string {
 		return join(this.dataDir, "users", sanitizeLogin(login), "membership.json");
+	}
+
+	private invitesPath(teamId: string): string {
+		return join(this.dataDir, "teams", teamId, "invites.json");
 	}
 
 	async loadTeam(teamId: string): Promise<Team | undefined> {
@@ -244,6 +252,59 @@ export class TeamStore {
 			const next: LoginMembershipIndex = { teamIds: remainingTeamIds, activeTeamId };
 			await this.saveMembershipIndex(login, next);
 			return next;
+		});
+	}
+
+	async listInvites(teamId: string): Promise<ReadonlyArray<InviteRecord>> {
+		return (await readJsonFile(this.invitesPath(teamId), isInviteRecordList)) ?? [];
+	}
+
+	private async saveInvites(teamId: string, invites: ReadonlyArray<InviteRecord>): Promise<void> {
+		await writeJsonFileAtomic(this.invitesPath(teamId), invites);
+	}
+
+	// Records that an invite link was minted, so an owner/admin can later see it's still
+	// pending (see /team/invites) even though the token itself carries no queryable state.
+	async addInvite(teamId: string, record: InviteRecord): Promise<void> {
+		return this.withTeamLock(teamId, async () => {
+			const existing = await this.listInvites(teamId);
+			await this.saveInvites(teamId, [...existing, record]);
+		});
+	}
+
+	// Called by /team/join on successful redemption. Silently a no-op if the record is
+	// missing (e.g. it predates this feature) — the token itself already proved the invite
+	// was valid; this is bookkeeping for visibility, not a second authorization check.
+	async markInviteRedeemed(teamId: string, id: string, redeemedBy: string): Promise<void> {
+		return this.withTeamLock(teamId, async () => {
+			const existing = await this.listInvites(teamId);
+			const updated = existing.map((invite) =>
+				invite.id === id ? { ...invite, redeemedBy, redeemedAt: new Date().toISOString() } : invite,
+			);
+			await this.saveInvites(teamId, updated);
+		});
+	}
+
+	async getInvite(teamId: string, id: string): Promise<InviteRecord | undefined> {
+		const invites = await this.listInvites(teamId);
+		return invites.find((invite) => invite.id === id);
+	}
+
+	// Marks an invite as revoked so its still-valid-looking token stops being honorable by
+	// /team/join, without needing to invalidate the whole team's session secret. Throws if
+	// the invite was already redeemed (nothing meaningful left to revoke) or doesn't exist.
+	async revokeInvite(teamId: string, id: string): Promise<void> {
+		return this.withTeamLock(teamId, async () => {
+			const existing = await this.listInvites(teamId);
+			const target = existing.find((invite) => invite.id === id);
+			if (target === undefined) {
+				throw new Error(`No invite ${id} found for team ${teamId}`);
+			}
+			if (target.redeemedAt !== undefined) {
+				throw new InviteAlreadyRedeemedError(`Invite ${id} was already redeemed by ${target.redeemedBy}`);
+			}
+			const updated = existing.map((invite) => (invite.id === id ? { ...invite, revokedAt: new Date().toISOString() } : invite));
+			await this.saveInvites(teamId, updated);
 		});
 	}
 }
