@@ -26,7 +26,7 @@ type MergeableCheck =
 // several collaborators together (an availability check, a client, agent bootstrap, and a
 // token minter) rather than one boolean.
 export interface DeepInvestigationDeps {
-	shouldEnable: () => boolean;
+	shouldEnable: (owner: string, repo: string) => boolean;
 	// undefined when no Anthropic account is connected — the tier has nothing to run against.
 	getClient: () => ManagedAgentsClient | undefined;
 	ensureAgent: (client: ManagedAgentsClient) => Promise<DeepResolverAgentRef>;
@@ -47,8 +47,10 @@ export class MergeQueue {
 		private readonly mergeabilityPollDelaysMs: ReadonlyArray<number> = DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
 		// Live, swappable, same shape as llmProviderHolder — read at the moment a resolution
 		// fails rather than captured once at construction, so a mid-run settings change takes
-		// effect on the very next failure.
-		private readonly shouldFlagForFleet: () => boolean = () => false,
+		// effect on the very next failure. Takes the failing PR's owner/repo since this setting
+		// is per-repo, not team-wide (a team can flag conflicts for one repo's fleet but not
+		// another's).
+		private readonly shouldFlagForFleet: (owner: string, repo: string) => boolean = () => false,
 		private readonly deepInvestigation?: DeepInvestigationDeps,
 	) {}
 
@@ -225,7 +227,7 @@ export class MergeQueue {
 			if (result.escalation !== undefined) {
 				investigating = await this.tryStartInvestigation(pr, result.escalation);
 			}
-			if (this.shouldFlagForFleet()) {
+			if (this.shouldFlagForFleet(pr.repoOwner, pr.repoName)) {
 				await this.github.postComment(
 					pr.repoOwner,
 					pr.repoName,
@@ -255,7 +257,7 @@ export class MergeQueue {
 		escalation: ConflictHunkEscalation,
 	): Promise<{ path: string; sessionId: string } | undefined> {
 		const deps = this.deepInvestigation;
-		if (deps === undefined || !deps.shouldEnable()) return undefined;
+		if (deps === undefined || !deps.shouldEnable(pr.repoOwner, pr.repoName)) return undefined;
 		const client = deps.getClient();
 		if (client === undefined) return undefined;
 		try {

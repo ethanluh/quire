@@ -29,10 +29,10 @@ function binding(overrides: Partial<InstallationBinding> = {}): InstallationBind
 }
 
 // Each tenant's accountState.current is a full InstallationAccountState (installations[]
-// plus the tenant-wide selectedRepo/autoMergeOnAccept/flagConflictsForFleet), not a single
-// InstallationBinding — see accountState.ts.
+// plus repos[], each repo carrying its own settings), not a single InstallationBinding —
+// see accountState.ts.
 function accountStateWith(...installations: ReadonlyArray<InstallationBinding>): InstallationAccountState {
-	return { installations };
+	return { installations, repos: [] };
 }
 
 describe("TenantRegistry", () => {

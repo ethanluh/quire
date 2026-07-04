@@ -10,7 +10,6 @@ import { githubAppRouter } from "../../src/interface/server/routes/githubApp.js"
 import type { TeamRole } from "../../src/engine/types/team.js";
 import type { RepoSummary } from "../../src/engine/github/repos.js";
 import { GitHubClientHolder } from "../../src/engine/github/clientHolder.js";
-import type { GitHubClient } from "../../src/engine/github/client.js";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { createServerState } from "../../src/interface/server/state.js";
@@ -23,7 +22,7 @@ import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { WORKFLOW_CONTENT } from "../../src/engine/github/repoSetup.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
-import type { InstallationAccountState } from "../../src/engine/github/installation.js";
+import type { InstallationAccountState, RepoBinding } from "../../src/engine/github/installation.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 import type { PipelineDeps } from "../../src/interface/server/ingestIntoQueue.js";
 import type { RawPRPayload } from "../../src/engine/github/client.js";
@@ -50,6 +49,14 @@ function repo(overrides: Partial<RepoSummary> & { fullName: string; installation
 		defaultBranch: "main",
 		starred: false,
 		pinned: false,
+		...overrides,
+	};
+}
+
+function repoBindingFixture(overrides: Partial<RepoBinding> & { owner: string; name: string; installationId: number }): RepoBinding {
+	return {
+		addedAt: "2026-06-30T00:00:00.000Z",
+		addedBy: "octocat",
 		...overrides,
 	};
 }
@@ -152,12 +159,6 @@ describe("githubAppRouter", () => {
 			accountType: "Organization",
 		}),
 		role: TeamRole = "owner",
-		// Selecting a repo repoints clientHolder to whatever buildClient returns for that
-		// installation — defaults to always handing back the same fixture-configured
-		// StubGitHubClient regardless of installationId, since a real buildInstallationClient
-		// would attempt real GitHub auth with the fake appId/privateKey above. Tests exercising
-		// the multi-installation client-repoint/rollback behavior pass their own buildClient.
-		buildClient: (installationId: number) => GitHubClient = () => client,
 		// Simulates requireSession having already run and populated res.locals.login — this
 		// router is mounted after that middleware in production (see index.ts), so tests that
 		// care about the starred/pinned enrichment path (which reads res.locals.login) opt in
@@ -222,7 +223,6 @@ describe("githubAppRouter", () => {
 			githubAppRouter(
 				refreshDeps,
 				"quire-review",
-				buildClient,
 				listRepos,
 				getInstallationAccount,
 				false,
@@ -250,10 +250,7 @@ describe("githubAppRouter", () => {
 		expect(body).toEqual({
 			connected: false,
 			installations: [],
-			selectedRepo: undefined,
-			autoMergeOnAccept: false,
-			flagConflictsForFleet: false,
-			enableDeepConflictInvestigation: false,
+			repos: [],
 		});
 	});
 
@@ -285,7 +282,7 @@ describe("githubAppRouter", () => {
 
 	it("reuses the pending state when the same browser calls /install/start twice (double-click / second tab)", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-setup(async () => []);
+		setup(async () => []);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const first = await call(server, "POST", "/account/github/install/start");
@@ -312,7 +309,7 @@ setup(async () => []);
 
 	it("does not let one browser's /install/start invalidate another's in-flight install", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-setup(async () => []);
+		setup(async () => []);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		// Two independent browsers (cookie jars) both start an install around the same time.
@@ -333,9 +330,9 @@ setup(async () => []);
 		expect(browserB.status).toBe(200);
 	});
 
-	it("binds the installation on a valid callback, persisting it and swapping in a real client", async () => {
+	it("binds the installation on a valid callback, persisting it", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-const { accountPath } = setup(async () => []);
+		const { accountPath } = setup(async () => []);
 		await new Promise((resolve) => server.once("listening", resolve));
 		const start = await call(server, "POST", "/account/github/install/start");
 		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
@@ -413,7 +410,6 @@ const { accountPath } = setup(async () => []);
 			undefined,
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
 			"owner",
-			undefined,
 			undefined,
 			async (repos) => repos,
 			undefined,
@@ -513,6 +509,7 @@ const { accountPath } = setup(async () => []);
 		});
 		setup(listRepos, new StubGitHubClient(), new StubLlmProvider(), {
 			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+			repos: [],
 		});
 		await new Promise((resolve) => server.once("listening", resolve));
 
@@ -534,6 +531,7 @@ const { accountPath } = setup(async () => []);
 				{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
 				{ installationId: 777, accountLogin: "octocat", accountType: "User", boundAt: "2026-06-30T00:00:00.000Z" },
 			],
+			repos: [],
 		});
 		await new Promise((resolve) => server.once("listening", resolve));
 
@@ -555,6 +553,7 @@ const { accountPath } = setup(async () => []);
 				{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
 				{ installationId: 999, accountLogin: "dead-org", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
 			],
+			repos: [],
 		});
 		await new Promise((resolve) => server.once("listening", resolve));
 
@@ -574,6 +573,7 @@ const { accountPath } = setup(async () => []);
 		const listRepos = jest.fn(async () => gate);
 		setup(listRepos, new StubGitHubClient(), new StubLlmProvider(), {
 			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+			repos: [],
 		});
 		await new Promise((resolve) => server.once("listening", resolve));
 
@@ -600,10 +600,12 @@ const { accountPath } = setup(async () => []);
 			async () => repos,
 			new StubGitHubClient(),
 			new StubLlmProvider(),
-			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+			{
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			},
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
 			"owner",
-			undefined,
 			"octocat",
 			enrichWithUserToken,
 		);
@@ -630,10 +632,12 @@ const { accountPath } = setup(async () => []);
 			async () => repos,
 			new StubGitHubClient(),
 			new StubLlmProvider(),
-			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+			{
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			},
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
 			"owner",
-			undefined,
 			"octocat",
 			enrichWithUserToken,
 		);
@@ -656,10 +660,12 @@ const { accountPath } = setup(async () => []);
 			async () => repos,
 			new StubGitHubClient(),
 			new StubLlmProvider(),
-			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+			{
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			},
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
 			"owner",
-			undefined,
 			"octocat",
 		);
 		// Deliberately not calling userTokenCache.set — no cached token for "octocat".
@@ -680,10 +686,12 @@ const { accountPath } = setup(async () => []);
 			async () => repos,
 			new StubGitHubClient(),
 			new StubLlmProvider(),
-			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+			{
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			},
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
 			"owner",
-			undefined,
 			"octocat",
 		);
 		userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
@@ -714,10 +722,12 @@ const { accountPath } = setup(async () => []);
 			async () => repos,
 			new StubGitHubClient(),
 			new StubLlmProvider(),
-			{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
+			{
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			},
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
 			"owner",
-			undefined,
 			"octocat",
 			async (repos) => repos,
 			undefined,
@@ -744,106 +754,191 @@ const { accountPath } = setup(async () => []);
 		expect(body["error"]).toBe("Install the GitHub App first");
 	});
 
-	it("selects a repo, persists it (with its owning installation), and ingests its open PRs", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const client = new StubGitHubClient();
-		client.addFixture("acme-corp", "widgets", makePrFixture({ owner: "acme-corp", repo: "widgets" }));
-		const provider = new StubLlmProvider();
-		provider.queueCompletion('["adds OTP login"]');
-		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
-		const { accountPath, state } = setup(async () => [], client, provider, {
-			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
-		});
-		await new Promise((resolve) => server.once("listening", resolve));
+	describe("POST /repos/select", () => {
+		it("adds a repo, persists it (with its owning installation), and ingests its open PRs", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const client = new StubGitHubClient();
+			client.addFixture("acme-corp", "widgets", makePrFixture({ owner: "acme-corp", repo: "widgets" }));
+			const provider = new StubLlmProvider();
+			provider.queueCompletion('["adds OTP login"]');
+			provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+			const { accountPath, state } = setup(async () => [], client, provider, {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
 
-		const { status, body } = await call(server, "POST", "/account/github/repos/select", {
-			owner: "acme-corp",
-			name: "widgets",
-			installationId: 555,
-		});
+			const { status, body } = await call(server, "POST", "/account/github/repos/select", {
+				owner: "acme-corp",
+				name: "widgets",
+				installationId: 555,
+			});
 
-		expect(status).toBe(200);
-		expect(body["selected"]).toEqual({ owner: "acme-corp", name: "widgets", installationId: 555 });
-		expect(body["bundlesCreated"]).toBe(1);
-		expect(state.bundles.size).toBe(1);
+			expect(status).toBe(200);
+			expect(body["added"]).toEqual(
+				expect.objectContaining({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+			);
+			expect(body["bundlesCreated"]).toBe(1);
+			expect(state.bundles.size).toBe(1);
 
-		const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
-		expect(persisted["selectedRepo"]).toEqual({ owner: "acme-corp", name: "widgets", installationId: 555 });
-	});
-
-	it("rejects repo selection against an installation that isn't bound", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
-			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
-		});
-		await new Promise((resolve) => server.once("listening", resolve));
-
-		const { status, body } = await call(server, "POST", "/account/github/repos/select", {
-			owner: "acme-corp",
-			name: "widgets",
-			installationId: 999,
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { repos: Record<string, unknown>[] };
+			expect(persisted.repos).toEqual([expect.objectContaining({ owner: "acme-corp", name: "widgets", installationId: 555 })]);
 		});
 
-		expect(status).toBe(400);
-		expect(body["error"]).toBe("Unknown installation");
-	});
+		it("adds a second distinct repo alongside an already-watched one", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const client = new StubGitHubClient();
+			const { accountPath } = setup(async () => [], client, new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
 
-	it("rejects repo selection when no installation is bound", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		setup();
-		await new Promise((resolve) => server.once("listening", resolve));
+			const { status, body } = await call(server, "POST", "/account/github/repos/select", {
+				owner: "acme-corp",
+				name: "gadgets",
+				installationId: 555,
+			});
 
-		const { status, body } = await call(server, "POST", "/account/github/repos/select", {
-			owner: "acme-corp",
-			name: "widgets",
-			installationId: 555,
+			expect(status).toBe(200);
+			expect(body["added"]).toEqual(expect.objectContaining({ owner: "acme-corp", name: "gadgets" }));
+
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { repos: Record<string, unknown>[] };
+			expect(persisted.repos.map((r) => r["name"]).sort()).toEqual(["gadgets", "widgets"]);
 		});
 
-		expect(status).toBe(400);
-		expect(body["error"]).toBe("Unknown installation");
-	});
+		it("409s when re-adding a repo that's already being watched", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
 
-	it("restores the previous client and selection when a repo selection's ingest fails", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const workingClient = new StubGitHubClient();
-		workingClient.addFixture("acme-corp", "widgets", makePrFixture({ owner: "acme-corp", repo: "widgets" }));
-		class FailingClient extends StubGitHubClient {
-			override async listOpenPullRequests(): Promise<never> {
-				throw new Error("GitHub API unavailable");
+			const { status, body } = await call(server, "POST", "/account/github/repos/select", {
+				owner: "acme-corp",
+				name: "widgets",
+				installationId: 555,
+			});
+
+			expect(status).toBe(409);
+			expect(body["error"]).toBe("This repo is already being watched");
+		});
+
+		it("rejects repo selection against an installation that isn't bound", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/select", {
+				owner: "acme-corp",
+				name: "widgets",
+				installationId: 999,
+			});
+
+			expect(status).toBe(400);
+			expect(body["error"]).toBe("Unknown installation");
+		});
+
+		it("rejects repo selection when no installation is bound", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup();
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/select", {
+				owner: "acme-corp",
+				name: "widgets",
+				installationId: 555,
+			});
+
+			expect(status).toBe(400);
+			expect(body["error"]).toBe("Unknown installation");
+		});
+
+		it("rolls back the just-added repo (without touching any other watched repo) when its initial ingest fails", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const workingClient = new StubGitHubClient();
+			workingClient.addFixture("acme-corp", "widgets", makePrFixture({ owner: "acme-corp", repo: "widgets" }));
+			// Fails only for the specific repo being added, mirroring the old
+			// buildClient-per-installation failure injection now that there's a single shared
+			// client resolving every repo — the failure is keyed on (owner, name) instead.
+			class PartiallyFailingClient extends StubGitHubClient {
+				override async listOpenPullRequests(owner: string, repo: string) {
+					if (owner === "octocat" && repo === "broken-repo") throw new Error("GitHub API unavailable");
+					return super.listOpenPullRequests(owner, repo);
+				}
 			}
-		}
-		const failingClient = new FailingClient();
-		const provider = new StubLlmProvider();
-		provider.queueCompletion('["adds OTP login"]');
-		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
-		const { state, refreshDeps } = setup(
-			async () => [],
-			workingClient,
-			provider,
-			{
+			const client = new PartiallyFailingClient();
+			client.addFixture("acme-corp", "widgets", makePrFixture({ owner: "acme-corp", repo: "widgets" }));
+			const provider = new StubLlmProvider();
+			provider.queueCompletion('["adds OTP login"]');
+			provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+			const { state, refreshDeps } = setup(async () => [], client, provider, {
 				installations: [
 					{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
 					{ installationId: 777, accountLogin: "octocat", accountType: "User", boundAt: "2026-06-30T00:00:00.000Z" },
 				],
-			},
-			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
-			undefined,
-			(installationId) => (installationId === 777 ? failingClient : workingClient),
-		);
-		await new Promise((resolve) => server.once("listening", resolve));
+				repos: [],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
 
-		const first = await call(server, "POST", "/account/github/repos/select", { owner: "acme-corp", name: "widgets", installationId: 555 });
-		expect(first.status).toBe(200);
-		expect(state.bundles.size).toBe(1);
+			const first = await call(server, "POST", "/account/github/repos/select", { owner: "acme-corp", name: "widgets", installationId: 555 });
+			expect(first.status).toBe(200);
+			expect(state.bundles.size).toBe(1);
 
-		const second = await call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "broken-repo", installationId: 777 });
+			const second = await call(server, "POST", "/account/github/repos/select", { owner: "octocat", name: "broken-repo", installationId: 777 });
 
-		expect(second.status).toBeGreaterThanOrEqual(400);
-		// The failed selection must not leave the shared client pointed at the installation
-		// that just failed, nor lose the previously-selected repo's already-ingested bundles.
-		expect(refreshDeps.clientHolder.getClient()).toBe(workingClient);
-		expect(refreshDeps.accountState.current.selectedRepo).toEqual({ owner: "acme-corp", name: "widgets", installationId: 555 });
-		expect(state.bundles.size).toBe(1);
+			expect(second.status).toBeGreaterThanOrEqual(400);
+			// The failed add must not stick around in repos[], nor lose the previously-added
+			// repo's already-ingested bundles.
+			expect(refreshDeps.accountState.current.repos).toEqual([
+				expect.objectContaining({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+			]);
+			expect(state.bundles.size).toBe(1);
+		});
+	});
+
+	describe("DELETE /repos/:owner/:name", () => {
+		it("removes exactly the named repo, leaving other watched repos untouched", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const { accountPath, refreshDeps } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [
+					repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+					repoBindingFixture({ owner: "acme-corp", name: "gadgets", installationId: 555 }),
+				],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "DELETE", "/account/github/repos/acme-corp/widgets");
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ removed: true });
+			expect(refreshDeps.accountState.current.repos).toEqual([
+				expect.objectContaining({ owner: "acme-corp", name: "gadgets" }),
+			]);
+
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { repos: Record<string, unknown>[] };
+			expect(persisted.repos).toHaveLength(1);
+			expect(persisted.repos[0]?.["name"]).toBe("gadgets");
+		});
+
+		it("404s for a repo that isn't currently watched", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "DELETE", "/account/github/repos/acme-corp/widgets");
+
+			expect(status).toBe(404);
+			expect(body["error"]).toBe("That repo isn't currently added");
+		});
 	});
 
 	describe("POST /repos/setup", () => {
@@ -852,6 +947,7 @@ const { accountPath } = setup(async () => []);
 			const client = new StubGitHubClient();
 			setup(async () => [], client, new StubLlmProvider(), {
 				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
 			});
 			await new Promise((resolve) => server.once("listening", resolve));
 
@@ -874,6 +970,7 @@ const { accountPath } = setup(async () => []);
 			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-declared-direction.yml", WORKFLOW_CONTENT);
 			setup(async () => [], client, new StubLlmProvider(), {
 				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
 			});
 			await new Promise((resolve) => server.once("listening", resolve));
 
@@ -908,6 +1005,7 @@ const { accountPath } = setup(async () => []);
 			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-declared-direction.yml", WORKFLOW_CONTENT);
 			setup(async () => [], client, new StubLlmProvider(), {
 				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
 			});
 			await new Promise((resolve) => server.once("listening", resolve));
 
@@ -922,6 +1020,7 @@ const { accountPath } = setup(async () => []);
 			const client = new StubGitHubClient();
 			setup(async () => [], client, new StubLlmProvider(), {
 				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
 			});
 			await new Promise((resolve) => server.once("listening", resolve));
 
@@ -944,7 +1043,7 @@ const { accountPath } = setup(async () => []);
 	});
 
 	describe("POST /repos/refresh", () => {
-		it("is a no-op when no installation is bound", async () => {
+		it("reports refreshed: false when no repos are watched", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 			setup();
 			await new Promise((resolve) => server.once("listening", resolve));
@@ -955,7 +1054,39 @@ const { accountPath } = setup(async () => []);
 			expect(body["refreshed"]).toBe(false);
 		});
 
-		it("re-fetches and re-ingests the already-selected repo's open PRs", async () => {
+		it("with no body, re-fetches and re-ingests every watched repo", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const client = new StubGitHubClient();
+			client.addFixture("acme-corp", "widgets", makePrFixture({ owner: "acme-corp", repo: "widgets" }));
+			client.addFixture("acme-corp", "gadgets", makePrFixture({ id: "pr-2", owner: "acme-corp", repo: "gadgets" }));
+			const provider = new StubLlmProvider();
+			provider.queueCompletion('["adds OTP login"]');
+			provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+			provider.queueCompletion('["adds OTP login"]');
+			provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+			const { state } = setup(async () => [], client, provider, {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [
+					repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+					repoBindingFixture({ owner: "acme-corp", name: "gadgets", installationId: 555 }),
+				],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh");
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(true);
+			expect(body["repos"]).toEqual(
+				expect.arrayContaining([
+					{ owner: "acme-corp", name: "widgets", ok: true },
+					{ owner: "acme-corp", name: "gadgets", ok: true },
+				]),
+			);
+			expect(state.bundles.size).toBe(2);
+		});
+
+		it("with a body, refreshes just the named repo", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 			const client = new StubGitHubClient();
 			client.addFixture("acme-corp", "widgets", makePrFixture({ owner: "acme-corp", repo: "widgets" }));
@@ -964,7 +1095,54 @@ const { accountPath } = setup(async () => []);
 			provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
 			const { state } = setup(async () => [], client, provider, {
 				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
-				selectedRepo: { owner: "acme-corp", name: "widgets", installationId: 555 },
+				repos: [
+					repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+					repoBindingFixture({ owner: "acme-corp", name: "gadgets", installationId: 555 }),
+				],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh", { owner: "acme-corp", name: "widgets" });
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(true);
+			expect(body["repos"]).toEqual([{ owner: "acme-corp", name: "widgets", ok: true }]);
+			expect(state.bundles.size).toBe(1);
+		});
+
+		it("reports refreshed: false when the named repo in the body isn't watched", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh", { owner: "acme-corp", name: "unwatched" });
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(false);
+		});
+
+		it("settles each repo independently — one failing repo doesn't sink the others", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			class PartiallyFailingClient extends StubGitHubClient {
+				override async listOpenPullRequests(owner: string, repo: string) {
+					if (owner === "acme-corp" && repo === "gadgets") throw new Error("GitHub API unavailable");
+					return super.listOpenPullRequests(owner, repo);
+				}
+			}
+			const client = new PartiallyFailingClient();
+			client.addFixture("acme-corp", "widgets", makePrFixture({ owner: "acme-corp", repo: "widgets" }));
+			const provider = new StubLlmProvider();
+			provider.queueCompletion('["adds OTP login"]');
+			provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+			setup(async () => [], client, provider, {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [
+					repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+					repoBindingFixture({ owner: "acme-corp", name: "gadgets", installationId: 555 }),
+				],
 			});
 			await new Promise((resolve) => server.once("listening", resolve));
 
@@ -972,214 +1150,299 @@ const { accountPath } = setup(async () => []);
 
 			expect(status).toBe(200);
 			expect(body["refreshed"]).toBe(true);
-			expect(state.bundles.size).toBe(1);
+			expect(body["repos"]).toEqual(
+				expect.arrayContaining([
+					{ owner: "acme-corp", name: "widgets", ok: true },
+					{ owner: "acme-corp", name: "gadgets", ok: false },
+				]),
+			);
 		});
 	});
 
-	describe("POST /settings", () => {
-		it("persists autoMergeOnAccept and surfaces it on status", async () => {
+	describe("POST /repos/:owner/:name/settings", () => {
+		it("persists per-repo settings and returns the updated RepoBinding", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 			const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
 				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
 			});
 			await new Promise((resolve) => server.once("listening", resolve));
 
-			const { status, body } = await call(server, "POST", "/account/github/settings", {
+			const { status, body } = await call(server, "POST", "/account/github/repos/acme-corp/widgets/settings", {
 				autoMergeOnAccept: true,
 				flagConflictsForFleet: false,
 				enableDeepConflictInvestigation: false,
 			});
 
 			expect(status).toBe(200);
-			expect(body).toEqual({ autoMergeOnAccept: true, flagConflictsForFleet: false, enableDeepConflictInvestigation: false });
-
-			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
-			expect(persisted["autoMergeOnAccept"]).toBe(true);
-		});
-
-		it.each<TeamRole>(["admin", "member"])("rejects %s with 403 — this toggle changes team-wide merge policy", async (role) => {
-			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-			setup(
-				async () => [],
-				new StubGitHubClient(),
-				new StubLlmProvider(),
-				{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
-				async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
-				role,
+			expect(body).toEqual(
+				expect.objectContaining({
+					owner: "acme-corp",
+					name: "widgets",
+					installationId: 555,
+					autoMergeOnAccept: true,
+					flagConflictsForFleet: false,
+					enableDeepConflictInvestigation: false,
+				}),
 			);
-			await new Promise((resolve) => server.once("listening", resolve));
 
-			const { status } = await call(server, "POST", "/account/github/settings", { autoMergeOnAccept: true });
-			expect(status).toBe(403);
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { repos: Record<string, unknown>[] };
+			expect(persisted.repos[0]?.["autoMergeOnAccept"]).toBe(true);
 		});
 
-		it("returns 400 when no installation is bound", async () => {
+		it("does not affect another watched repo's settings", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-			setup();
+			const { refreshDeps } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [
+					repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+					repoBindingFixture({ owner: "acme-corp", name: "gadgets", installationId: 555 }),
+				],
+			});
 			await new Promise((resolve) => server.once("listening", resolve));
 
-			const { status } = await call(server, "POST", "/account/github/settings", {
+			await call(server, "POST", "/account/github/repos/acme-corp/widgets/settings", {
 				autoMergeOnAccept: true,
 				flagConflictsForFleet: false,
 				enableDeepConflictInvestigation: false,
 			});
 
+			const gadgets = refreshDeps.accountState.current.repos.find((r) => r.name === "gadgets");
+			expect(gadgets?.autoMergeOnAccept).toBeUndefined();
+		});
+
+		it("404s for a repo that isn't currently added", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/acme-corp/widgets/settings", {
+				autoMergeOnAccept: true,
+				flagConflictsForFleet: false,
+				enableDeepConflictInvestigation: false,
+			});
+
+			expect(status).toBe(404);
+			expect(body["error"]).toBe("That repo isn't currently added");
+		});
+
+		it.each<TeamRole>(["admin", "member"])("rejects %s with 403 — this toggle changes merge policy for the repo", async (role) => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{
+					installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+					repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
+				},
+				async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+				role,
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(server, "POST", "/account/github/repos/acme-corp/widgets/settings", {
+				autoMergeOnAccept: true,
+				flagConflictsForFleet: false,
+				enableDeepConflictInvestigation: false,
+			});
+			expect(status).toBe(403);
+		});
+	});
+
+	describe("POST /disconnect/:installationId", () => {
+		it("disconnects a single installation, leaving other installations and their repos untouched", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [
+					{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+					{ installationId: 777, accountLogin: "octocat", accountType: "User", boundAt: "2026-06-30T00:00:00.000Z" },
+				],
+				repos: [repoBindingFixture({ owner: "octocat", name: "widgets", installationId: 777 })],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/disconnect/555");
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ disconnected: 555, remaining: 1, reposRemoved: 0 });
+
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { installations: unknown[]; repos: Record<string, unknown>[] };
+			expect(persisted.installations).toHaveLength(1);
+			expect(persisted.repos).toEqual([expect.objectContaining({ owner: "octocat", name: "widgets" })]);
+		});
+
+		it("orphans every repo bound through the disconnected installation, reporting the count", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const { accountPath, refreshDeps } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [
+					{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+					{ installationId: 777, accountLogin: "octocat", accountType: "User", boundAt: "2026-06-30T00:00:00.000Z" },
+				],
+				repos: [
+					repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+					repoBindingFixture({ owner: "acme-corp", name: "gadgets", installationId: 555 }),
+					repoBindingFixture({ owner: "octocat", name: "other-repo", installationId: 777 }),
+				],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/disconnect/555");
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ disconnected: 555, remaining: 1, reposRemoved: 2 });
+			expect(refreshDeps.accountState.current.repos).toEqual([
+				expect.objectContaining({ owner: "octocat", name: "other-repo" }),
+			]);
+
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { repos: Record<string, unknown>[] };
+			expect(persisted.repos).toHaveLength(1);
+		});
+
+		it("disconnecting the last installation clears every watched repo and tears down the persisted file", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/disconnect/555");
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ disconnected: 555, remaining: 0, reposRemoved: 1 });
+			// Disconnecting the last installation tears down the file the same way disconnect-all
+			// does, rather than leaving a near-empty `{"installations":[],"repos":[]}` behind.
+			await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+
+			const { body: statusBody } = await call(server, "GET", "/account/github/status");
+			expect(statusBody).toEqual({ connected: false, installations: [], repos: [] });
+		});
+
+		it("rejects a non-numeric installation id on disconnect", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const { refreshDeps } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/disconnect/not-a-number");
+
 			expect(status).toBe(400);
+			expect(body["error"]).toBe("Invalid installation id");
+			expect(refreshDeps.accountState.current.installations).toHaveLength(1);
+		});
+
+		it("rejects a negative installation id on disconnect", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/disconnect/-1");
+
+			expect(status).toBe(400);
+			expect(body["error"]).toBe("Invalid installation id");
 		});
 	});
 
-	it("disconnects a single installation, leaving the others (and their selection) untouched", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
-			installations: [
-				{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
-				{ installationId: 777, accountLogin: "octocat", accountType: "User", boundAt: "2026-06-30T00:00:00.000Z" },
-			],
-			selectedRepo: { owner: "octocat", name: "widgets", installationId: 777 },
+	describe("POST /disconnect-all", () => {
+		it("wipes every installation, every watched repo, and the persisted file", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [
+					{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+					{ installationId: 777, accountLogin: "octocat", accountType: "User", boundAt: "2026-06-30T00:00:00.000Z" },
+				],
+				repos: [
+					repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+					repoBindingFixture({ owner: "octocat", name: "other-repo", installationId: 777 }),
+				],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/disconnect-all");
+
+			expect(status).toBe(200);
+			expect(body).toEqual({ connected: false });
+			await expect(readFile(accountPath, "utf8")).rejects.toThrow();
 		});
-		await new Promise((resolve) => server.once("listening", resolve));
 
-		const { status, body } = await call(server, "POST", "/account/github/disconnect/555");
+		it("clears every watched repo, visible via GET /status", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
 
-		expect(status).toBe(200);
-		expect(body).toEqual({ disconnected: 555, remaining: 1 });
+			await call(server, "POST", "/account/github/disconnect-all");
+			const { body } = await call(server, "GET", "/account/github/status");
 
-		const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { installations: unknown[]; selectedRepo?: unknown };
-		expect(persisted.installations).toHaveLength(1);
-		expect(persisted.selectedRepo).toEqual({ owner: "octocat", name: "widgets", installationId: 777 });
-	});
-
-	it("disconnecting the installation backing the active selection clears the selection too", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
-			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
-			selectedRepo: { owner: "acme-corp", name: "widgets", installationId: 555 },
+			expect(body).toEqual({ connected: false, installations: [], repos: [] });
 		});
-		await new Promise((resolve) => server.once("listening", resolve));
 
-		const { status, body } = await call(server, "POST", "/account/github/disconnect/555");
+		it("does not resurrect cleared repos when reconnecting after disconnect-all", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
 
-		expect(status).toBe(200);
-		expect(body).toEqual({ disconnected: 555, remaining: 0 });
-		// Disconnecting the last installation tears down the file the same way disconnect-all
-		// does, rather than leaving a near-empty `{"installations":[]}` behind.
-		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
-	});
+			await call(server, "POST", "/account/github/disconnect-all");
 
-	it("rejects a non-numeric installation id on disconnect", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const { refreshDeps } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
-			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
-		});
-		await new Promise((resolve) => server.once("listening", resolve));
+			const start = await call(server, "POST", "/account/github/install/start");
+			const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
+			const { status, location } = await callRedirect(
+				server,
+				`/account/github/install/callback?installation_id=555&state=${state}`,
+				cookiePair(start.setCookie),
+			);
 
-		const { status, body } = await call(server, "POST", "/account/github/disconnect/not-a-number");
+			expect(status).toBe(302);
+			expect(location).toBe("/?account=connected");
 
-		expect(status).toBe(400);
-		expect(body["error"]).toBe("Invalid installation id");
-		expect(refreshDeps.accountState.current.installations).toHaveLength(1);
-	});
+			// Disconnect-all already wiped repos (see the test above) — re-binding the same
+			// installationId doesn't backfill them from anywhere, since there's no separate
+			// preferences store to restore watched repos from in this model.
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
+			expect(persisted["repos"]).toEqual([]);
 
-	it("rejects a negative installation id on disconnect", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
-			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
-		});
-		await new Promise((resolve) => server.once("listening", resolve));
-
-		const { status, body } = await call(server, "POST", "/account/github/disconnect/-1");
-
-		expect(status).toBe(400);
-		expect(body["error"]).toBe("Invalid installation id");
-	});
-
-	it("disconnect-all wipes every installation and the persisted file", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
-			installations: [
-				{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
-				{ installationId: 777, accountLogin: "octocat", accountType: "User", boundAt: "2026-06-30T00:00:00.000Z" },
-			],
-		});
-		await new Promise((resolve) => server.once("listening", resolve));
-
-		const { status, body } = await call(server, "POST", "/account/github/disconnect-all");
-
-		expect(status).toBe(200);
-		expect(body).toEqual({ connected: false });
-		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
-	});
-
-	it("clears the selected repo and auto-merge setting when disconnecting the last installation", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
-			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
-			selectedRepo: { owner: "acme-corp", name: "widgets", installationId: 555 },
-			autoMergeOnAccept: true,
-		});
-		await new Promise((resolve) => server.once("listening", resolve));
-
-		await call(server, "POST", "/account/github/disconnect/555");
-		const { body } = await call(server, "GET", "/account/github/status");
-
-		// Disconnecting the last installation tears the whole account-wide state down (same
-		// as disconnect-all) rather than leaving a near-empty `{"installations":[]}` behind —
-		// selectedRepo and autoMergeOnAccept both reset along with it. Only disconnecting one
-		// of several installations preserves the account-wide selection/setting (see the
-		// "leaving the others (and their selection) untouched" case above).
-		expect(body).toEqual({
-			connected: false,
-			installations: [],
-			selectedRepo: undefined,
-			autoMergeOnAccept: false,
-			flagConflictsForFleet: false,
-			enableDeepConflictInvestigation: false,
+			const { body } = await call(server, "GET", "/account/github/status");
+			expect(body).toEqual(expect.objectContaining({ connected: true, repos: [] }));
 		});
 	});
 
-	it("does not resurrect the cleared selection or auto-merge setting when reconnecting after the last installation was disconnected", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
-			installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
-			selectedRepo: { owner: "acme-corp", name: "widgets", installationId: 555 },
-			autoMergeOnAccept: true,
+	describe("GET /repos", () => {
+		it("returns the full watched-repos array as `selected`", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [
+					repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+					repoBindingFixture({ owner: "acme-corp", name: "gadgets", installationId: 555 }),
+				],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "GET", "/account/github/repos");
+
+			expect(status).toBe(200);
+			expect((body["selected"] as RepoBinding[]).map((r) => r.name).sort()).toEqual(["gadgets", "widgets"]);
 		});
-		await new Promise((resolve) => server.once("listening", resolve));
-
-		await call(server, "POST", "/account/github/disconnect/555");
-
-		const start = await call(server, "POST", "/account/github/install/start");
-		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
-		const { status, location } = await callRedirect(
-			server,
-			`/account/github/install/callback?installation_id=555&state=${state}`,
-			cookiePair(start.setCookie),
-		);
-
-		expect(status).toBe(302);
-		expect(location).toBe("/?account=connected");
-
-		// Disconnecting the last installation already wiped selectedRepo/autoMergeOnAccept
-		// (see the test above) — re-binding the same installationId doesn't backfill them from
-		// anywhere, since there's no separate preferences store to restore from in this model.
-		const persisted = JSON.parse(await readFile(accountPath, "utf8")) as Record<string, unknown>;
-		expect(persisted["selectedRepo"]).toBeUndefined();
-		expect(persisted["autoMergeOnAccept"]).toBeUndefined();
-
-		const { body } = await call(server, "GET", "/account/github/status");
-		expect(body).toEqual(
-			expect.objectContaining({
-				connected: true,
-				autoMergeOnAccept: false,
-			}),
-		);
-		expect(body["selectedRepo"]).toBeUndefined();
 	});
 
 	describe("GET /available-installations", () => {
 		it("reports needsReconnect when no user token is cached for the requester", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, undefined, undefined, undefined, "octocat");
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, undefined, undefined, "octocat");
 			await new Promise((resolve) => server.once("listening", resolve));
 
 			const { status, body } = await call(server, "GET", "/account/github/available-installations");
@@ -1197,7 +1460,6 @@ const { accountPath } = setup(async () => []);
 				async () => [],
 				new StubGitHubClient(),
 				new StubLlmProvider(),
-				undefined,
 				undefined,
 				undefined,
 				undefined,
@@ -1224,8 +1486,10 @@ const { accountPath } = setup(async () => []);
 				async () => [],
 				new StubGitHubClient(),
 				new StubLlmProvider(),
-				{ installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }] },
-				undefined,
+				{
+					installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+					repos: [],
+				},
 				undefined,
 				undefined,
 				"octocat",

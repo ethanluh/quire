@@ -213,19 +213,19 @@ async function main(): Promise<void> {
 	// ones actively browsing) so a teammate's repo stays in sync even while they're away.
 	const reconcileTimer = setInterval(() => {
 		for (const tenant of registry.all()) {
-			const repo = tenant.accountState.current.selectedRepo;
-			if (repo === undefined) continue;
-			enqueueRefresh(repo.owner, repo.name, tenant.refreshDeps).catch((err: unknown) => {
-				if (err instanceof InstallationRevokedError) {
-					console.warn(`Reconciliation poll paused for ${tenant.teamId} (${repo.owner}/${repo.name}): ${err.message}`);
-					return;
-				}
-				if (err instanceof AccountChangedError) {
-					console.warn(`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
-					return;
-				}
-				console.error(`Reconciliation poll failed for ${tenant.teamId} (${repo.owner}/${repo.name}):`, err);
-			});
+			for (const repo of tenant.accountState.current.repos) {
+				enqueueRefresh(repo.owner, repo.name, tenant.refreshDeps).catch((err: unknown) => {
+					if (err instanceof InstallationRevokedError) {
+						console.warn(`Reconciliation poll paused for ${tenant.teamId} (${repo.owner}/${repo.name}): ${err.message}`);
+						return;
+					}
+					if (err instanceof AccountChangedError) {
+						console.warn(`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
+						return;
+					}
+					console.error(`Reconciliation poll failed for ${tenant.teamId} (${repo.owner}/${repo.name}):`, err);
+				});
+			}
 		}
 	}, RECONCILE_INTERVAL_MS);
 	reconcileTimer.unref();

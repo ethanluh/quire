@@ -60,10 +60,21 @@ function makeBundle(id: string): Bundle {
 	};
 }
 
+// autoMergeOnAccept lives per-repo now — attached to "org/repo" (see makeBundle) so the
+// gating logic's per-bundle repo lookup finds it.
 function makeAccount(overrides: { autoMergeOnAccept?: boolean } = {}): InstallationAccountState {
 	return {
 		installations: [{ installationId: 1, accountLogin: "test-user", accountType: "User", boundAt: new Date(0).toISOString() }],
-		...overrides,
+		repos: [
+			{
+				owner: "org",
+				name: "repo",
+				installationId: 1,
+				addedAt: new Date(0).toISOString(),
+				addedBy: "test-user",
+				...overrides,
+			},
+		],
 	};
 }
 

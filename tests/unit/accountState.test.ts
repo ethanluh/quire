@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@jest/globals";
-import { createAccountState, activeInstallation } from "../../src/interface/server/accountState.js";
-import type { InstallationBinding } from "../../src/engine/github/installation.js";
+import { createAccountState, installationForRepo, repoBinding } from "../../src/interface/server/accountState.js";
+import type { InstallationBinding, RepoBinding } from "../../src/engine/github/installation.js";
 
 const BINDING_A: InstallationBinding = {
 	installationId: 42,
@@ -16,15 +16,19 @@ const BINDING_B: InstallationBinding = {
 	boundAt: "2026-06-30T00:00:00.000Z",
 };
 
+function repo(overrides: Partial<RepoBinding> = {}): RepoBinding {
+	return { owner: "octocat", name: "widgets", installationId: 42, addedAt: "2026-06-30T00:00:00.000Z", addedBy: "alice", ...overrides };
+}
+
 describe("createAccountState", () => {
-	it("defaults to an empty installations list when given no initial state", () => {
+	it("defaults to an empty installations/repos list when given no initial state", () => {
 		const state = createAccountState(undefined);
 
-		expect(state.current).toEqual({ installations: [] });
+		expect(state.current).toEqual({ installations: [], repos: [] });
 	});
 
 	it("preserves an initial state as-is", () => {
-		const initial = { installations: [BINDING_A], selectedRepo: { owner: "octocat", name: "widgets", installationId: 42 } };
+		const initial = { installations: [BINDING_A], repos: [repo()] };
 
 		const state = createAccountState(initial);
 
@@ -32,26 +36,33 @@ describe("createAccountState", () => {
 	});
 });
 
-describe("activeInstallation", () => {
-	it("returns undefined when nothing is selected", () => {
-		expect(activeInstallation({ installations: [BINDING_A, BINDING_B] })).toBeUndefined();
+describe("repoBinding", () => {
+	it("returns undefined when the repo isn't watched", () => {
+		expect(repoBinding({ installations: [BINDING_A], repos: [] }, "octocat", "widgets")).toBeUndefined();
 	});
 
-	it("returns the installation backing the selected repo, among several bound installations", () => {
-		const state = {
-			installations: [BINDING_A, BINDING_B],
-			selectedRepo: { owner: "acme-corp", name: "widgets", installationId: 43 },
-		};
+	it("returns the matching binding among several watched repos", () => {
+		const acmeRepo = repo({ owner: "acme-corp", name: "gadgets", installationId: 43 });
+		const state = { installations: [BINDING_A, BINDING_B], repos: [repo(), acmeRepo] };
 
-		expect(activeInstallation(state)).toEqual(BINDING_B);
+		expect(repoBinding(state, "acme-corp", "gadgets")).toEqual(acmeRepo);
+	});
+});
+
+describe("installationForRepo", () => {
+	it("returns undefined when the repo isn't watched", () => {
+		expect(installationForRepo({ installations: [BINDING_A, BINDING_B], repos: [] }, "octocat", "widgets")).toBeUndefined();
 	});
 
-	it("returns undefined when the selection's owning installation is no longer bound", () => {
-		const state = {
-			installations: [BINDING_A],
-			selectedRepo: { owner: "acme-corp", name: "widgets", installationId: 43 },
-		};
+	it("returns the installation backing a watched repo, among several bound installations", () => {
+		const state = { installations: [BINDING_A, BINDING_B], repos: [repo({ owner: "acme-corp", name: "widgets", installationId: 43 })] };
 
-		expect(activeInstallation(state)).toBeUndefined();
+		expect(installationForRepo(state, "acme-corp", "widgets")).toEqual(BINDING_B);
+	});
+
+	it("returns undefined when the repo's owning installation is no longer bound", () => {
+		const state = { installations: [BINDING_A], repos: [repo({ owner: "acme-corp", name: "widgets", installationId: 43 })] };
+
+		expect(installationForRepo(state, "acme-corp", "widgets")).toBeUndefined();
 	});
 });

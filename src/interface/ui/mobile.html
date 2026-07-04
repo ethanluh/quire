@@ -155,6 +155,21 @@
     color: var(--color-text-muted); margin-bottom: var(--space-3); cursor: pointer;
   }
   .auto-merge-toggle input { width: auto; max-width: none; margin: 0; }
+  .watched-repo-row {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+  .watched-repo-row .auto-merge-toggle:last-child { margin-bottom: 0; }
+  .watched-repo-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-2);
+  }
+  .watched-repo-header .repo-name { font-weight: var(--weight-medium); }
   .repo-search { margin-bottom: var(--space-3); }
   .repo-list { display: flex; flex-direction: column; gap: var(--space-2); }
   .repo-entry {
@@ -360,19 +375,8 @@
         <div id="account-result" class="result-msg" style="display:none"></div>
 
         <div class="repo-panel" id="repo-panel" style="display:none">
-          <h3>Repository to work on</h3>
-          <label class="auto-merge-toggle">
-            <input type="checkbox" id="chk-auto-merge">
-            Automatically merge accepted bundles (skips the manual "Process next" step)
-          </label>
-          <label class="auto-merge-toggle">
-            <input type="checkbox" id="chk-flag-conflicts-for-fleet">
-            Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
-          </label>
-          <label class="auto-merge-toggle">
-            <input type="checkbox" id="chk-deep-investigation">
-            Escalate unresolved merge conflicts to a Quire-hosted deep investigation (requires an Anthropic API key connected below)
-          </label>
+          <h3>Repositories to work on</h3>
+          <div id="watched-repos-list"></div>
           <div id="sorting-notice" class="result-msg" style="display:none">
             Starred/pinned sorting is unavailable — reconnect GitHub to restore it.
             <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
@@ -1124,6 +1128,68 @@ accountDisconnectAllBtn.addEventListener('click', async () => {
   loadAccount();
 });
 
+// A team can watch several repos at once, each with its own auto-merge/flag-conflicts/
+// deep-investigation settings — one row per repo instead of one global checkbox row.
+function watchedRepoRowHtml(repo) {
+  const settingsDisabled = isOwner() ? '' : 'disabled';
+  const removeDisabled = canManageMembers() ? '' : 'disabled';
+  return `<div class="watched-repo-row" data-owner="${escapeHtml(repo.owner)}" data-name="${escapeHtml(repo.name)}">
+    <div class="watched-repo-header">
+      <span class="repo-name">${escapeHtml(repo.owner)}/${escapeHtml(repo.name)}</span>
+      <button class="btn btn-reject btn-remove-repo" ${removeDisabled}>Remove</button>
+    </div>
+    <label class="auto-merge-toggle">
+      <input type="checkbox" class="chk-repo-setting" data-setting="autoMergeOnAccept" ${repo.autoMergeOnAccept ? 'checked' : ''} ${settingsDisabled}>
+      Automatically merge accepted bundles (skips the manual "Process next" step)
+    </label>
+    <label class="auto-merge-toggle">
+      <input type="checkbox" class="chk-repo-setting" data-setting="flagConflictsForFleet" ${repo.flagConflictsForFleet ? 'checked' : ''} ${settingsDisabled}>
+      Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
+    </label>
+    <label class="auto-merge-toggle">
+      <input type="checkbox" class="chk-repo-setting" data-setting="enableDeepConflictInvestigation" ${repo.enableDeepConflictInvestigation ? 'checked' : ''} ${settingsDisabled}>
+      Escalate unresolved merge conflicts to a Quire-hosted deep investigation (requires an Anthropic API key connected below)
+    </label>
+  </div>`;
+}
+
+function renderWatchedRepos(repos) {
+  const el = document.getElementById('watched-repos-list');
+  el.innerHTML = repos.length
+    ? repos.map(watchedRepoRowHtml).join('')
+    : '<div class="empty">No repos selected yet — pick one below.</div>';
+}
+
+async function updateRepoSetting(row) {
+  const checkboxes = [...row.querySelectorAll('.chk-repo-setting')];
+  checkboxes.forEach((cb) => { cb.disabled = true; });
+  try {
+    const body = {};
+    checkboxes.forEach((cb) => { body[cb.dataset.setting] = cb.checked; });
+    await api('POST', `/account/github/repos/${encodeURIComponent(row.dataset.owner)}/${encodeURIComponent(row.dataset.name)}/settings`, body);
+  } finally {
+    checkboxes.forEach((cb) => { cb.disabled = !isOwner(); });
+  }
+}
+
+async function removeRepo(owner, name) {
+  if (!confirm(`Stop watching ${owner}/${name}? Its review queue and merge queue entries will be cleared.`)) return;
+  await api('DELETE', `/account/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, undefined);
+  await loadAccount();
+  loadReview();
+}
+
+document.getElementById('watched-repos-list').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('chk-repo-setting')) return;
+  updateRepoSetting(e.target.closest('.watched-repo-row'));
+});
+
+document.getElementById('watched-repos-list').addEventListener('click', (e) => {
+  if (!e.target.classList.contains('btn-remove-repo')) return;
+  const row = e.target.closest('.watched-repo-row');
+  removeRepo(row.dataset.owner, row.dataset.name);
+});
+
 async function loadAccount() {
   const statusEl = document.getElementById('account-status');
   const resultEl = document.getElementById('account-result');
@@ -1132,6 +1198,7 @@ async function loadAccount() {
   resultEl.style.display = 'none';
   const status = await api('GET', '/account/github/status');
   loadedInstallations = status.installations || [];
+  const watchedRepos = status.repos || [];
   installBtn.disabled = false;
   if (status.connected) {
     statusEl.textContent = `Connected to ${loadedInstallations.length} installation${loadedInstallations.length === 1 ? '' : 's'}:`;
@@ -1139,13 +1206,11 @@ async function loadAccount() {
     copyEl.textContent = 'Install on another organization or account.';
     accountDisconnectAllBtn.style.display = 'block';
     repoPanel.style.display = 'block';
-    document.getElementById('chk-auto-merge').checked = status.autoMergeOnAccept ?? false;
-    document.getElementById('chk-flag-conflicts-for-fleet').checked = status.flagConflictsForFleet ?? false;
-    document.getElementById('chk-deep-investigation').checked = status.enableDeepConflictInvestigation ?? false;
-    loadRepos(status.selectedRepo);
+    renderWatchedRepos(watchedRepos);
+    loadRepos(watchedRepos);
   } else {
-    statusEl.textContent = status.selectedRepo
-      ? `Not connected. Will resume watching ${status.selectedRepo.owner}/${status.selectedRepo.name} once reconnected.`
+    statusEl.textContent = watchedRepos.length
+      ? `Not connected. Will resume watching ${watchedRepos.map((r) => `${r.owner}/${r.name}`).join(', ')} once reconnected.`
       : 'Not connected.';
     listEl.innerHTML = '';
     copyEl.textContent = 'Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.';
@@ -1153,39 +1218,6 @@ async function loadAccount() {
     repoPanel.style.display = 'none';
   }
 }
-
-const ACCOUNT_SETTING_CHECKBOX_IDS = {
-  autoMergeOnAccept: 'chk-auto-merge',
-  flagConflictsForFleet: 'chk-flag-conflicts-for-fleet',
-  enableDeepConflictInvestigation: 'chk-deep-investigation',
-};
-
-async function updateAccountSetting(key, value) {
-  const checkbox = document.getElementById(ACCOUNT_SETTING_CHECKBOX_IDS[key]);
-  checkbox.disabled = true;
-  try {
-    const body = {};
-    for (const [settingKey, elementId] of Object.entries(ACCOUNT_SETTING_CHECKBOX_IDS)) {
-      body[settingKey] = document.getElementById(elementId).checked;
-    }
-    body[key] = value;
-    await api('POST', '/account/github/settings', body);
-  } finally {
-    checkbox.disabled = false;
-  }
-}
-
-document.getElementById('chk-auto-merge').addEventListener('change', (e) => {
-  updateAccountSetting('autoMergeOnAccept', e.target.checked);
-});
-
-document.getElementById('chk-flag-conflicts-for-fleet').addEventListener('change', (e) => {
-  updateAccountSetting('flagConflictsForFleet', e.target.checked);
-});
-
-document.getElementById('chk-deep-investigation').addEventListener('change', (e) => {
-  updateAccountSetting('enableDeepConflictInvestigation', e.target.checked);
-});
 
 installBtn.addEventListener('click', async () => {
   installBtn.disabled = true;
@@ -1312,7 +1344,8 @@ async function removeMember(login) {
 // /account/team/invite) — kept in sync with canManageMembers() for the same reason.
 function applyRoleVisibility() {
   document.getElementById('btn-process').style.display = isOwner() ? 'inline-block' : 'none';
-  document.getElementById('chk-auto-merge').disabled = !isOwner();
+  document.querySelectorAll('.chk-repo-setting').forEach((el) => { el.disabled = !isOwner(); });
+  document.querySelectorAll('.btn-remove-repo').forEach((el) => { el.disabled = !canManageMembers(); });
   document.getElementById('team-name-input').disabled = !canManageMembers();
   document.getElementById('btn-team-rename').style.display = canManageMembers() ? 'inline-block' : 'none';
   document.getElementById('btn-team-invite').style.display = canManageMembers() ? 'inline-block' : 'none';
@@ -1419,21 +1452,21 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
   showTeamResult(result.error ? 'Could not join team: ' + result.error : `Joined ${result.name}.`, Boolean(result.error));
 })();
 
-function repoHtml(repo, selectedRepo) {
-  const isSelected = selectedRepo && selectedRepo.owner === repo.owner && selectedRepo.name === repo.name && selectedRepo.installationId === repo.installationId;
+function repoHtml(repo, watchedRepos) {
+  const isWatched = watchedRepos.some((w) => w.owner === repo.owner && w.name === repo.name && w.installationId === repo.installationId);
   const privacyBadge = `<span class="badge badge-neutral badge-private">${repo.private ? 'Private' : 'Public'}</span>`;
   const isTarget = repoSelectionTarget && repoSelectionTarget.owner === repo.owner && repoSelectionTarget.name === repo.name && repoSelectionTarget.installationId === repo.installationId;
-  return `<div class="repo-entry${isSelected ? ' selected' : ''}">
+  return `<div class="repo-entry${isWatched ? ' selected' : ''}">
     ${privacyBadge}
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
-    ${isSelected
-      ? '<span class="badge badge-clean">Selected</span>'
-      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}',${repo.installationId})">${isTarget ? 'Selecting…' : 'Select'}</button>`}
+    ${isWatched
+      ? '<span class="badge badge-clean">Watched</span>'
+      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}',${repo.installationId})">${isTarget ? 'Adding…' : 'Add'}</button>`}
   </div>`;
 }
 
 let loadedRepos = [];
-let loadedSelectedRepo = null;
+let loadedWatchedRepos = [];
 let repoSelectionInProgress = false;
 let repoSelectionTarget = null;
 
@@ -1448,20 +1481,20 @@ function renderRepoList() {
   } else if (!repos.length) {
     listEl.innerHTML = '<div class="empty">No repos match your search.</div>';
   } else if (loadedInstallations.length <= 1) {
-    listEl.innerHTML = repos.map((r) => repoHtml(r, loadedSelectedRepo)).join('');
+    listEl.innerHTML = repos.map((r) => repoHtml(r, loadedWatchedRepos)).join('');
   } else {
     listEl.innerHTML = loadedInstallations
       .map((installation) => {
         const groupRepos = repos.filter((r) => r.installationId === installation.installationId);
         if (!groupRepos.length) return '';
         return `<div class="repo-group-header">${escapeHtml(installation.accountLogin)}</div>`
-          + groupRepos.map((r) => repoHtml(r, loadedSelectedRepo)).join('');
+          + groupRepos.map((r) => repoHtml(r, loadedWatchedRepos)).join('');
       })
       .join('');
   }
 }
 
-async function loadRepos(selectedRepo) {
+async function loadRepos(watchedRepos) {
   const listEl = document.getElementById('repo-list');
   const warningEl = document.getElementById('repo-list-warning');
   const result = await api('GET', '/account/github/repos', undefined);
@@ -1471,7 +1504,7 @@ async function loadRepos(selectedRepo) {
     return;
   }
   loadedRepos = result.repos || [];
-  loadedSelectedRepo = result.selected || selectedRepo;
+  loadedWatchedRepos = result.selected || watchedRepos || [];
   document.getElementById('sorting-notice').style.display = result.sortingAvailable ? 'none' : 'block';
   renderRepoList();
   const failedAccounts = result.failedAccounts || [];
