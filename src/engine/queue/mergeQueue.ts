@@ -303,7 +303,7 @@ export class MergeQueue {
 
 	// Floats "landed" entries to the top, most recently landed first, so a bundle that just
 	// merged is visible without scrolling past everything still queued behind it. Every other
-	// status keeps its existing relative (insertion) order beneath the landed group. This is a
+	// status is sorted most-recently-enqueued first beneath the landed group. This is a
 	// display-only sort — it reads this.state.entries, it never writes it, and dequeueNextLocked/
 	// refreshQueuedBranches/pollInvestigationsLocked all read this.state.entries directly rather
 	// than through here, so actual processing order is untouched.
@@ -311,7 +311,9 @@ export class MergeQueue {
 		const landed = this.state.entries
 			.filter((e) => e.status === "landed")
 			.sort((a, b) => (b.landedAt ?? "").localeCompare(a.landedAt ?? ""));
-		const rest = this.state.entries.filter((e) => e.status !== "landed");
+		const rest = this.state.entries
+			.filter((e) => e.status !== "landed")
+			.sort((a, b) => (b.enqueuedAt ?? "").localeCompare(a.enqueuedAt ?? ""));
 		return [...landed, ...rest];
 	}
 
