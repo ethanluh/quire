@@ -4,13 +4,13 @@ import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
 const EMPTY_STATE: PrCacheState = { effects: [], embeddings: [] };
 
 function isPrCacheState(value: unknown): value is PrCacheState {
+	if (typeof value !== "object" || value === null) return false;
+	const record = value as Record<string, unknown>;
 	return (
-		typeof value === "object" &&
-		value !== null &&
-		"effects" in value &&
-		Array.isArray((value as Record<string, unknown>)["effects"]) &&
-		"embeddings" in value &&
-		Array.isArray((value as Record<string, unknown>)["embeddings"])
+		"effects" in record &&
+		Array.isArray(record["effects"]) &&
+		"embeddings" in record &&
+		Array.isArray(record["embeddings"])
 	);
 }
 

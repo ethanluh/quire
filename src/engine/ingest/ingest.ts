@@ -1,17 +1,14 @@
 import type { PullRequest } from "../types/core.js";
 import { IncomingPRSchema, type IncomingPR } from "./schema.js";
 
-const TEST_LINE_RE = /^\+\s*(it|test|describe)\s*\(/;
 const TEST_NAME_RE = /^\+\s*(?:it|test|describe)\s*\(\s*["'`]([^"'`]+)["'`]/;
 const TEST_FILE_RE = /\.(test|spec)\.[jt]sx?$/;
 
 function extractTestNames(raw: string): ReadonlyArray<string> {
 	const names: string[] = [];
 	for (const line of raw.split("\n")) {
-		if (TEST_LINE_RE.test(line)) {
-			const m = TEST_NAME_RE.exec(line);
-			if (m?.[1] !== undefined) names.push(m[1]);
-		}
+		const m = TEST_NAME_RE.exec(line);
+		if (m?.[1] !== undefined) names.push(m[1]);
 	}
 	return names;
 }

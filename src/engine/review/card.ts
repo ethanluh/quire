@@ -23,16 +23,8 @@ export function buildReviewCard(
 	driftVerdicts: ReadonlyMap<string, DriftVerdict>,
 ): ReviewCard {
 	const memberVerdicts = bundle.members.map((m) => driftVerdicts.get(m.id));
-	const anyFlagged = memberVerdicts.some((v) => v?.status === "flagged");
-
-	const drift: DriftVerdict = anyFlagged
-		? {
-				status: "flagged",
-				signals: memberVerdicts
-					.filter((v): v is Extract<DriftVerdict, { status: "flagged" }> => v?.status === "flagged")
-					.flatMap((v) => [...v.signals]),
-			}
-		: { status: "clean" };
+	const signals = memberVerdicts.flatMap((v) => (v?.status === "flagged" ? [...v.signals] : []));
+	const drift: DriftVerdict = signals.length > 0 ? { status: "flagged", signals } : { status: "clean" };
 
 	return {
 		bundleId: bundle.id,
