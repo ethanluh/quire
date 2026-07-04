@@ -6,6 +6,15 @@ import type { TeamStore } from "../../engine/team/teamStore.js";
 const LEGACY_FILES = ["installation.json", "queue.json", "decided-prs.json", "pr-cache.json", "llm-account.json"];
 const LEGACY_INSTRUMENTATION_FILES = ["defers.ndjson", "gate-decisions.ndjson", "drift-screen.ndjson", "audit.ndjson"];
 
+// Move (never copy) each named file that exists from one dir to another, sequentially —
+// a crash mid-migration can't leave a half-copied duplicate on disk.
+async function moveExisting(files: ReadonlyArray<string>, fromDir: string, toDir: string): Promise<void> {
+	for (const file of files) {
+		const from = join(fromDir, file);
+		if (existsSync(from)) await rename(from, join(toDir, file));
+	}
+}
+
 // data/github-account.json is a leftover from the pre-GitHub-App PAT login model (see
 // README/CLAUDE.md) — nothing still reads it for auth, but it's the one file that ever
 // recorded whose account this data belongs to, so it's the best source for attributing
@@ -53,18 +62,12 @@ export async function migrateLegacyData(dataDir: string, teamStore: TeamStore, a
 	const team = await teamStore.createTeamForLogin(login, `${login}'s team`);
 	const teamDir = join(dataDir, "teams", team.teamId);
 
-	for (const file of LEGACY_FILES) {
-		const from = join(dataDir, file);
-		if (existsSync(from)) await rename(from, join(teamDir, file));
-	}
+	await moveExisting(LEGACY_FILES, dataDir, teamDir);
 
 	const legacyInstrumentationDir = join(dataDir, "instrumentation");
 	if (LEGACY_INSTRUMENTATION_FILES.some((file) => existsSync(join(legacyInstrumentationDir, file)))) {
 		await mkdir(join(teamDir, "instrumentation"), { recursive: true });
-		for (const file of LEGACY_INSTRUMENTATION_FILES) {
-			const from = join(legacyInstrumentationDir, file);
-			if (existsSync(from)) await rename(from, join(teamDir, "instrumentation", file));
-		}
+		await moveExisting(LEGACY_INSTRUMENTATION_FILES, legacyInstrumentationDir, join(teamDir, "instrumentation"));
 	}
 
 	console.log(`Migrated pre-team data for ${login} into data/teams/${team.teamId}/`);
