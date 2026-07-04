@@ -8,14 +8,13 @@ import { loadInstallation } from "../../engine/github/installation.js";
 import {
 	buildInstallationClient,
 	buildInstallationOctokit,
-	buildUserOctokit,
 	getInstallationAccount,
 	listInstallationsForUser,
 	mintScopedRepoToken,
 } from "../../engine/github/installationClient.js";
 import type { GitHubAppConfig } from "../../engine/github/installationClient.js";
 import type { OAuthDeps } from "../../engine/github/oauth.js";
-import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../engine/github/repos.js";
+import { listInstallationRepositories } from "../../engine/github/repos.js";
 import type { RepoSummary } from "../../engine/github/repos.js";
 import type { UserTokenCache } from "../../engine/github/userTokenCache.js";
 import type { TeamStore } from "../../engine/team/teamStore.js";
