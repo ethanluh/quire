@@ -6,7 +6,10 @@ installation, LLM key, settings). [PR #148](https://github.com/ethanluh/quire/pu
 replaced that with a team model — this doc describes what actually shipped,
 not an aspirational design. Where the shipped behavior differs from what was
 originally proposed, that's called out explicitly in "Known gaps" below
-rather than glossed over.
+rather than glossed over. A first pass of this doc (immediately after #148)
+listed five gaps against the original proposal; four have since been closed
+by follow-up PRs (#154, #156, #157, #161) and are folded into the sections
+below instead of staying in the gap list.
 
 ## Architecture: team replaces login as the tenant key
 
@@ -22,23 +25,47 @@ Every request goes through `requireSession` (verifies the login) then
 auto-provisions a personal team-of-one on a login's very first request, so
 no route ever has to handle a "this user has no team" state.
 
-**A team still has exactly one repo, one installation set, one queue** —
-this did *not* become a multi-repo-per-team model. `InstallationAccountState`
-(`installations[]`, `selectedRepo`, `autoMergeOnAccept`,
-`flagConflictsForFleet`) moved from `data/users/<login>/installation.json` to
-`data/teams/<teamId>/installation.json` verbatim, unchanged in shape. If a
-team wants to work a second repo, that's not supported today — see "Known
-gaps."
+### A team can watch several repos, each with its own settings
+
+Originally a team had exactly one repo, one installation set, one queue
+([PR #161](https://github.com/ethanluh/quire/pull/161) closed this gap).
+`InstallationAccountState` (`installations[]`, `repos[]`) still lives at
+`data/teams/<teamId>/installation.json`, but `repos[]` replaces the old
+singular `selectedRepo?` — each `RepoBinding` carries its own
+`autoMergeOnAccept`/`flagConflictsForFleet`/`enableDeepConflictInvestigation`
+(a team can want auto-merge on for a low-stakes repo and off for a critical
+one), plus `addedAt`/`addedBy` for audit.
+
+`MergeQueue`/`DecidedPrStore`/`ServerState`/`AuditStore`/`PrEffectCache` stay
+**one shared instance per team**, not one per repo — a bundle's members
+already carry their own `repoOwner`/`repoName`, so nothing about holding
+several repos' PRs in one set of maps needed to change. What *did* need to
+become repo-aware: a new `MultiRepoGitHubClient` (held by the existing
+`GitHubClientHolder`) resolves the right per-installation API client live, on
+every call, off `accountState.current.repos` — every `GitHubClient` method
+already took `owner`/`repo` as its first two arguments, so this one
+dispatching layer made the entire existing single-client call graph
+(`MergeQueue`, `gesturesRouter`, ingestion) multi-repo-correct without
+changing any of those call sites. Selecting or disconnecting a repo no longer
+needs to repoint a shared client at all, which also simplified those routes.
+
+`POST /repos/select` is additive now (409 if the repo's already watched,
+instead of replacing a single slot); `DELETE /repos/:owner/:name` removes one
+without touching the others; the old team-wide `POST /settings` became
+`POST /repos/:owner/:name/settings` (still owner-only). Disconnecting an
+installation orphans (and tears down the queue for) every repo bound through
+it, not just a single "active" one.
 
 ### Disk layout
 
 ```
 data/teams/<teamId>/
   team.json                  # { teamId, name, createdAt, createdBy }
-  members.json               # TeamMembership[] — { login, teamId, role, joinedAt }
-  installation.json          # InstallationAccountState — unchanged shape, just team-scoped now
+  members.json               # TeamMember[] — { login, teamId, role, status, invitedBy, invitedAt, joinedAt? }
+  invites.json               # InviteRecord[] — { id, invitedBy, issuedAt, expiresAt, redeemedBy?, redeemedAt?, revokedAt? }
+  installation.json          # InstallationAccountState — installations[] + repos[] (each RepoBinding carries its own settings)
   llm-account.json           # ConnectedLlmAccount — one shared key per team
-  queue.json
+  queue.json                 # shared across every repo the team watches
   decided-prs.json
   pr-cache.json
   instrumentation/*.ndjson
@@ -65,7 +92,12 @@ at startup: for every `data/users/<login>/` directory that predates the team
 feature, it creates a personal team, moves `installation.json`/
 `llm-account.json`/`queue.json`/`decided-prs.json`/`pr-cache.json`/
 `instrumentation/*` into it, and writes the login's `membership.json`
-pointer. Idempotent — safe to run on every boot.
+pointer. Idempotent — safe to run on every boot. There is no equivalent
+migration for the later `selectedRepo` → `repos[]` reshape — consistent with
+this codebase's existing "no migration from the old single-binding shape"
+precedent (`installation.ts`), an old-format `installation.json` simply fails
+the type guard and loads as no installations; a team re-adds its repo once
+after that deploy.
 
 ## Membership: a login can belong to several teams, with one active at a time
 
@@ -96,33 +128,42 @@ team without destroying the first, and "add it to your list, pick which one
 is active" is a smaller, more general mechanism than "retire your personal
 team and hope you never want it back."
 
-## Invites: signed links, not invite-by-login rows
+## Invites: signed links, tracked as records, with a selectable role
 
-Also a departure from the original proposal (which specified inviting a
-teammate by typing their GitHub login before they'd ever signed in). What
-shipped:
+Originally a departure from the original proposal (which specified inviting
+a teammate by typing their GitHub login before they'd ever signed in, with a
+role chosen at invite time and a visible "pending" roster row). What shipped,
+after [PR #156](https://github.com/ethanluh/quire/pull/156) and
+[PR #157](https://github.com/ethanluh/quire/pull/157) closed two of the
+original gaps here:
 
-- `POST /team/invite` (owner/admin only) mints a signed, expiring token
-  (`src/interface/server/invite.ts`, `signedToken.ts` — same
-  base64url-JSON + HMAC-SHA256 shape as session cookies, 7-day TTL) and
-  returns a URL: `<publicUrl>/?joinTeam=<token>`.
-- The inviter shares that URL out-of-band (Slack, etc.) — there's no
-  invite-by-login roster entry, no "pending" row visible before someone
-  actually redeems the link.
-- `POST /team/join { token }` verifies the token, and if the caller isn't
-  already a member, adds them with a **fixed role of `member`** — the
-  inviter cannot pre-select `admin` at invite time. Promoting someone
-  after they join is a separate step (`POST /team/members/:login/role`).
-- Redeeming a join updates the joining login's `membership.json` to add the
-  new `teamId` to `teamIds` and set it as `activeTeamId`.
+- `POST /team/invite` (owner/admin only) accepts an optional
+  `{ role: "admin" | "member" }` (defaults to `"member"`; `"owner"` is
+  rejected — top-level custody is always a separate, explicit transfer) and
+  mints a signed, expiring token (`src/interface/server/invite.ts`,
+  `signedToken.ts` — same base64url-JSON + HMAC-SHA256 shape as session
+  cookies, 7-day TTL) carrying that role plus a fresh `id`. Returns a URL:
+  `<publicUrl>/?joinTeam=<token>`.
+- The invite is also persisted as an `InviteRecord` in the team's
+  `invites.json`, correlated to the token by that `id`. `GET /team/invites`
+  (owner/admin) lists every invite ever minted with a derived status —
+  `pending`, `redeemed`, `revoked`, or `expired` — closing the original
+  "who have I invited that hasn't joined yet" gap.
+- `DELETE /team/invites/:id` (owner/admin) revokes a still-pending invite;
+  `POST /team/join` checks this before honoring an otherwise-still-valid
+  token, so a revoked link stops working without needing to rotate the
+  shared session secret every other signed link relies on.
+- `POST /team/join { token }` verifies the token, applies its role if the
+  caller isn't already a member, marks the matching `InviteRecord` redeemed,
+  and updates the joining login's `membership.json` to add the new `teamId`
+  to `teamIds` and set it as `activeTeamId`.
 
-This is a smaller, more GitHub-Gist-link-like mechanism than the
-originally-proposed roster-based invite, and it sidesteps needing to
-validate/case-fold a typed GitHub login against a real account before
-that account has ever signed in. The tradeoff: there's no way to see "who
-have I invited that hasn't joined yet" the way a persisted `status: "invited"`
-row would have given you — an unredeemed link is just a token nobody's
-used, invisible to the roster view.
+This is still a smaller, more GitHub-Gist-link-like mechanism than the
+originally-proposed roster-based invite (there's no way to invite a login
+that has no way to receive the link out-of-band), but the persisted
+`InviteRecord` closes the practical gap that mechanism left: an owner/admin
+can now see and manage outstanding invites without waiting for someone to
+redeem one.
 
 Session secret persistence (`sessionSecret.ts`) is a direct consequence of
 invite links being signed with the same secret as session cookies: the
@@ -131,18 +172,46 @@ env var still overrides it) rather than re-randomized on every process
 restart, so an outstanding invite link surviving a deploy doesn't
 mysteriously start failing signature verification.
 
+## Assignment and gesture gating
+
+Also closed since the first pass of this doc
+([PR #154](https://github.com/ethanluh/quire/pull/154)): bundles can now be
+assigned, and an assignment gates who may gesture on one.
+
+- `Bundle` gained `assignedTo`/`assignedAt`/`assignedBy` — bundle-level only
+  (no per-PR assignee field), matching this tool's central premise of one
+  directional decision per bundle.
+- Gesturing on an unassigned bundle (or one already assigned to you)
+  self-assigns it as part of the same request — there's no separate "claim"
+  step required before acting.
+- Gesturing on a bundle assigned to someone else: 403 for a plain member,
+  409 for an owner/admin (retry with `?force=true` to override — the
+  primary UI affordance is "reassign to me" rather than force, which exists
+  as an emergency escape hatch).
+- `POST /bundles/:id/assign` / `DELETE /bundles/:id/assign` allow explicit
+  hand-routing outside of gesturing — self-assign is always allowed;
+  assigning to or unassigning someone else requires owner/admin.
+- `DecidedPrEntry` (the audit trail) gained `decidedBy`, `bundleId`,
+  `wasAssignedTo`, and `overrodeAssignment`, so a force-override is visible
+  after the fact.
+
 ## Roles and the actual permission matrix
 
 Three roles: `owner`, `admin`, `member`. Verified directly against every
-`requireRole(...)` call site in the shipped code:
+`requireRole(...)` call site (and the inline checks in `gestures.ts`/
+`assignments.ts`) in the shipped code:
 
 | Action | Owner | Admin | Member |
 |---|:---:|:---:|:---:|
 | Rename team (`PATCH /team`) | Y | Y | N |
-| Invite a member (`POST /team/invite`) | Y | Y | N |
+| Invite a member, any role up to admin (`POST /team/invite`) | Y | Y | N |
+| View pending/redeemed invites (`GET /team/invites`) | Y | Y | N |
+| Revoke a pending invite (`DELETE /team/invites/:id`) | Y | Y | N |
 | Change a member's role (`POST /team/members/:login/role`) | Y | Y | N |
 | Remove a member (`POST /team/members/:login/remove`) | Y | Y | N |
-| Change team settings — `autoMergeOnAccept`/`flagConflictsForFleet` (`POST /account/github/settings`) | Y | N | N |
+| Add a repo to the team's watch list (`POST /account/github/repos/select`) | Y | Y | Y (unrestricted) |
+| Remove a watched repo (`DELETE /account/github/repos/:owner/:name`) | Y | Y | N |
+| Change a repo's settings — `autoMergeOnAccept`/`flagConflictsForFleet`/`enableDeepConflictInvestigation` (`POST /account/github/repos/:owner/:name/settings`) | Y | N | N |
 | Process/land the queue (`POST /queue/process`) | Y | N | N |
 | Retry a conflicted bundle (`POST /queue/:bundleId/retry`) | Y | N | N |
 | Abort a stuck bundle (`POST /queue/:bundleId/abort`) | Y | N | N |
@@ -151,55 +220,52 @@ Three roles: `owner`, `admin`, `member`. Verified directly against every
 | Admin reset (`POST /admin/reset`) | Y | N | N |
 | Create/join/leave a team, switch active team | Y | Y | Y |
 | View queue, roster, audit log | Y | Y | Y |
-| **Gesture (accept/defer/reject) on any bundle** | Y | Y | **Y — unrestricted** |
+| Assign a bundle to self, or unassign own | Y | Y | Y |
+| Assign/reassign a bundle to someone else, or unassign theirs | Y | Y | N |
+| Gesture on an unassigned bundle, or one assigned to me | Y | Y | Y |
+| Gesture on a bundle assigned to someone else | Y (`force=true`) | Y (`force=true`) | N |
 
 Two things worth flagging explicitly:
 
 1. **Admin is *not* "almost owner" the way originally proposed** — admin can
-   manage membership and roles (same as owner, short of removing/demoting
-   the owner) but cannot touch merge-queue operations or team settings at
-   all; those are owner-only, full stop. This is a stricter split than
-   "admin ≈ owner on everything operational" — merge-queue mutations and
-   settings are owner-exclusive, membership management is owner-**and**-admin.
+   manage membership, roles, and invites (same as owner, short of
+   removing/demoting the owner) and can add/remove watched repos, but cannot
+   touch merge-queue operations or a repo's settings at all; those are
+   owner-only, full stop. This is a stricter split than "admin ≈ owner on
+   everything operational" — merge-queue mutations and repo settings are
+   owner-exclusive, membership/invite/repo-roster management is
+   owner-**and**-admin.
 2. **`autoMergeOnAccept` is the actual authorization lever for automatic
-   merging, and it's owner-gated.** Turning it on is itself an owner-only
-   action; once on, *any* member's `accept` gesture drains the queue exactly
-   the same as an owner's would. The reasoning, taken from the code comment
-   in `gestures.ts`: flipping that setting on is the authorization decision
-   for every accept that follows, deliberately independent of who performs
-   the accept afterward.
+   merging, and it's owner-gated, per repo.** Turning it on for a given repo
+   is itself an owner-only action; once on, *any* member's `accept` gesture
+   on that repo's bundles drains the queue exactly the same as an owner's
+   would. The reasoning, taken from the code comment in `gestures.ts`:
+   flipping that setting on is the authorization decision for every accept
+   that follows, deliberately independent of who performs the accept
+   afterward.
 
 ## Known gaps vs. the original proposal
 
-These are real, current limitations — not roadmap items being tracked
-elsewhere yet:
+Real, current limitations — not roadmap items being tracked elsewhere yet:
 
-- **No per-bundle or per-PR assignment.** The original ask was "reviews can
-  be assigned, and only users to whom PRs have been assigned can accept."
-  Nothing shipped here: there's no `assignedTo` field anywhere in the
-  codebase, and `POST /bundles/:bundleId/gesture` has no assignment check at
-  all — **any team member can accept, defer, or reject any bundle**,
-  unrestricted. The only distinction the shipped code draws is role-based
-  (owner vs. everyone else) and only for queue-*processing* operations, not
-  for the accept/defer/reject gesture itself. If per-reviewer assignment is
-  still wanted, it hasn't been built.
-- **One repo per team, not several.** A team cannot watch multiple repos
-  concurrently, and `autoMergeOnAccept`/`flagConflictsForFleet` are
-  necessarily team-wide rather than per-repo, since there's only one repo to
-  apply them to.
-- **No role selection at invite time.** Everyone who joins via an invite
-  link becomes a `member`; an owner/admin must promote them separately.
 - **No per-member LLM cost/usage attribution.** One shared team-wide LLM key,
-  as originally proposed, with no usage tracking per member.
-- **No "who's been invited but hasn't joined" visibility.** Signed links
-  aren't persisted anywhere queryable — the roster only shows people who
-  have actually redeemed a link.
+  as originally proposed, with no usage tracking per member. This is not a
+  broken promise — the original proposal itself deferred this explicitly,
+  since it needs new instrumentation infrastructure this codebase doesn't
+  have yet (today's NDJSON instrumentation covers gate decisions, drift
+  screens, defers, conflict resolutions — no token/spend fields anywhere).
+  When built, it should extend that existing audit-log surface rather than
+  add a parallel accounting subsystem.
 
 ## Test coverage
 
 `teamStore.test.ts`, `teamRouter.test.ts`, `resolveMembership.test.ts`,
 `requireRole.test.ts`, `invite.test.ts`, `signedToken.test.ts`,
-`sessionSecret.test.ts`, and `migrateLegacyData.test.ts` cover this slice;
-`tenant.test.ts` was extended to assert the "two different logins, same
-team, same `TenantContext`" invariant that didn't previously have coverage
-because the concept didn't exist.
+`sessionSecret.test.ts`, `migrateLegacyData.test.ts`, and
+`accountState.test.ts`'s `installationForRepo`/`repoBinding` cases cover this
+slice; `tenant.test.ts` was extended to assert the "two different logins,
+same team, same `TenantContext`" invariant that didn't previously have
+coverage because the concept didn't exist, and `gestures.test.ts`/
+`githubAppRouter.test.ts` were substantially extended — the former gained an
+`assignmentsRouter` describe block covering assignment/gesture gating, the
+latter was rewritten for multi-repo add/remove/settings/disconnect behavior.
