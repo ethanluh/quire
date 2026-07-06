@@ -60,6 +60,7 @@ function makeCard(bundleId: string): ReviewCard {
 		residualDisclosure: "behavioral confirm not run",
 		inputsHash: "hash-1",
 		memberCount: 1,
+		requiresAcceptConfirmation: false,
 	};
 }
 

@@ -84,6 +84,10 @@ export interface ReviewCard {
 	// is metadata, not a drift-check input, INV-1) is always refreshed independent of this.
 	inputsHash: string;
 	memberCount: number;
+	// True when `flags` includes a high-risk category (auth, shared infra, multi-repo — see
+	// HIGH_RISK_FLAGS in review/flags.ts). Gates the fast accept gesture: UI must require an
+	// explicit confirmation, and the gesture route must reject an unconfirmed accept.
+	requiresAcceptConfirmation: boolean;
 }
 
 export type GestureAction = "accept" | "defer" | "reject";

@@ -14,6 +14,7 @@ function makeCard(overrides: Partial<ReviewCard> = {}): ReviewCard {
 		residualDisclosure: "behavioral confirm not run",
 		inputsHash: "hash-1",
 		memberCount: 1,
+		requiresAcceptConfirmation: false,
 		...overrides,
 	};
 }

@@ -13,6 +13,10 @@ import { notifyStateChanged } from "../changeEvents.js";
 
 const GestureSchema = z.object({
 	action: z.enum(["accept", "defer", "reject"]),
+	// Required (true) for an accept on a card with requiresAcceptConfirmation — see below.
+	// Real enforcement, not just a UI nicety: closes the gap where a direct API call could
+	// skip the confirmation dialog the UI shows for high-risk bundles.
+	confirmed: z.boolean().optional(),
 });
 
 // Posted per PR in the bundle (not once per bundle) so the swarm agent that authored
@@ -98,7 +102,7 @@ export function gesturesRouter(
 					assignedBy: login,
 				};
 
-				const { action } = req.body as z.infer<typeof GestureSchema>;
+				const { action, confirmed } = req.body as z.infer<typeof GestureSchema>;
 				const memberPrIds = bundle.members.map((m) => m.id);
 				// wasAssignedTo omitted entirely (not set to undefined) when the bundle had no prior
 				// assignee — exactOptionalPropertyTypes distinguishes "key absent" from "key: undefined".
@@ -110,6 +114,14 @@ export function gesturesRouter(
 				};
 
 				if (action === "accept") {
+					if (card.requiresAcceptConfirmation && confirmed !== true) {
+						res.status(409).json({
+							error: "This bundle touches auth, shared infra, or spans multiple repos — confirm to accept.",
+							requiresConfirmation: true,
+							flags: card.flags,
+						});
+						return;
+					}
 					await queue.enqueue(assignedBundle, card); // enqueues; merge (if any) happens below, not inline
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
