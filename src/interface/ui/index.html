@@ -368,6 +368,7 @@
 </div>
 
 <div id="pane-queue" class="pane">
+  <div class="tabs queue-filter-bar" id="queue-filter-bar" style="display:none"></div>
   <div class="queue-list" id="queue-list">
     <div class="empty">Merge queue is empty.</div>
   </div>
@@ -921,18 +922,61 @@ async function loadShelf() {
   el.innerHTML = cards.length ? cards.map(c => cardHtml(c, true)).join('') : '<div class="empty">Shelf is empty.</div>';
 }
 
-async function loadQueue() {
-  const entries = await api('GET', '/queue');
-  queueEntries = entries;
-  const json = JSON.stringify(entries);
-  if (json === lastRenderedJson.queue) return;
-  lastRenderedJson.queue = json;
-  const el = document.getElementById('queue-list');
-  if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
-  el.innerHTML = entries.map(e => `<div class="queue-entry">
+// Every queue entry's bundle carries at least one member and (like the review queue) all
+// members of a bundle always share one repo — see isBundleForRepo in refreshRepoQueue.ts.
+function entryRepoLabel(entry) {
+  return `${entry.bundle.members[0].repoOwner}/${entry.bundle.members[0].repoName}`;
+}
+
+// Inline repo filter for the merge queue, mirroring the review queue's (see
+// REPO_FILTER_KEY/reviewRepoFilter above): single-select, hidden below two distinct repos,
+// persisted, re-validated against whatever's actually queued on every fetch.
+const QUEUE_REPO_FILTER_KEY = 'quire-queue-repo-filter';
+let queueRepoFilter = localStorage.getItem(QUEUE_REPO_FILTER_KEY) || null;
+let latestQueueEntries = [];
+
+function setQueueRepoFilter(repo) {
+  queueRepoFilter = repo || null;
+  if (queueRepoFilter) localStorage.setItem(QUEUE_REPO_FILTER_KEY, queueRepoFilter);
+  else localStorage.removeItem(QUEUE_REPO_FILTER_KEY);
+  renderQueueFilterBar(latestQueueEntries);
+  renderQueueEntryList();
+}
+
+document.getElementById('queue-filter-bar').addEventListener('click', (event) => {
+  const tab = event.target.closest('.tab');
+  if (!tab) return;
+  setQueueRepoFilter(tab.dataset.repo);
+});
+
+function renderQueueFilterBar(entries) {
+  const bar = document.getElementById('queue-filter-bar');
+  const repos = [...new Set(entries.map(entryRepoLabel))];
+  // Same ordering fix as renderReviewFilterBar: reset a stale filter before deciding
+  // whether to hide the bar, or a filter pinned to a repo that just dropped out of the
+  // queue leaves the list empty with no visible way to clear it.
+  if (queueRepoFilter && !repos.includes(queueRepoFilter)) {
+    queueRepoFilter = null;
+    localStorage.removeItem(QUEUE_REPO_FILTER_KEY);
+  }
+  if (repos.length < 2) {
+    bar.style.display = 'none';
+    bar.innerHTML = '';
+    return;
+  }
+  bar.style.display = 'flex';
+  const allTab = `<div class="tab${queueRepoFilter ? '' : ' active'}" data-repo="">All</div>`;
+  const repoTabs = repos.map(r =>
+    `<div class="tab${queueRepoFilter === r ? ' active' : ''}" data-repo="${escapeHtml(r)}">${escapeHtml(r)}</div>`
+  ).join('');
+  bar.innerHTML = allTab + repoTabs;
+}
+
+function queueEntryHtml(e) {
+  return `<div class="queue-entry">
     <div>
       <div>${escapeHtml(e.bundle.direction)}</div>
-      <div class="entry-id">${escapeHtml(e.bundleId)}</div>
+      <div class="entry-id">${escapeHtml(entryRepoLabel(e))} &middot; ${escapeHtml(e.bundleId)}</div>
     </div>
     <div class="queue-entry-actions">
       <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
@@ -941,7 +985,27 @@ async function loadQueue() {
       ${['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept" onclick="reattemptQueueEntry('${escapeHtml(e.bundleId)}')">Reattempt</button>` : ''}
       ${['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject" onclick="abortQueueEntry('${escapeHtml(e.bundleId)}', ${e.mergedPrIds.length}, ${e.bundle.members.length})">Abort</button>` : ''}
     </div>
-  </div>`).join('');
+  </div>`;
+}
+
+function renderQueueEntryList() {
+  const el = document.getElementById('queue-list');
+  const entries = queueRepoFilter ? latestQueueEntries.filter((e) => entryRepoLabel(e) === queueRepoFilter) : latestQueueEntries;
+  const emptyMessage = queueRepoFilter ? 'No queue entries match the repo filter.' : 'Merge queue is empty.';
+  el.innerHTML = entries.length ? entries.map(queueEntryHtml).join('') : `<div class="empty">${emptyMessage}</div>`;
+}
+
+async function loadQueue() {
+  const entries = await api('GET', '/queue');
+  queueEntries = entries;
+  // Keyed on the filter too, same reasoning as loadReview: a filter change alone must
+  // still force a re-render, while an unchanged filter on an unchanged fetch still no-ops.
+  const json = JSON.stringify({ entries, filter: queueRepoFilter });
+  if (json === lastRenderedJson.queue) return;
+  lastRenderedJson.queue = json;
+  latestQueueEntries = entries;
+  renderQueueFilterBar(entries);
+  renderQueueEntryList();
 }
 
 function auditEntryHtml(entry) {

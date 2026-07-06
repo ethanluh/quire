@@ -163,4 +163,25 @@ describe("bundlesRouter — GET /", () => {
 
 		expect(body[0]?.bundleId).toBe("isolated");
 	});
+
+	it("breaks a conflict-risk tie by recency, putting the most recently created bundle first", async () => {
+		const state = createServerState();
+		// Both bundles are equally isolated (zero entanglement, one file each) — a genuine
+		// tie on conflict risk, so the tiebreak is what's under test here.
+		state.bundles.set("old", makeBundle("old", ["src/a.ts"]));
+		state.cards.set("old", makeCard("old"));
+		state.bundles.set("new", makeBundle("new", ["src/b.ts"]));
+		state.cards.set("new", makeCard("new"));
+		const app = express();
+		app.use("/bundles", bundlesRouter(state));
+		server = app.listen(0);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const address = server.address();
+		if (address === null || typeof address === "string") throw new Error("no address");
+		const res = await fetch(`http://127.0.0.1:${address.port}/bundles`);
+		const body = (await res.json()) as ReadonlyArray<{ bundleId: string }>;
+
+		expect(body.map((c) => c.bundleId)).toEqual(["new", "old"]);
+	});
 });

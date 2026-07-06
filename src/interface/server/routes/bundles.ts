@@ -17,7 +17,15 @@ export function bundlesRouter(state: ServerState): Router {
 		// others sink toward the bottom. Recomputed on every request (not cached) since the
 		// pending set shifts as bundles are accepted/rejected/deferred, and the computation is
 		// cheap relative to however many bundles are currently in the queue.
+		//
+		// Reversed before scoring: state.cards is a Map, so .keys() comes back oldest-created
+		// first. orderByConflictRisk's sort is stable and leaves equal-risk ties in whatever
+		// order they arrived in, so feeding it oldest-first would bury a freshly created bundle
+		// behind every same-risk bundle already ahead of it. Reversing first means ties resolve
+		// most-recently-created first, while bundles with a genuinely different risk score still
+		// sort by that score regardless of age.
 		const bundles = [...state.cards.keys()]
+			.reverse()
 			.map((bundleId) => state.bundles.get(bundleId))
 			.filter((bundle): bundle is Bundle => bundle !== undefined);
 		const order = orderByConflictRisk(bundles);
