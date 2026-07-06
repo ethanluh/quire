@@ -352,6 +352,7 @@
 </div>
 
 <div id="pane-review" class="pane active">
+  <div class="tabs review-filter-bar" id="review-filter-bar" style="display:none"></div>
   <div class="card-list" id="card-list">
     <div class="empty">No bundles in review queue.</div>
   </div>
@@ -625,6 +626,7 @@ function cardHtml(card, shelfMode) {
   return `<div class="card" id="card-${bundleId}">
     <div class="card-direction">${escapeHtml(card.directionSummary)}</div>
     <div class="card-meta">
+      <span class="badge badge-neutral">${escapeHtml(card.repoOwner)}/${escapeHtml(card.repoName)}</span>
       <span class="badge badge-neutral">Blast radius: ${card.blastRadius} files</span>
       ${driftBadge(card.drift)} ${flags}
     </div>
@@ -740,6 +742,7 @@ function detailBodyHtml(detail, opts) {
     <div class="card-direction">${escapeHtml(detail.directionSummary || detail.direction || '')}</div>
     ${detail.effectSummary ? `<p class="residual">${escapeHtml(detail.effectSummary)}</p>` : ''}
     ${detail.blastRadius !== undefined ? `<div class="card-meta">
+      <span class="badge badge-neutral">${escapeHtml(detail.repoOwner)}/${escapeHtml(detail.repoName)}</span>
       <span class="badge badge-neutral">Blast radius: ${detail.blastRadius} files</span>
       ${driftBadge(detail.drift)} ${(detail.flags || []).map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('')}
     </div>` : ''}
@@ -802,18 +805,76 @@ document.addEventListener('keydown', (event) => {
 // when nothing actually changed (avoids flicker/lost hover state on idle ticks).
 const lastRenderedJson = {};
 
+// Inline repo filter for the review queue, scoped to that pane only (shelf/merge
+// queue/audit are unaffected). Single-select: "All" or exactly one repo. Persisted so
+// it survives a reload; re-validated against whatever repos are actually in the queue
+// on every fetch since a team switch or a repo going quiet can make a stale selection
+// no longer match anything.
+const REPO_FILTER_KEY = 'quire-review-repo-filter';
+let reviewRepoFilter = localStorage.getItem(REPO_FILTER_KEY) || null;
+let latestReviewCards = [];
+
+function setReviewRepoFilter(repo) {
+  reviewRepoFilter = repo || null;
+  if (reviewRepoFilter) localStorage.setItem(REPO_FILTER_KEY, reviewRepoFilter);
+  else localStorage.removeItem(REPO_FILTER_KEY);
+  renderReviewFilterBar(latestReviewCards);
+  renderReviewCardList();
+}
+
+document.getElementById('review-filter-bar').addEventListener('click', (event) => {
+  const tab = event.target.closest('.tab');
+  if (!tab) return;
+  setReviewRepoFilter(tab.dataset.repo);
+});
+
+// Hidden entirely below two distinct repos — a filter with only one option to pick
+// isn't a filter, it's clutter.
+function renderReviewFilterBar(cards) {
+  const bar = document.getElementById('review-filter-bar');
+  const repos = [...new Set(cards.map(c => `${c.repoOwner}/${c.repoName}`))];
+  if (repos.length < 2) {
+    bar.style.display = 'none';
+    bar.innerHTML = '';
+    return;
+  }
+  if (reviewRepoFilter && !repos.includes(reviewRepoFilter)) {
+    reviewRepoFilter = null;
+    localStorage.removeItem(REPO_FILTER_KEY);
+  }
+  bar.style.display = 'flex';
+  const allTab = `<div class="tab${reviewRepoFilter ? '' : ' active'}" data-repo="">All</div>`;
+  const repoTabs = repos.map(r =>
+    `<div class="tab${reviewRepoFilter === r ? ' active' : ''}" data-repo="${escapeHtml(r)}">${escapeHtml(r)}</div>`
+  ).join('');
+  bar.innerHTML = allTab + repoTabs;
+}
+
+function renderReviewCardList() {
+  const el = document.getElementById('card-list');
+  const cards = reviewRepoFilter
+    ? latestReviewCards.filter(c => `${c.repoOwner}/${c.repoName}` === reviewRepoFilter)
+    : latestReviewCards;
+  // Keyed on the filter too: a filter change alone (no new fetch) must still force a
+  // re-render, while an unchanged filter on an unchanged fetch still no-ops as before.
+  const json = JSON.stringify({ cards: latestReviewCards, filter: reviewRepoFilter });
+  if (json === lastRenderedJson.review) return;
+  lastRenderedJson.review = json;
+  const emptyMessage = reviewRepoFilter ? 'No bundles match the repo filter.' : 'No bundles in review queue.';
+  el.innerHTML = cards.length ? cards.map(c => cardHtml(c, false)).join('') : `<div class="empty">${emptyMessage}</div>`;
+}
+
 async function loadReview() {
   const status = await api('GET', '/account/github/status');
   const el = document.getElementById('card-list');
   if (!status.connected) {
+    document.getElementById('review-filter-bar').style.display = 'none';
     el.innerHTML = '<div class="empty">Connect a GitHub account to see the review queue.</div>';
     return;
   }
-  const cards = await api('GET', '/bundles');
-  const json = JSON.stringify(cards);
-  if (json === lastRenderedJson.review) return;
-  lastRenderedJson.review = json;
-  el.innerHTML = cards.length ? cards.map(c => cardHtml(c, false)).join('') : '<div class="empty">No bundles in review queue.</div>';
+  latestReviewCards = await api('GET', '/bundles');
+  renderReviewFilterBar(latestReviewCards);
+  renderReviewCardList();
 }
 
 // Pulls the selected repo's current PRs from GitHub before rendering, so a fresh page

@@ -22,6 +22,9 @@ export function buildReviewCard(
 	bundle: Bundle,
 	driftVerdicts: ReadonlyMap<string, DriftVerdict>,
 ): ReviewCard {
+	const anchor = bundle.members[0];
+	if (anchor === undefined) throw new Error("Bundle must have at least one member");
+
 	const memberVerdicts = bundle.members.map((m) => driftVerdicts.get(m.id));
 	const signals = memberVerdicts.flatMap((v) => (v?.status === "flagged" ? [...v.signals] : []));
 	const drift: DriftVerdict = signals.length > 0 ? { status: "flagged", signals } : { status: "clean" };
@@ -29,6 +32,8 @@ export function buildReviewCard(
 	return {
 		bundleId: bundle.id,
 		directionSummary: bundle.direction,
+		repoOwner: anchor.repoOwner,
+		repoName: anchor.repoName,
 		blastRadius: computeBlastRadius(bundle),
 		flags: detectFlags(bundle),
 		drift,
@@ -44,10 +49,15 @@ export function buildReviewCard(
 // edit with no new commit changes declaredDirection without changing inputsHash, and
 // that must never go stale on the reuse path.
 export function reuseReviewCard(bundle: Bundle, priorCard: ReviewCard): ReviewCard {
+	const anchor = bundle.members[0];
+	if (anchor === undefined) throw new Error("Bundle must have at least one member");
+
 	return {
 		...priorCard,
 		bundleId: bundle.id,
 		directionSummary: bundle.direction,
+		repoOwner: anchor.repoOwner,
+		repoName: anchor.repoName,
 		memberCount: bundle.members.length,
 	};
 }

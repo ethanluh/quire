@@ -69,6 +69,11 @@ export type DriftVerdict =
 export interface ReviewCard {
 	bundleId: string;
 	directionSummary: string;
+	// Derived from the bundle's members (every ingestion run clusters PRs from a single
+	// repo, see isBundleForRepo in server/refreshRepoQueue.ts) — lets the UI show/filter by
+	// repo without fetching bundle detail.
+	repoOwner: string;
+	repoName: string;
 	blastRadius: number;
 	flags: ReadonlyArray<string>;
 	drift: DriftVerdict;

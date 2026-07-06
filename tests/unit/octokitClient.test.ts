@@ -402,6 +402,8 @@ describe("OctokitGitHubClient", () => {
 			await client.postReviewCardComment("org", "repo", 7, "accept", {
 				bundleId: "b-1",
 				directionSummary: "add passwordless auth",
+				repoOwner: "org",
+				repoName: "repo",
 				blastRadius: 2,
 				flags: [],
 				drift: { status: "clean" },
@@ -427,6 +429,8 @@ describe("OctokitGitHubClient", () => {
 				client.postReviewCardComment("org", "repo", 7, "accept", {
 					bundleId: "b-1",
 					directionSummary: "add passwordless auth",
+					repoOwner: "org",
+					repoName: "repo",
 					blastRadius: 2,
 					flags: [],
 					drift: { status: "clean" },
