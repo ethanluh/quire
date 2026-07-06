@@ -117,6 +117,8 @@ function makeCard(bundleId: string): ReviewCard {
 	return {
 		bundleId,
 		directionSummary: "add passwordless auth",
+		repoOwner: "org",
+		repoName: "repo",
 		blastRadius: 1,
 		flags: [],
 		drift: { status: "clean" },
