@@ -53,21 +53,31 @@ everything else that has no other reason to be separate yet.
 
 ## Target visibility once split
 
-Quire's current repo is private with no license — a proprietary B2B tool,
-not an open-source play. That posture should hold across the future repos:
+**Superseded 2026-07-06: Quire is now open source (MIT) in full, including
+the engine.** The section below recorded an earlier private-by-default,
+proprietary-B2B posture; that call has been deliberately reversed, not
+overtaken by an accidental leak. The reasoning for *when* to split repos
+(above) is unaffected by this and still holds — visibility and
+split-timing are separate questions. What follows is kept for history:
 
-- **Engine → always private.** It holds the actual product IP: gate
+~~Quire's current repo is private with no license — a proprietary B2B tool,
+not an open-source play. That posture should hold across the future repos:~~
+
+- ~~**Engine → always private.** It holds the actual product IP: gate
   criteria, bundling logic, and drift detection (effect-list extraction,
-  footprint analysis, behavioral confirm). No reason to expose it.
+  footprint analysis, behavioral confirm). No reason to expose it.~~
+  Now open source under the same MIT license as the rest of the repo.
 - **Mobile (iOS/Android) and desktop → private by default.** The one
   legitimate argument for making a client public is trust, not
   community/contribution: quire's GitHub App requests broad repo access,
   and a thin client — no embedded logic, just calls the API — is safe to
   open-source precisely because the actual smarts stay server-side in the
-  private engine. That lets a customer audit exactly what the client does
+  engine. That lets a customer audit exactly what the client does
   with the access it's been granted. Flip a client to public only if a
   customer or design partner actually asks to audit it, not by default and
-  not on a calendar date.
+  not on a calendar date. (The engine being open now doesn't remove this
+  argument for a client — auditability is about the client's own footprint,
+  not whether the server it talks to is open.)
 
 ## Low-cost prep, if wanted, before any of this is needed
 
