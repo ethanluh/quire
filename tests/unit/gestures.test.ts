@@ -113,7 +113,7 @@ function actorMiddleware(getActor: () => { login: string; role: TeamRole }) {
 	};
 }
 
-function makeCard(bundleId: string): ReviewCard {
+function makeCard(bundleId: string, overrides: Partial<ReviewCard> = {}): ReviewCard {
 	return {
 		bundleId,
 		directionSummary: "add passwordless auth",
@@ -127,6 +127,8 @@ function makeCard(bundleId: string): ReviewCard {
 		specConformanceDisclosure: "",
 		inputsHash: "hash-1",
 		memberCount: 1,
+		requiresAcceptConfirmation: false,
+		...overrides,
 	};
 }
 
@@ -175,11 +177,11 @@ describe("gesturesRouter — review queue removal", () => {
 		await rm(dataDir, { recursive: true, force: true });
 	});
 
-	async function gesture(bundleId: string, action: "accept" | "defer" | "reject") {
+	async function gesture(bundleId: string, action: "accept" | "defer" | "reject", confirmed?: boolean) {
 		return fetch(`${baseUrl}/bundles/${bundleId}/gesture`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ action }),
+			body: JSON.stringify(confirmed === undefined ? { action } : { action, confirmed }),
 		});
 	}
 
@@ -194,6 +196,30 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(cards).toEqual([]);
 		expect(state.bundles.has("b-1")).toBe(false);
 		expect(decidedStore.isDecided("b-1-pr-1")).toBe(true);
+	});
+
+	it("409s an accept on a high-risk bundle without confirmation", async () => {
+		state.bundles.set("b-risky", makeBundle("b-risky"));
+		state.cards.set("b-risky", makeCard("b-risky", { flags: ["touches auth"], requiresAcceptConfirmation: true }));
+
+		const res = await gesture("b-risky", "accept");
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as { requiresConfirmation?: boolean };
+		expect(body.requiresConfirmation).toBe(true);
+
+		// Left untouched in the review queue — not queued, not decided.
+		expect(state.bundles.has("b-risky")).toBe(true);
+		expect(decidedStore.isDecided("b-risky-pr-1")).toBe(false);
+	});
+
+	it("accepts a high-risk bundle once confirmed", async () => {
+		state.bundles.set("b-risky-ok", makeBundle("b-risky-ok"));
+		state.cards.set("b-risky-ok", makeCard("b-risky-ok", { flags: ["touches auth"], requiresAcceptConfirmation: true }));
+
+		const res = await gesture("b-risky-ok", "accept", true);
+		expect(res.status).toBe(200);
+		expect(state.bundles.has("b-risky-ok")).toBe(false);
+		expect(decidedStore.isDecided("b-risky-ok-pr-1")).toBe(true);
 	});
 
 	it("auto-merges an accepted bundle in the background when autoMergeOnAccept is enabled", async () => {

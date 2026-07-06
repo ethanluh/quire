@@ -114,6 +114,7 @@ describe("reuseReviewCard — repo derivation", () => {
 			specConformanceDisclosure: "",
 			inputsHash: "hash-1",
 			memberCount: 1,
+			requiresAcceptConfirmation: false,
 		};
 		const bundle = makeBundle([makePR("pr-1", { repoOwner: "acme", repoName: "widgets" })]);
 

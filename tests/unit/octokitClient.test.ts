@@ -454,6 +454,7 @@ describe("OctokitGitHubClient", () => {
 				specConformanceDisclosure: "",
 				inputsHash: "hash-1",
 				memberCount: 0,
+				requiresAcceptConfirmation: false,
 			});
 
 			expect(createComment).toHaveBeenCalledWith(
@@ -483,6 +484,7 @@ describe("OctokitGitHubClient", () => {
 					specConformanceDisclosure: "",
 					inputsHash: "hash-1",
 					memberCount: 0,
+					requiresAcceptConfirmation: false,
 				}),
 			).rejects.toThrow(InsufficientGitHubPermissionError);
 		});

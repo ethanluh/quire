@@ -619,9 +619,12 @@ function cardHtml(card, shelfMode) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
   const bundleId = escapeHtml(card.bundleId);
   const detailsBtn = `<button class="btn" onclick="showBundleDetail('${bundleId}')">Details</button>`;
+  const acceptOnclick = card.requiresAcceptConfirmation
+    ? `gesture('${bundleId}','accept',true)`
+    : `gesture('${bundleId}','accept')`;
   const gestures = shelfMode
     ? `${detailsBtn}<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
-    : `${detailsBtn}<button class="btn btn-accept" onclick="gesture('${bundleId}','accept')">Accept</button>
+    : `${detailsBtn}<button class="btn btn-accept" onclick="${acceptOnclick}">Accept</button>
        <button class="btn btn-defer"  onclick="gesture('${bundleId}','defer')">Defer</button>
        <button class="btn btn-reject" onclick="gesture('${bundleId}','reject')">Reject</button>`;
   return `<div class="card" id="card-${bundleId}">
@@ -1054,11 +1057,14 @@ async function reattemptQueueEntry(bundleId) {
   loadQueue();
 }
 
-async function gesture(bundleId, action) {
+async function gesture(bundleId, action, needsConfirm) {
+  if (action === 'accept' && needsConfirm) {
+    if (!confirm('This bundle touches auth, shared infra, or spans multiple repos. Accept anyway?')) return;
+  }
   const buttons = document.querySelectorAll(`#card-${bundleId} button`);
   buttons.forEach((b) => { b.disabled = true; });
   try {
-    const result = await api('POST', `/bundles/${bundleId}/gesture`, { action });
+    const result = await api('POST', `/bundles/${bundleId}/gesture`, { action, confirmed: !!needsConfirm });
     if (result && result.error) throw new Error(result.error);
     loadReview();
     if (action === 'defer') loadShelf();

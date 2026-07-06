@@ -16,6 +16,7 @@ function makeCard(overrides: Partial<ReviewCard> = {}): ReviewCard {
 		specConformanceDisclosure: "",
 		inputsHash: "hash-1",
 		memberCount: 1,
+		requiresAcceptConfirmation: false,
 		...overrides,
 	};
 }

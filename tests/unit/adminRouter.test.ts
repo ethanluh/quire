@@ -53,6 +53,7 @@ function makeCard(bundleId: string): ReviewCard {
 		specConformanceDisclosure: "",
 		inputsHash: "hash-1",
 		memberCount: 0,
+		requiresAcceptConfirmation: false,
 	};
 }
 

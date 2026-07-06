@@ -100,6 +100,7 @@
   }
   .gesture-hints span { display: inline-flex; align-items: center; gap: var(--space-1); }
   .gesture-hints svg { width: var(--space-3); height: var(--space-3); }
+  .gesture-hints.accept-disabled span:last-child { opacity: 0.35; }
 
   .tap-gestures { flex: 0 0 auto; display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom)); }
   .tap-gestures .btn { flex: 1; padding: var(--space-3) 0; text-align: center; }
@@ -344,6 +345,7 @@
     </div>
     <div class="tap-gestures">
       <button class="btn" id="btn-tap-details">Details</button>
+      <button class="btn btn-accept" id="btn-tap-accept" style="display:none">Accept</button>
     </div>
   </div>
 
@@ -811,6 +813,9 @@ function renderStack() {
   stackEl.innerHTML = '';
   topCardEl = null;
   gestureInFlight = false;
+  const topCard = reviewCards[0];
+  document.querySelector('.gesture-hints').classList.toggle('accept-disabled', !!topCard?.requiresAcceptConfirmation);
+  document.getElementById('btn-tap-accept').style.display = topCard?.requiresAcceptConfirmation ? '' : 'none';
   if (!reviewCards.length) {
     stackEl.innerHTML = '<div class="stack-empty">No bundles in review queue.</div>';
     return;
@@ -914,6 +919,13 @@ function attachDrag(el, card) {
     if (dy > SWIPE_Y && dy > Math.abs(dx)) {
       commit(el, card, 'defer', `translate(${dx}px, 600px) rotate(0deg)`);
     } else if (dx > SWIPE_X) {
+      if (card.requiresAcceptConfirmation) {
+        // High-risk bundle (auth/shared infra/multi-repo) — no fast-swipe accept.
+        // Fall through to snapBack() below and point the user at the confirm-gated button.
+        snapBack();
+        showError('High-risk bundle — tap Accept to confirm.');
+        return;
+      }
       commit(el, card, 'accept', `translate(900px, ${dy}px) rotate(20deg)`);
     } else if (dx < -SWIPE_X) {
       commit(el, card, 'reject', `translate(-900px, ${dy}px) rotate(-20deg)`);
@@ -951,7 +963,7 @@ function showError(message) {
   showError._t = setTimeout(() => toast.classList.remove('visible'), 3500);
 }
 
-function commit(el, card, action, flyTransform) {
+function commit(el, card, action, flyTransform, confirmed) {
   if (gestureInFlight) return; // already acted on this card via another input path
   gestureInFlight = true;
   el.classList.add('fly');
@@ -964,7 +976,7 @@ function commit(el, card, action, flyTransform) {
   fetch(`/bundles/${card.bundleId}/gesture`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action }),
+    body: JSON.stringify(confirmed ? { action, confirmed: true } : { action }),
   }).then(async (r) => {
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
@@ -982,6 +994,13 @@ function commit(el, card, action, flyTransform) {
 
 document.getElementById('btn-tap-details').addEventListener('click', () => {
   if (reviewCards.length) showBundleDetail(reviewCards[0].bundleId);
+});
+
+document.getElementById('btn-tap-accept').addEventListener('click', () => {
+  if (!reviewCards.length || !topCardEl || gestureInFlight) return;
+  const card = reviewCards[0];
+  if (!confirm('This bundle touches auth, shared infra, or spans multiple repos. Accept anyway?')) return;
+  commit(topCardEl, card, 'accept', 'translate(900px, 0px) rotate(20deg)', true);
 });
 
 // --- Shelf ---

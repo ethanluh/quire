@@ -1,7 +1,7 @@
 import type { Bundle, DriftVerdict, ReviewCard, SpecConformanceSignal, SpecConformanceVerdict } from "../types/core.js";
 import type { SpecConformanceResult } from "../specConformance/check.js";
 import { computeBlastRadius } from "./blastRadius.js";
-import { detectFlags } from "./flags.js";
+import { detectFlags, isHighRisk } from "./flags.js";
 
 const RESIDUAL_DISCLOSURE =
 	"Behavioral confirm is not yet active. Rare undeclared changes in structurally local, behaviorally silent code may not be caught.";
@@ -36,6 +36,7 @@ export function buildReviewCard(
 	const memberVerdicts = bundle.members.map((m) => driftVerdicts.get(m.id));
 	const signals = memberVerdicts.flatMap((v) => (v?.status === "flagged" ? [...v.signals] : []));
 	const drift: DriftVerdict = signals.length > 0 ? { status: "flagged", signals } : { status: "clean" };
+	const flags = detectFlags(bundle);
 
 	// "inconclusive" (no linked issue, a failed fetch, or an unparseable model response)
 	// is not a flag — it's disclosed instead (INV-6), same spirit as residualDisclosure
@@ -64,13 +65,14 @@ export function buildReviewCard(
 		repoOwner: anchor.repoOwner,
 		repoName: anchor.repoName,
 		blastRadius: computeBlastRadius(bundle),
-		flags: detectFlags(bundle),
+		flags,
 		drift,
 		residualDisclosure: RESIDUAL_DISCLOSURE, // INV-6: always set
 		specConformance,
 		specConformanceDisclosure,
 		inputsHash: computeInputsHash(bundle),
 		memberCount: bundle.members.length,
+		requiresAcceptConfirmation: isHighRisk(flags),
 	};
 }
 
