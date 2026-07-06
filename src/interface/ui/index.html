@@ -833,14 +833,18 @@ document.getElementById('review-filter-bar').addEventListener('click', (event) =
 function renderReviewFilterBar(cards) {
   const bar = document.getElementById('review-filter-bar');
   const repos = [...new Set(cards.map(c => `${c.repoOwner}/${c.repoName}`))];
+  // Must run before the hide-below-2-repos check below: otherwise a filter pinned to a
+  // repo that just dropped out of the queue (its bundles all resolved, or the other repo
+  // disappeared) stays stuck, the list renders empty, and the bar that would let a human
+  // clear it is hidden right along with it — no visible way out.
+  if (reviewRepoFilter && !repos.includes(reviewRepoFilter)) {
+    reviewRepoFilter = null;
+    localStorage.removeItem(REPO_FILTER_KEY);
+  }
   if (repos.length < 2) {
     bar.style.display = 'none';
     bar.innerHTML = '';
     return;
-  }
-  if (reviewRepoFilter && !repos.includes(reviewRepoFilter)) {
-    reviewRepoFilter = null;
-    localStorage.removeItem(REPO_FILTER_KEY);
   }
   bar.style.display = 'flex';
   const allTab = `<div class="tab${reviewRepoFilter ? '' : ' active'}" data-repo="">All</div>`;
