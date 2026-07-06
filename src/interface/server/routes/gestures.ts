@@ -5,6 +5,7 @@ import type { GitHubClient } from "../../../engine/github/client.js";
 import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { Bundle, GestureAction, ReviewCard } from "../../../engine/types/core.js";
 import type { ServerState } from "../state.js";
+import { saveShelf } from "../state.js";
 import type { AccountState } from "../accountState.js";
 import { repoBinding } from "../accountState.js";
 import { logDefer } from "../../../engine/instrumentation/logger.js";
@@ -43,6 +44,7 @@ export function gesturesRouter(
 	github: GitHubClient,
 	decidedStore: DecidedPrStore,
 	accountState: AccountState,
+	shelfPath: string,
 ): Router {
 	const router = Router({ mergeParams: true });
 
@@ -166,6 +168,7 @@ export function gesturesRouter(
 					// defer
 					state.shelf.set(bundleId, { card, bundle: assignedBundle, memberPrIds });
 					state.cards.delete(bundleId);
+					await saveShelf(state.shelf, shelfPath);
 					await decidedStore.markDecided(memberPrIds, action, decisionContext);
 					await logDefer(deferLogPath, bundleId, card);
 					postCardToMembers(github, action, assignedBundle, card);

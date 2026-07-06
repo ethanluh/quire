@@ -160,7 +160,7 @@ describe("gesturesRouter — review queue removal", () => {
 		app.use("/bundles", bundlesRouter(state));
 		app.use(
 			"/bundles",
-			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState),
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json")),
 		);
 		app.use("/bundles", assignmentsRouter(state));
 
@@ -587,7 +587,7 @@ describe("gesturesRouter — review card comment posting failures", () => {
 		app.use(actorMiddleware(() => ({ login: "actor", role: "owner" })));
 		app.use(
 			"/bundles",
-			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState),
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json")),
 		);
 
 		await new Promise<void>((resolve) => {
@@ -652,7 +652,7 @@ describe("gesturesRouter — reject GitHub close failures", () => {
 		app.use("/bundles", bundlesRouter(state));
 		app.use(
 			"/bundles",
-			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState),
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json")),
 		);
 		app.use(errorHandler);
 
