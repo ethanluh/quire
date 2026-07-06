@@ -4,6 +4,7 @@ import { formatReviewCardComment } from "../review/comment.js";
 import type {
 	FoundOrCreatedPullRequest,
 	GitHubClient,
+	IssueSummary,
 	ListOpenPullRequestsResult,
 	RawPRPayload,
 	RepoFile,
@@ -16,6 +17,10 @@ import { settleWithConcurrency } from "../util/concurrency.js";
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
 // declares direction in an HTML comment so it renders invisibly in the PR body.
 const DECLARED_DIRECTION_MARKER = /<!--\s*declared-direction:\s*([\s\S]*?)\s*-->/i;
+
+// GitHub's own closing-keyword set (case-insensitive), same-repo `#<n>` only — matches the
+// linking convention documented in this repo's CLAUDE.md ("Closes #<number>").
+const CLOSING_KEYWORD_RE = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/i;
 
 const REVERT_PULL_REQUEST_MUTATION = `
 	mutation revertPullRequest($pullRequestId: ID!) {
@@ -139,6 +144,13 @@ function extractDeclaredDirection(body: string | null): string {
 	return direction;
 }
 
+// Exported for unit tests (octokitClient.test.ts) — the closing-keyword regex is the only
+// non-trivial logic here and is worth testing directly rather than only through a full PR fetch.
+export function extractLinkedIssueNumber(body: string | null): number | undefined {
+	const match = body !== null ? CLOSING_KEYWORD_RE.exec(body) : null;
+	return match !== null ? Number(match[1]) : undefined;
+}
+
 export class OctokitGitHubClient implements GitHubClient {
 	constructor(private readonly octokit: Octokit) {}
 
@@ -229,6 +241,16 @@ export class OctokitGitHubClient implements GitHubClient {
 	async getDefaultBranch(owner: string, repo: string): Promise<string> {
 		const { data } = await this.octokit.rest.repos.get({ owner, repo });
 		return data.default_branch;
+	}
+
+	async getIssue(owner: string, repo: string, issueNumber: number): Promise<IssueSummary | undefined> {
+		try {
+			const { data } = await this.octokit.rest.issues.get({ owner, repo, issue_number: issueNumber });
+			return { title: data.title, body: data.body ?? null };
+		} catch (err) {
+			if (isNotFoundError(err)) return undefined;
+			throw err;
+		}
 	}
 
 	async commitFileToBranch(
@@ -471,6 +493,7 @@ export class OctokitGitHubClient implements GitHubClient {
 			this.ciStatusForRef(owner, repo, pr.head.sha),
 		]);
 
+		const linkedIssueNumber = extractLinkedIssueNumber(pr.body);
 		return {
 			id: String(pr.id),
 			number: pr.number,
@@ -482,6 +505,7 @@ export class OctokitGitHubClient implements GitHubClient {
 			diff: diffResponse.data as string,
 			ciStatus,
 			declaredDirection: extractDeclaredDirection(pr.body),
+			...(linkedIssueNumber !== undefined ? { linkedIssueNumber } : {}),
 			filesTouched: files.map((f) => f.filename),
 		};
 	}

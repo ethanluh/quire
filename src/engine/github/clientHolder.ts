@@ -1,5 +1,12 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
-import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
+import type {
+	FoundOrCreatedPullRequest,
+	GitHubClient,
+	IssueSummary,
+	ListOpenPullRequestsResult,
+	RawPRPayload,
+	RepoFile,
+} from "./client.js";
 import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 
 // MergeQueue is constructed once at startup holding a reference to a GitHubClient.
@@ -62,6 +69,10 @@ export class GitHubClientHolder implements GitHubClient {
 
 	getDefaultBranch(owner: string, repo: string): Promise<string> {
 		return this.current.getDefaultBranch(owner, repo);
+	}
+
+	getIssue(owner: string, repo: string, issueNumber: number): Promise<IssueSummary | undefined> {
+		return this.current.getIssue(owner, repo, issueNumber);
 	}
 
 	commitFileToBranch(

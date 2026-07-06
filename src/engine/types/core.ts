@@ -29,6 +29,10 @@ export interface PullRequest {
 	// since a prior pipeline run (see src/engine/cache/prCache.ts) — never a verdict input.
 	headSha: string;
 	declaredDirection: string;
+	// Parsed from a GitHub closing keyword in the PR body (e.g. `Closes #12`). undefined
+	// when the PR doesn't reference an issue — spec conformance has nothing to compare
+	// against in that case (see src/engine/specConformance/check.ts).
+	linkedIssueNumber?: number;
 	diff: Diff;
 	filesTouched: ReadonlyArray<string>;
 	symbolsTouched: ReadonlyArray<SymbolRef>;
@@ -66,6 +70,19 @@ export type DriftVerdict =
 	| { status: "clean" }
 	| { status: "flagged"; signals: ReadonlyArray<DriftSignal> };
 
+// Distinct from DriftVerdict on purpose: drift compares declaredDirection against the
+// PR's own code (evidence blind to the declaration, INV-2); this compares declaredDirection
+// against the originating GitHub issue the PR claims to close — a different question
+// (has the task itself been quietly redefined?), not internal code/declaration consistency.
+export interface SpecConformanceSignal {
+	prId: string;
+	explanation: string;
+}
+
+export type SpecConformanceVerdict =
+	| { status: "clean" }
+	| { status: "flagged"; signals: ReadonlyArray<SpecConformanceSignal> };
+
 export interface ReviewCard {
 	bundleId: string;
 	directionSummary: string;
@@ -78,9 +95,14 @@ export interface ReviewCard {
 	flags: ReadonlyArray<string>;
 	drift: DriftVerdict;
 	residualDisclosure: string;
-	// Fingerprint of everything blastRadius/flags/drift are computed from (see
-	// computeInputsHash in review/card.ts) — lets a later pipeline run prove those fields
-	// are still valid without recomputing them, while directionSummary (declaredDirection
+	specConformance: SpecConformanceVerdict;
+	// Always set (INV-6 style), even when empty — discloses how many members had no
+	// linked issue / a failed fetch / an unparseable LLM response, so a "clean" verdict
+	// above is never confused with "we couldn't check this."
+	specConformanceDisclosure: string;
+	// Fingerprint of everything blastRadius/flags/drift/specConformance are computed from
+	// (see computeInputsHash in review/card.ts) — lets a later pipeline run prove those
+	// fields are still valid without recomputing them, while directionSummary (declaredDirection
 	// is metadata, not a drift-check input, INV-1) is always refreshed independent of this.
 	inputsHash: string;
 	memberCount: number;

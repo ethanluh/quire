@@ -15,6 +15,7 @@ import type {
 } from "../../src/engine/types/instrumentation.js";
 import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "../../src/engine/drift/effectList/provider.js";
 import { LlmApiError } from "../../src/engine/drift/effectList/httpRetry.js";
+import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 
 class FlakyProvider implements LlmProvider {
 	private readonly inner = new StubLlmProvider();
@@ -208,6 +209,46 @@ describe("orchestratePipeline — integration", () => {
 		expect(result.cards.length).toBe(1);
 	});
 
+	describe("spec conformance — distinct from drift", () => {
+		it("discloses (does not flag) a PR with no linked issue", async () => {
+			stub.queueCompletion('["adds OTP login"]');
+			stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+			analyzer.setFootprint([]);
+
+			const prs = [makePR("pr-1", "add passwordless auth")];
+			const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore });
+
+			expect(result.cards[0]?.specConformance).toEqual({ status: "clean" });
+			expect(result.cards[0]?.specConformanceDisclosure).toContain("1 of 1");
+			expect(stub.calls).toHaveLength(2); // no spec-conformance provider call — nothing to compare against
+		});
+
+		it("flags a PR whose declared direction no longer matches the issue it claims to close", async () => {
+			stub.queueCompletion('["adds OTP login"]'); // extractor
+			stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }])); // drift matcher
+			stub.queueCompletion('{"conforms": false, "explanation": "issue asked for passwordless auth; PR now builds an admin dashboard"}'); // spec conformance
+			analyzer.setFootprint([]);
+
+			const githubClient = new StubGitHubClient();
+			githubClient.setIssue("org", "repo", 12, {
+				title: "Add passwordless auth",
+				body: "Users should be able to log in via a magic link.",
+			});
+
+			const prs = [makePR("pr-1", "add passwordless auth", { linkedIssueNumber: 12 })];
+			const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore, githubClient });
+
+			expect(result.cards[0]?.specConformance).toEqual({
+				status: "flagged",
+				signals: [{ prId: "pr-1", explanation: "issue asked for passwordless auth; PR now builds an admin dashboard" }],
+			});
+			expect(result.cards[0]?.specConformanceDisclosure).toBe("");
+			// Distinct from drift: the code still matches its own (redefined) declared
+			// direction, so drift stays clean even while spec conformance flags.
+			expect(result.cards[0]?.drift).toEqual({ status: "clean" });
+		});
+	});
+
 	describe("gate-loop failure handling", () => {
 		let dir: string;
 
@@ -281,7 +322,7 @@ describe("orchestratePipeline — integration", () => {
 			expect(second.cards).toEqual(first.cards);
 		});
 
-		it("refreshes directionSummary on reuse even when nothing else about the PR changed (declaredDirection edited, no new commit)", async () => {
+		it("re-screens (but doesn't re-extract) when declaredDirection is edited with no new commit", async () => {
 			const prCache = new PrEffectCache();
 			stub.queueCompletion('["adds OTP login"]');
 			stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
@@ -290,9 +331,16 @@ describe("orchestratePipeline — integration", () => {
 			const prs = [makePR("pr-1", "add passwordless auth")];
 			const first = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore, prCache });
 			expect(first.cards[0]?.directionSummary).toBe("add passwordless auth");
+			expect(stub.calls).toHaveLength(2);
 
-			// PR body edited on GitHub (declaredDirection changed) with no new commit —
-			// headSha unchanged, so effect extraction and the drift matcher must not re-run.
+			// PR body edited on GitHub (declaredDirection changed) with no new commit — headSha
+			// unchanged, so effect extraction is still a cache hit, but computeInputsHash now
+			// depends on each member's declaredDirection (it's a spec-conformance comparison
+			// input, see review/card.ts) — so the card is recomputed rather than reused, and
+			// the drift matcher re-runs even though its actual comparison target
+			// (bundle.effectSummary) is unchanged. Accepted cost: catching a quietly
+			// redeclared direction requires noticing the edit happened at all.
+			stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
 			const editedPrs = [{ ...prs[0]!, declaredDirection: "refactor auth token storage" }];
 			const second = await orchestratePipeline(
 				editedPrs,
@@ -301,11 +349,10 @@ describe("orchestratePipeline — integration", () => {
 				{ bundles: first.bundles, cards: new Map(first.cards.map((c) => [c.bundleId, c])) },
 			);
 
-			expect(stub.calls).toHaveLength(2); // no re-extraction, no re-screen
+			expect(stub.calls).toHaveLength(3); // extraction still cached; matcher re-ran once
 			expect(second.cards[0]?.directionSummary).toBe("refactor auth token storage");
 			expect(second.bundles[0]?.members[0]?.declaredDirection).toBe("refactor auth token storage");
-			// The drift verdict itself is untouched — only the display field refreshed.
-			expect(second.cards[0]?.drift).toEqual(first.cards[0]?.drift);
+			expect(second.cards[0]?.drift).toEqual({ status: "clean" });
 		});
 
 		it("re-screens only the bundle whose member actually changed", async () => {

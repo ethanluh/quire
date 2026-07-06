@@ -12,7 +12,15 @@ export interface RawPRPayload {
 	diff: string;
 	ciStatus: "success" | "failure" | "pending" | "unknown";
 	declaredDirection: string;
+	// Parsed from a GitHub closing keyword in the body (e.g. `Closes #12`). undefined when
+	// the PR doesn't reference an issue.
+	linkedIssueNumber?: number;
 	filesTouched: ReadonlyArray<string>;
+}
+
+export interface IssueSummary {
+	title: string;
+	body: string | null;
 }
 
 export interface SkippedPullRequest {
@@ -57,6 +65,9 @@ export interface GitHubClient {
 	postComment(owner: string, repo: string, prNumber: number, body: string): Promise<void>;
 	// undefined on a 404 — "no such file", not an error condition callers need to catch.
 	getFileContent(owner: string, repo: string, path: string): Promise<RepoFile | undefined>;
+	// undefined on a 404 — deleted/inaccessible issue, treated the same as "no linked
+	// issue" by the spec-conformance check (src/engine/specConformance/check.ts).
+	getIssue(owner: string, repo: string, issueNumber: number): Promise<IssueSummary | undefined>;
 	getDefaultBranch(owner: string, repo: string): Promise<string>;
 	// Creates `branch` from the default branch if it doesn't exist yet, then commits the
 	// file to it. Idempotent: safe to call again for the same branch/path.

@@ -1,6 +1,6 @@
 import { describe, it, expect, jest } from "@jest/globals";
 import type { Octokit } from "@octokit/rest";
-import { OctokitGitHubClient, InsufficientGitHubPermissionError } from "../../src/engine/github/octokitClient.js";
+import { OctokitGitHubClient, InsufficientGitHubPermissionError, extractLinkedIssueNumber } from "../../src/engine/github/octokitClient.js";
 import { UNDECLARED_DIRECTION } from "../../src/engine/types/core.js";
 
 // Deliberately NOT `@octokit/request-error`'s `RequestError`: in production, errors thrown by
@@ -72,6 +72,8 @@ function makeFakeOctokit(opts: {
 	treesBySha?: Record<string, ReadonlyArray<{ path: string; sha: string; mode: string; type: "blob" | "tree" | "commit" }>>;
 	createWorkflowDispatchRejects?: Error;
 	workflowRuns?: ReadonlyArray<{ id: number; created_at: string }>;
+	issue?: { title: string; body: string | null };
+	issuesGetRejects?: Error;
 }): {
 	octokit: Octokit;
 	merge: jest.Mock;
@@ -89,6 +91,7 @@ function makeFakeOctokit(opts: {
 	createWorkflowDispatch: jest.Mock;
 	listWorkflowRuns: jest.Mock;
 	listFiles: jest.Mock;
+	issuesGet: jest.Mock;
 } {
 	const pr = opts.pr ?? makePrResponse("<!-- declared-direction: add passwordless auth -->");
 	const get = jest.fn(async (params: { mediaType?: { format: string } }) => {
@@ -113,6 +116,9 @@ function makeFakeOctokit(opts: {
 	const createComment = opts.createCommentRejects
 		? jest.fn(async () => { throw opts.createCommentRejects; })
 		: jest.fn(async () => ({ data: {} }));
+	const issuesGet = opts.issuesGetRejects
+		? jest.fn(async () => { throw opts.issuesGetRejects; })
+		: jest.fn(async () => ({ data: opts.issue ?? { title: "Add passwordless auth", body: "Users should log in via a magic link." } }));
 
 	const reposGet = jest.fn(async () => ({ data: { default_branch: opts.defaultBranch ?? "main" } }));
 	let getRefCalls = 0;
@@ -161,7 +167,7 @@ function makeFakeOctokit(opts: {
 			checks: { listForRef },
 			repos: { getCombinedStatusForRef, get: reposGet, getContent, createOrUpdateFileContents, compareCommitsWithBasehead },
 			git: { getRef, createRef, getTree },
-			issues: { createComment },
+			issues: { createComment, get: issuesGet },
 			actions: { createWorkflowDispatch, listWorkflowRuns },
 		},
 		paginate,
@@ -185,8 +191,28 @@ function makeFakeOctokit(opts: {
 		createWorkflowDispatch,
 		listWorkflowRuns,
 		listFiles,
+		issuesGet,
 	};
 }
+
+describe("extractLinkedIssueNumber", () => {
+	it("matches GitHub's closing keywords case-insensitively", () => {
+		expect(extractLinkedIssueNumber("Closes #12")).toBe(12);
+		expect(extractLinkedIssueNumber("fixes #7")).toBe(7);
+		expect(extractLinkedIssueNumber("Resolved #99")).toBe(99);
+		expect(extractLinkedIssueNumber("CLOSE #3")).toBe(3);
+		expect(extractLinkedIssueNumber("Fixed #4")).toBe(4);
+	});
+
+	it("ignores a bare #<n> mention that isn't preceded by a closing keyword", () => {
+		expect(extractLinkedIssueNumber("See #12 for context")).toBeUndefined();
+	});
+
+	it("returns undefined for a null or keyword-free body", () => {
+		expect(extractLinkedIssueNumber(null)).toBeUndefined();
+		expect(extractLinkedIssueNumber("just a plain description")).toBeUndefined();
+	});
+});
 
 describe("OctokitGitHubClient", () => {
 	describe("getPullRequest", () => {
@@ -204,6 +230,22 @@ describe("OctokitGitHubClient", () => {
 			const client = new OctokitGitHubClient(octokit);
 			const payload = await client.getPullRequest("org", "repo", 7);
 			expect(payload.declaredDirection).toBe(UNDECLARED_DIRECTION);
+		});
+
+		it("extracts linkedIssueNumber from a closing keyword in the PR body", async () => {
+			const { octokit } = makeFakeOctokit({
+				pr: makePrResponse("<!-- declared-direction: add passwordless auth -->\n\nCloses #12"),
+			});
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.linkedIssueNumber).toBe(12);
+		});
+
+		it("leaves linkedIssueNumber undefined when the body has no closing keyword", async () => {
+			const { octokit } = makeFakeOctokit({});
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.linkedIssueNumber).toBeUndefined();
 		});
 
 		it("reports pending when a check run has not completed", async () => {
@@ -408,6 +450,8 @@ describe("OctokitGitHubClient", () => {
 				flags: [],
 				drift: { status: "clean" },
 				residualDisclosure: "behavioral confirm not run",
+				specConformance: { status: "clean" },
+				specConformanceDisclosure: "",
 				inputsHash: "hash-1",
 				memberCount: 0,
 			});
@@ -435,10 +479,34 @@ describe("OctokitGitHubClient", () => {
 					flags: [],
 					drift: { status: "clean" },
 					residualDisclosure: "behavioral confirm not run",
+					specConformance: { status: "clean" },
+					specConformanceDisclosure: "",
 					inputsHash: "hash-1",
 					memberCount: 0,
 				}),
 			).rejects.toThrow(InsufficientGitHubPermissionError);
+		});
+	});
+
+	describe("getIssue", () => {
+		it("returns the issue's title and body", async () => {
+			const { octokit } = makeFakeOctokit({ issue: { title: "Add passwordless auth", body: "Magic link login." } });
+			const client = new OctokitGitHubClient(octokit);
+			const issue = await client.getIssue("org", "repo", 12);
+			expect(issue).toEqual({ title: "Add passwordless auth", body: "Magic link login." });
+		});
+
+		it("returns undefined on a 404 (deleted or inaccessible issue)", async () => {
+			const { octokit } = makeFakeOctokit({ issuesGetRejects: notFoundError() });
+			const client = new OctokitGitHubClient(octokit);
+			const issue = await client.getIssue("org", "repo", 12);
+			expect(issue).toBeUndefined();
+		});
+
+		it("rethrows non-404 errors", async () => {
+			const { octokit } = makeFakeOctokit({ issuesGetRejects: new Error("network error") });
+			const client = new OctokitGitHubClient(octokit);
+			await expect(client.getIssue("org", "repo", 12)).rejects.toThrow("network error");
 		});
 	});
 
