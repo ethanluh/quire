@@ -948,14 +948,17 @@ document.getElementById('queue-filter-bar').addEventListener('click', (event) =>
 function renderQueueFilterBar(entries) {
   const bar = document.getElementById('queue-filter-bar');
   const repos = [...new Set(entries.map(entryRepoLabel))];
+  // Same ordering fix as renderReviewFilterBar: reset a stale filter before deciding
+  // whether to hide the bar, or a filter pinned to a repo that just dropped out of the
+  // queue leaves the list empty with no visible way to clear it.
+  if (queueRepoFilter && !repos.includes(queueRepoFilter)) {
+    queueRepoFilter = null;
+    localStorage.removeItem(QUEUE_REPO_FILTER_KEY);
+  }
   if (repos.length < 2) {
     bar.style.display = 'none';
     bar.innerHTML = '';
     return;
-  }
-  if (queueRepoFilter && !repos.includes(queueRepoFilter)) {
-    queueRepoFilter = null;
-    localStorage.removeItem(QUEUE_REPO_FILTER_KEY);
   }
   bar.style.display = 'flex';
   const allTab = `<div class="tab${queueRepoFilter ? '' : ' active'}" data-repo="">All</div>`;
