@@ -46,6 +46,15 @@ export interface DriftScreenLog {
 	recordedAt: string;
 }
 
+// One row per PR spec-conformance check — feeds the same kind of calibration Phase 0
+// used for drift, but for a different question: how often does declaredDirection itself
+// diverge from the issue it claims to close, versus how often there's nothing to check.
+export interface SpecConformanceCheckLog {
+	prId: string;
+	outcome: "clean" | "flagged" | "inconclusive";
+	recordedAt: string;
+}
+
 // Optional sink for pipeline-stage instrumentation. Every method is optional so
 // logging never becomes a hard dependency for the pipeline to run — passing no
 // sink (or a sink missing a method) is a silent no-op at each call site. Methods
@@ -55,4 +64,5 @@ export interface DriftScreenLog {
 export interface InstrumentationSink {
 	logGateDecision?(entry: GateDecisionLog): Promise<void> | void;
 	logDriftScreen?(entry: DriftScreenLog): Promise<void> | void;
+	logSpecConformanceCheck?(entry: SpecConformanceCheckLog): Promise<void> | void;
 }

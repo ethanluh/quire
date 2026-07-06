@@ -12,6 +12,8 @@ function makeCard(overrides: Partial<ReviewCard> = {}): ReviewCard {
 		flags: [],
 		drift: { status: "clean" },
 		residualDisclosure: "behavioral confirm not run",
+		specConformance: { status: "clean" },
+		specConformanceDisclosure: "",
 		inputsHash: "hash-1",
 		memberCount: 1,
 		...overrides,

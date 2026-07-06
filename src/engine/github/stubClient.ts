@@ -1,5 +1,12 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
-import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
+import type {
+	FoundOrCreatedPullRequest,
+	GitHubClient,
+	IssueSummary,
+	ListOpenPullRequestsResult,
+	RawPRPayload,
+	RepoFile,
+} from "./client.js";
 import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 
 export interface CommitResolvedFilesCall {
@@ -43,6 +50,7 @@ export class StubGitHubClient implements GitHubClient {
 	private nextPrNumber = 1000;
 	defaultBranch = "main";
 	private readonly mergeabilityFixtures: Map<string, MergeabilityResult> = new Map();
+	private readonly issueFixtures: Map<string, IssueSummary> = new Map();
 	private readonly conflictTreesFixtures: Map<string, ConflictTrees> = new Map();
 	private readonly blobFixtures: Map<string, string> = new Map();
 	readonly mergedPrs: string[] = [];
@@ -97,6 +105,11 @@ export class StubGitHubClient implements GitHubClient {
 		this.blobFixtures.set(sha, content);
 	}
 
+	// Unset (or unmatched issueNumber) mirrors a 404: getIssue() returns undefined.
+	setIssue(owner: string, repo: string, issueNumber: number, issue: IssueSummary): void {
+		this.issueFixtures.set(`${owner}/${repo}/${issueNumber}`, issue);
+	}
+
 	async getPullRequest(owner: string, repo: string, prNumber: number): Promise<RawPRPayload> {
 		const key = `${owner}/${repo}/${prNumber}`;
 		const fixture = this.prFixtures.get(key);
@@ -145,6 +158,10 @@ export class StubGitHubClient implements GitHubClient {
 
 	async getDefaultBranch(_owner: string, _repo: string): Promise<string> {
 		return this.defaultBranch;
+	}
+
+	async getIssue(owner: string, repo: string, issueNumber: number): Promise<IssueSummary | undefined> {
+		return this.issueFixtures.get(`${owner}/${repo}/${issueNumber}`);
 	}
 
 	async commitFileToBranch(

@@ -4,12 +4,14 @@ import type { InstrumentationSink } from "../types/instrumentation.js";
 import type { LlmProvider } from "../drift/effectList/provider.js";
 import type { StaticAnalyzer } from "../drift/footprint/analyzer.js";
 import type { AuditStore } from "../gate/auditStore.js";
+import type { GitHubClient } from "../github/client.js";
 import { runGate } from "../gate/gate.js";
 import { buildBundles, type BundleConfig } from "../bundle/bundler.js";
 import { errorMessage } from "../util/error.js";
 import { runCheapScreen } from "../drift/screen.js";
 import { buildReviewCard, computeInputsHash, reuseReviewCard } from "../review/card.js";
 import { PrEffectCache } from "../cache/prCache.js";
+import { checkSpecConformance, type LinkedIssue, type SpecConformanceResult } from "../specConformance/check.js";
 
 export interface PipelineConfig {
 	gate: GateConfig;
@@ -26,6 +28,10 @@ export interface PipelineRunDeps {
 	// Optional: instrumentation is a pluggable add-on, not a hard dependency for the
 	// pipeline to run. Omitting it (or the caller's sink lacking a method) is a no-op.
 	sink?: InstrumentationSink;
+	// Optional: without it, every PR's spec-conformance check is "inconclusive" (no way
+	// to fetch the linked issue) rather than the pipeline failing outright — matches how
+	// omitting prCache/sink degrades gracefully instead of breaking existing callers.
+	githubClient?: GitHubClient;
 }
 
 // The previous call's bundles/cards for this same PR set, used to seed clustering and
@@ -69,7 +75,7 @@ export async function orchestratePipeline(
 	deps: PipelineRunDeps,
 	priorRun: PriorPipelineRun = EMPTY_PRIOR_RUN,
 ): Promise<PipelineResult> {
-	const { provider, analyzer, auditStore, sink } = deps;
+	const { provider, analyzer, auditStore, sink, githubClient } = deps;
 	const prCache = deps.prCache ?? new PrEffectCache();
 	const passed: PullRequest[] = [];
 	const rejected: PullRequest[] = [];
@@ -126,13 +132,16 @@ export async function orchestratePipeline(
 		}
 
 		for (const bundle of bundles) {
-			// computeInputsHash proves whether blastRadius/flags/drift would come out
-			// identical to the prior run without recomputing them — a strictly stronger
-			// check than "membership + reextraction" (it also catches same-members-same-
-			// headShas-but-different-effectSummary, and stays correct if the drift screen
-			// ever grows a new input this hash doesn't yet cover... though it would need
-			// updating then too). directionSummary is excluded on purpose (see
-			// reuseReviewCard) so a declaredDirection-only edit is never served stale.
+			// computeInputsHash proves whether blastRadius/flags/drift/specConformance would
+			// come out identical to the prior run without recomputing them — a strictly
+			// stronger check than "membership + reextraction" (it also catches same-members-
+			// same-headShas-but-different-effectSummary, and stays correct if a screen ever
+			// grows a new input this hash doesn't yet cover... though it would need updating
+			// then too). directionSummary (bundle.direction) is excluded on purpose (see
+			// reuseReviewCard) so a declaredDirection-only edit is never served stale there —
+			// but each member's declaredDirection/linkedIssueNumber IS included, since those
+			// are exactly the spec-conformance inputs (see computeInputsHash's own comment):
+			// a PR-body-only edit must force this loop to re-run, not be reused.
 			const priorCard = priorRun.cards.get(bundle.id);
 			const canReuse = priorCard !== undefined && priorCard.inputsHash === computeInputsHash(bundle);
 			if (canReuse) {
@@ -141,6 +150,7 @@ export async function orchestratePipeline(
 			}
 
 			const driftVerdicts = new Map<string, DriftVerdict>();
+			const specResultsByPr = new Map<string, SpecConformanceResult>();
 			for (const member of bundle.members) {
 				const rawClauses = effectsByPr.get(member.id) ?? [];
 				const verdict = await runCheapScreen(member, bundle, rawClauses, provider, analyzer);
@@ -154,8 +164,25 @@ export async function orchestratePipeline(
 						recordedAt: new Date().toISOString(),
 					}),
 				);
+
+				let issue: LinkedIssue | undefined;
+				if (member.linkedIssueNumber !== undefined && githubClient !== undefined) {
+					const issueSummary = await githubClient.getIssue(member.repoOwner, member.repoName, member.linkedIssueNumber);
+					if (issueSummary !== undefined) {
+						issue = { number: member.linkedIssueNumber, ...issueSummary };
+					}
+				}
+				const specResult = await checkSpecConformance(member, issue, provider);
+				specResultsByPr.set(member.id, specResult);
+				await logSafely(() =>
+					sink?.logSpecConformanceCheck?.({
+						prId: member.id,
+						outcome: specResult.outcome,
+						recordedAt: new Date().toISOString(),
+					}),
+				);
 			}
-			cards.push(buildReviewCard(bundle, driftVerdicts));
+			cards.push(buildReviewCard(bundle, driftVerdicts, specResultsByPr));
 		}
 	} catch (err) {
 		const error = errorMessage(err);

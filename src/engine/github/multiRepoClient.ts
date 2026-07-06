@@ -1,5 +1,12 @@
 import type { GestureAction, ReviewCard } from "../types/core.js";
-import type { FoundOrCreatedPullRequest, GitHubClient, ListOpenPullRequestsResult, RawPRPayload, RepoFile } from "./client.js";
+import type {
+	FoundOrCreatedPullRequest,
+	GitHubClient,
+	IssueSummary,
+	ListOpenPullRequestsResult,
+	RawPRPayload,
+	RepoFile,
+} from "./client.js";
 import type { ConflictTrees, MergeabilityResult, ResolvedFile } from "../types/mergeability.js";
 
 // A team can watch several repos, possibly bound through different installations (their
@@ -71,6 +78,10 @@ export class MultiRepoGitHubClient implements GitHubClient {
 
 	getDefaultBranch(owner: string, repo: string): Promise<string> {
 		return this.clientFor(owner, repo).getDefaultBranch(owner, repo);
+	}
+
+	getIssue(owner: string, repo: string, issueNumber: number): Promise<IssueSummary | undefined> {
+		return this.clientFor(owner, repo).getIssue(owner, repo, issueNumber);
 	}
 
 	commitFileToBranch(

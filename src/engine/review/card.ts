@@ -1,26 +1,34 @@
-import type { Bundle, DriftVerdict, ReviewCard } from "../types/core.js";
+import type { Bundle, DriftVerdict, ReviewCard, SpecConformanceSignal, SpecConformanceVerdict } from "../types/core.js";
+import type { SpecConformanceResult } from "../specConformance/check.js";
 import { computeBlastRadius } from "./blastRadius.js";
 import { detectFlags } from "./flags.js";
 
 const RESIDUAL_DISCLOSURE =
 	"Behavioral confirm is not yet active. Rare undeclared changes in structurally local, behaviorally silent code may not be caught.";
 
-// A cheap fingerprint of everything blastRadius/flags/drift are computed from: which PRs
-// are in the bundle (bundle.id already hashes the sorted member-id set), each member's
-// content version (headSha — filesTouched/diff-derived fields are tied to this), and the
-// anchor's extracted-effect text (effectSummary, the actual drift-comparison target).
-// Two bundles with an identical hash are guaranteed to produce identical blastRadius/
-// flags/drift from buildReviewCard — directionSummary is deliberately excluded (see
-// reuseReviewCard) since declaredDirection is metadata, not a drift-check input (INV-1),
-// and can change independent of everything else this hashes.
+// A cheap fingerprint of everything blastRadius/flags/drift/specConformance are computed
+// from: which PRs are in the bundle (bundle.id already hashes the sorted member-id set),
+// each member's content version (headSha — filesTouched/diff-derived fields are tied to
+// this), the anchor's extracted-effect text (effectSummary, the drift-comparison target),
+// and — unlike drift — each member's declaredDirection and linkedIssueNumber. Those two
+// are deliberately NOT excluded here the way bundle.direction (directionSummary) is: they
+// are the actual spec-conformance comparison inputs, so a PR-body-only edit (no new commit,
+// same headSha) that redeclares the direction or changes the linked issue must invalidate
+// this hash — that edit is exactly the scenario spec conformance exists to catch. Two
+// bundles with an identical hash are guaranteed to produce identical blastRadius/flags/
+// drift/specConformance from buildReviewCard.
 export function computeInputsHash(bundle: Bundle): string {
-	const headShas = bundle.members.map((m) => m.headSha).sort().join(",");
-	return `${bundle.id}|${headShas}|${bundle.effectSummary}`;
+	const memberFingerprints = bundle.members
+		.map((m) => `${m.headSha}:${m.declaredDirection}:${m.linkedIssueNumber ?? ""}`)
+		.sort()
+		.join(",");
+	return `${bundle.id}|${memberFingerprints}|${bundle.effectSummary}`;
 }
 
 export function buildReviewCard(
 	bundle: Bundle,
 	driftVerdicts: ReadonlyMap<string, DriftVerdict>,
+	specResultsByPr: ReadonlyMap<string, SpecConformanceResult>,
 ): ReviewCard {
 	const anchor = bundle.members[0];
 	if (anchor === undefined) throw new Error("Bundle must have at least one member");
@@ -28,6 +36,27 @@ export function buildReviewCard(
 	const memberVerdicts = bundle.members.map((m) => driftVerdicts.get(m.id));
 	const signals = memberVerdicts.flatMap((v) => (v?.status === "flagged" ? [...v.signals] : []));
 	const drift: DriftVerdict = signals.length > 0 ? { status: "flagged", signals } : { status: "clean" };
+
+	// "inconclusive" (no linked issue, a failed fetch, or an unparseable model response)
+	// is not a flag — it's disclosed instead (INV-6), same spirit as residualDisclosure
+	// above: don't let a "clean" specConformance verdict be mistaken for "we checked and
+	// it matched" when really nothing was checked at all.
+	const specSignals: SpecConformanceSignal[] = [];
+	let uncheckedCount = 0;
+	for (const member of bundle.members) {
+		const result = specResultsByPr.get(member.id);
+		if (result === undefined || result.outcome === "inconclusive") {
+			uncheckedCount++;
+		} else if (result.outcome === "flagged") {
+			specSignals.push({ prId: member.id, explanation: result.explanation });
+		}
+	}
+	const specConformance: SpecConformanceVerdict =
+		specSignals.length > 0 ? { status: "flagged", signals: specSignals } : { status: "clean" };
+	const specConformanceDisclosure =
+		uncheckedCount > 0
+			? `${uncheckedCount} of ${bundle.members.length} member(s) had no linked issue (or it could not be checked); spec conformance was not checked for them.`
+			: "";
 
 	return {
 		bundleId: bundle.id,
@@ -38,6 +67,8 @@ export function buildReviewCard(
 		flags: detectFlags(bundle),
 		drift,
 		residualDisclosure: RESIDUAL_DISCLOSURE, // INV-6: always set
+		specConformance,
+		specConformanceDisclosure,
 		inputsHash: computeInputsHash(bundle),
 		memberCount: bundle.members.length,
 	};

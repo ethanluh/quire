@@ -18,6 +18,7 @@ export const IncomingPRSchema = z.object({
 	number: z.number().int().positive(),
 	headSha: z.string(),
 	declaredDirection: z.string().min(1),
+	linkedIssueNumber: z.number().int().positive().optional(),
 	diff: DiffSchema,
 	filesTouched: z.array(z.string()).optional(),
 	symbolsTouched: z.array(z.object({

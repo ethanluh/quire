@@ -18,8 +18,14 @@ export function formatReviewCardComment(action: GestureAction, card: ReviewCard)
 				? `flagged (${card.drift.signals.length} signal${card.drift.signals.length === 1 ? "" : "s"})`
 				: "clean"
 		}`,
+		`- Spec conformance: ${
+			card.specConformance.status === "flagged"
+				? `flagged (${card.specConformance.signals.length} signal${card.specConformance.signals.length === 1 ? "" : "s"})`
+				: "clean"
+		}`,
 		"",
 		card.residualDisclosure,
+		...(card.specConformanceDisclosure.length > 0 ? [card.specConformanceDisclosure] : []),
 	];
 
 	return lines.join("\n");
