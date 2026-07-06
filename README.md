@@ -16,6 +16,25 @@ The value proposition rests on a single bargain: the human stops checking correc
 
 ---
 
+## Getting started
+
+```bash
+npm install
+```
+
+Quire needs a GitHub App registered before it will boot — see [GitHub App setup](#github-app-setup) below for the exact permissions/events/URLs. Once you have one:
+
+```bash
+cp .env.example .env   # fill in the values .env.example describes
+npm run dev
+```
+
+This serves the UI and API at `http://localhost:3000` (override with `PORT`). Sign in with GitHub, install the App from Settings (gear icon in the header), then select a repo to start triaging its PRs.
+
+<img src="docs/images/sign-in.png" alt="Quire's sign-in screen" width="640">
+
+---
+
 ## Gestures
 
 | Swipe | Action | Effect |
@@ -23,6 +42,10 @@ The value proposition rests on a single bargain: the human stops checking correc
 | Right | Accept | Enqueues bundle to merge queue — reversible until landed |
 | Left  | Reject | Discards bundle — swarm regenerates |
 | Down  | Defer  | Shelves for closer inspection — does not break triage rhythm |
+
+<img src="docs/images/review-card.png" alt="A Quire review card, from the design-system reference in src/interface/ui/styles/style-guide.html" width="420">
+
+*This is the actual review-card component and CSS, rendered from the design-system reference page rather than a live queue — a populated queue looks the same, with a real bundle's direction summary and blast radius in place of the sample text.*
 
 ---
 
@@ -74,3 +97,11 @@ A separate periodic pass (`QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES`, default 5) fas
 - [`docs/design-feel.md`](docs/design-feel.md) — the intended visual/interaction tone, inferred from the product's stated values; the UI is styled to it.
 - [`src/interface/ui/styles/tokens.css`](src/interface/ui/styles/tokens.css) + [`components.css`](src/interface/ui/styles/components.css) — the design-feel tone translated into design tokens and reference components; open [`src/interface/ui/styles/style-guide.html`](src/interface/ui/styles/style-guide.html) in a browser to see them.
 - [`CLAUDE.md`](CLAUDE.md) — guidance for Claude Code agents working in this repo.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, the checks a PR needs to pass, and code style.
+
+## License
+
+[MIT](LICENSE)
