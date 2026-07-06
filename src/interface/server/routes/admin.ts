@@ -3,6 +3,7 @@ import type { AuditStore } from "../../../engine/gate/auditStore.js";
 import type { MergeQueue } from "../../../engine/queue/mergeQueue.js";
 import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { ServerState } from "../state.js";
+import { saveShelf } from "../state.js";
 import { truncateNdjson } from "../../../engine/instrumentation/store.js";
 import { requireRole } from "../middleware/requireRole.js";
 
@@ -12,6 +13,7 @@ export function adminRouter(
 	queue: MergeQueue,
 	ndjsonLogPaths: ReadonlyArray<string>,
 	decidedStore: DecidedPrStore,
+	shelfPath: string,
 ): Router {
 	const router = Router();
 
@@ -24,6 +26,7 @@ export function adminRouter(
 			state.bundles.clear();
 			state.cards.clear();
 			state.shelf.clear();
+			await saveShelf(state.shelf, shelfPath);
 			await auditStore.clear();
 			await queue.clear();
 			await decidedStore.clearAll();

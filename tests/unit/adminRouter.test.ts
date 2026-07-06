@@ -107,7 +107,7 @@ describe("adminRouter POST /reset", () => {
 		app.use(stubMembership("owner"));
 		app.use(
 			"/admin",
-			adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath], decidedStore),
+			adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath], decidedStore, join(dir, "shelf.json")),
 		);
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -137,7 +137,7 @@ describe("adminRouter POST /reset", () => {
 
 		const app = express();
 		app.use(stubMembership(role));
-		app.use("/admin", adminRouter(state, auditStore, queue, [], decidedStore));
+		app.use("/admin", adminRouter(state, auditStore, queue, [], decidedStore, join(dir, "shelf.json")));
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
 

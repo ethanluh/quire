@@ -35,7 +35,7 @@ import { createAccountState, installationForRepo, repoBinding } from "./accountS
 import type { AccountState } from "./accountState.js";
 import { createLlmAccountState } from "./llmAccountState.js";
 import type { LlmAccountState } from "./llmAccountState.js";
-import { createServerState } from "./state.js";
+import { createServerState, hydrateShelf } from "./state.js";
 import type { ServerState } from "./state.js";
 import type { PipelineDeps } from "./ingestIntoQueue.js";
 import type { RefreshDeps } from "./refreshRepoQueue.js";
@@ -126,6 +126,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	const queuePath = join(dir, "queue.json");
 	const decidedPrsPath = join(dir, "decided-prs.json");
 	const prCachePath = join(dir, "pr-cache.json");
+	const shelfPath = join(dir, "shelf.json");
 	const deferLogPath = join(dir, "instrumentation/defers.ndjson");
 	const gateLogPath = join(dir, "instrumentation/gate-decisions.ndjson");
 	const driftScreenLogPath = join(dir, "instrumentation/drift-screen.ndjson");
@@ -134,6 +135,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 
 	const decidedStore = new DecidedPrStore(decidedPrsPath);
 	const prCache = new PrEffectCache(prCachePath);
+	const state = createServerState();
 
 	// One operator (this tenant) can bind several GitHub App installations — their personal
 	// account plus N orgs — and see a merged repo picker across all of them (see
@@ -151,6 +153,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		loadLlmAccount(llmAccountPath),
 		decidedStore.load(),
 		prCache.load(),
+		hydrateShelf(state.shelf, shelfPath),
 	]);
 	const accountState = createAccountState(installationAccountState);
 
@@ -210,8 +213,6 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		instrumentationSink,
 	};
 
-	const state = createServerState();
-
 	// tenantKey scopes enqueueRefresh's per-repo coalescing lock so two tenants who happen
 	// to select the same owner/name can never short-circuit each other's refresh.
 	const refreshDeps: RefreshDeps = {
@@ -229,14 +230,14 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	const router = Router();
 	router.use("/prs", prsRouter(state, pipelineDeps, queue));
 	router.use("/bundles", bundlesRouter(state));
-	router.use("/bundles", gesturesRouter(state, queue, deferLogPath, clientHolder, decidedStore, accountState));
+	router.use("/bundles", gesturesRouter(state, queue, deferLogPath, clientHolder, decidedStore, accountState, shelfPath));
 	router.use("/bundles", assignmentsRouter(state));
 	router.use("/queue", queueRouter(queue, state, decidedStore));
-	router.use("/shelf", shelfRouter(state, decidedStore));
+	router.use("/shelf", shelfRouter(state, decidedStore, shelfPath));
 	router.use("/audit", auditRouter(auditStore));
 	router.use(
 		"/admin",
-		adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath, conflictLogPath], decidedStore),
+		adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath, conflictLogPath], decidedStore, shelfPath),
 	);
 	router.use(
 		"/account/github",

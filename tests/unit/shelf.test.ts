@@ -63,7 +63,7 @@ describe("shelfRouter", () => {
 		const state = createServerState();
 		const decidedStore = new DecidedPrStore(join(dir, "decided-prs.json"));
 		const app = express();
-		app.use("/shelf", shelfRouter(state, decidedStore));
+		app.use("/shelf", shelfRouter(state, decidedStore, join(dir, "shelf.json")));
 		server = app.listen(0);
 		return { state, decidedStore };
 	}

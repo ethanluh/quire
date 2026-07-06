@@ -1,8 +1,9 @@
 import { Router } from "express";
 import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { ServerState } from "../state.js";
+import { saveShelf } from "../state.js";
 
-export function shelfRouter(state: ServerState, decidedStore: DecidedPrStore): Router {
+export function shelfRouter(state: ServerState, decidedStore: DecidedPrStore, shelfPath: string): Router {
 	const router = Router();
 
 	router.get("/", (_req, res) => {
@@ -18,6 +19,7 @@ export function shelfRouter(state: ServerState, decidedStore: DecidedPrStore): R
 				return;
 			}
 			state.shelf.delete(bundleId);
+			await saveShelf(state.shelf, shelfPath);
 			// Promote back to review queue. A human explicitly asking to reconsider a
 			// deferred bundle is a "this deserves fresh review" signal, same as a webhook's
 			// synchronize event — so its members' decided-PR record is cleared too, or a

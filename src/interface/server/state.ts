@@ -1,4 +1,5 @@
 import type { Bundle, ReviewCard } from "../../engine/types/core.js";
+import { loadState, saveState } from "../../engine/queue/shelfPersistence.js";
 
 export interface ShelvedBundle {
 	card: ReviewCard;
@@ -23,4 +24,18 @@ export function createServerState(): ServerState {
 		cards: new Map(),
 		shelf: new Map(),
 	};
+}
+
+// Restores the shelf across a process restart — state.shelf is otherwise purely in-memory,
+// so a deferred bundle would silently vanish (neither in the review queue nor on the shelf)
+// the moment the tenant reloads, even though its members stay correctly marked "decided" in
+// decided-prs.json. Mutates `shelf` in place so it can run alongside decidedStore.load()/
+// prCache.load() in loadTenant's startup Promise.all.
+export async function hydrateShelf(shelf: Map<string, ShelvedBundle>, path: string): Promise<void> {
+	const { entries } = await loadState(path);
+	for (const { bundleId, ...rest } of entries) shelf.set(bundleId, rest);
+}
+
+export async function saveShelf(shelf: ReadonlyMap<string, ShelvedBundle>, path: string): Promise<void> {
+	await saveState(path, { entries: [...shelf.entries()].map(([bundleId, shelved]) => ({ bundleId, ...shelved })) });
 }
