@@ -253,6 +253,10 @@
   .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
   .queue-entry-actions { display: flex; align-items: center; gap: var(--space-2); }
   .queue-entry-actions .btn { padding: var(--space-1) var(--space-3); }
+  /* Separates the informational "Details" button from the state-changing action
+     cluster with a hairline divider, so a row of up to 4 same-weight buttons still
+     reads as two groups rather than one flat list. */
+  .queue-entry-actions .btn-group { display: flex; gap: var(--space-2); margin-left: var(--space-2); padding-left: var(--space-2); border-left: 1px solid var(--color-border); }
 
   .status-badge {
     font-size: var(--text-xs);
@@ -982,6 +986,11 @@ function renderQueueFilterBar(entries) {
 }
 
 function queueEntryHtml(e) {
+  const actionButtons = [
+    e.status === 'queued' && isOwner() ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : '',
+    ['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept" onclick="reattemptQueueEntry('${escapeHtml(e.bundleId)}')">Reattempt</button>` : '',
+    ['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject" onclick="abortQueueEntry('${escapeHtml(e.bundleId)}', ${e.mergedPrIds.length}, ${e.bundle.members.length})">Abort</button>` : '',
+  ].filter(Boolean).join('');
   return `<div class="queue-entry">
     <div>
       <div>${escapeHtml(e.bundle.direction)}</div>
@@ -990,9 +999,7 @@ function queueEntryHtml(e) {
     <div class="queue-entry-actions">
       <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
       <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
-      ${e.status === 'queued' && isOwner() ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
-      ${['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept" onclick="reattemptQueueEntry('${escapeHtml(e.bundleId)}')">Reattempt</button>` : ''}
-      ${['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject" onclick="abortQueueEntry('${escapeHtml(e.bundleId)}', ${e.mergedPrIds.length}, ${e.bundle.members.length})">Abort</button>` : ''}
+      ${actionButtons ? `<span class="btn-group">${actionButtons}</span>` : ''}
     </div>
   </div>`;
 }

@@ -27,8 +27,8 @@
 	/* Text (ink) */
 	--color-text-primary: #2c2620;
 	--color-text-secondary: #5b5142;
-	--color-text-muted: #8a7f68;
-	--color-text-faint: #b1a489;
+	--color-text-muted: #6a5f45; /* WCAG AA (>=4.5:1) on all three surfaces above */
+	--color-text-faint: #8f8367; /* deliberately below AA — quiet register for incidental/placeholder text only */
 
 	/* Brand */
 	--color-brand: #7c3b32;
@@ -53,7 +53,7 @@
 	--shadow-lg: 0 12px 28px rgb(var(--shadow-color) / 0.14);
 
 	--focus-ring: 0 0 0 3px rgb(124 59 50 / 0.25); /* derived from --color-brand */
-	--select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238a7f68' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); /* derived from --color-text-muted */
+	--select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%236a5f45' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); /* derived from --color-text-muted */
 }
 
 [data-theme="ink"] {
@@ -67,8 +67,8 @@
 
 	--color-text-primary: #ece4d3;
 	--color-text-secondary: #c2b89f;
-	--color-text-muted: #8d8268;
-	--color-text-faint: #66604c;
+	--color-text-muted: #948a6e; /* WCAG AA (>=4.5:1) on page/card surfaces */
+	--color-text-faint: #746c53; /* deliberately below AA — quiet register for incidental/placeholder text only */
 
 	--color-brand: #c97b5c;
 	--color-brand-strong: #e0936f;
@@ -89,7 +89,7 @@
 	--shadow-lg: 0 14px 32px rgb(var(--shadow-color) / 0.5);
 
 	--focus-ring: 0 0 0 3px rgb(201 123 92 / 0.35);
-	--select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238d8268' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); /* derived from --color-text-muted */
+	--select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23948a6e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); /* derived from --color-text-muted */
 }
 
 :root {
