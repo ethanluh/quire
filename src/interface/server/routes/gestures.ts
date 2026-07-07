@@ -166,10 +166,15 @@ export function gesturesRouter(
 					res.json({ status: "rejected", bundleId });
 				} else {
 					// defer
+					// markDecided runs before the shelf mutation, not after: it's the only gate
+					// that keeps refreshRepoQueue from re-ingesting these PRs into a fresh bundle
+					// (see its isDecided filter). If this throws, nothing else has changed yet —
+					// the bundle stays in the review queue for a clean retry, instead of ending up
+					// split across the shelf (already committed) and a re-ingested duplicate.
+					await decidedStore.markDecided(memberPrIds, action, decisionContext);
 					state.shelf.set(bundleId, { card, bundle: assignedBundle, memberPrIds });
 					state.cards.delete(bundleId);
 					await saveShelf(state.shelf, shelfPath);
-					await decidedStore.markDecided(memberPrIds, action, decisionContext);
 					await logDefer(deferLogPath, bundleId, card);
 					postCardToMembers(github, action, assignedBundle, card);
 					res.json({ status: "deferred", bundleId, shelfPosition: state.shelf.size });

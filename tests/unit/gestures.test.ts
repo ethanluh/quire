@@ -40,6 +40,12 @@ class CloseFailingGitHubClient extends StubGitHubClient {
 	}
 }
 
+class MarkDecidedFailingStore extends DecidedPrStore {
+	override async markDecided(): Promise<void> {
+		throw new Error("disk unavailable");
+	}
+}
+
 function makeBundle(id: string): Bundle {
 	return {
 		id,
@@ -687,5 +693,62 @@ describe("gesturesRouter — reject GitHub close failures", () => {
 		expect(cards).toEqual([expect.objectContaining({ bundleId: "b-1" })]);
 
 		errorSpy.mockRestore();
+	});
+});
+
+describe("gesturesRouter — defer decidedStore failures", () => {
+	let server: Server;
+	let baseUrl: string;
+	let dataDir: string;
+	let state: ReturnType<typeof createServerState>;
+
+	beforeEach(async () => {
+		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
+		state = createServerState();
+		state.bundles.set("b-1", makeBundle("b-1"));
+		state.cards.set("b-1", makeCard("b-1"));
+
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dataDir, "queue.json"), github, new LlmProviderHolder(new StubLlmProvider()), join(dataDir, "conflict.ndjson"));
+		await queue.load();
+		const decidedStore = new MarkDecidedFailingStore(join(dataDir, "decided-prs.json"));
+		await decidedStore.load();
+		const accountState = createAccountState(undefined);
+
+		const app = express();
+		app.use(express.json());
+		app.use(actorMiddleware(() => ({ login: "actor", role: "owner" })));
+		app.use("/bundles", bundlesRouter(state));
+		app.use(
+			"/bundles",
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json")),
+		);
+		app.use(errorHandler);
+
+		await new Promise<void>((resolve) => {
+			server = app.listen(0, resolve);
+		});
+		const address = server.address();
+		const port = typeof address === "object" && address !== null ? address.port : 0;
+		baseUrl = `http://127.0.0.1:${port}`;
+	});
+
+	afterEach(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(dataDir, { recursive: true, force: true });
+	});
+
+	it("leaves the bundle in the review queue, not split onto the shelf, when markDecided fails", async () => {
+		const res = await fetch(`${baseUrl}/bundles/b-1/gesture`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ action: "defer" }),
+		});
+
+		expect(res.status).toBeGreaterThanOrEqual(500);
+
+		const cards = await (await fetch(`${baseUrl}/bundles`)).json();
+		expect(cards).toEqual([expect.objectContaining({ bundleId: "b-1" })]);
+		expect(state.shelf.has("b-1")).toBe(false);
 	});
 });
