@@ -12,6 +12,9 @@ export interface RawPRPayload {
 	diff: string;
 	ciStatus: "success" | "failure" | "pending" | "unknown";
 	declaredDirection: string;
+	// True when declaredDirection was synthesized from title/body rather than an explicit
+	// declared-direction marker — see PullRequest.directionInferred (types/core.ts).
+	directionInferred: boolean;
 	// Parsed from a GitHub closing keyword in the body (e.g. `Closes #12`). undefined when
 	// the PR doesn't reference an issue.
 	linkedIssueNumber?: number;
@@ -30,9 +33,11 @@ export interface SkippedPullRequest {
 
 export interface ListOpenPullRequestsResult {
 	payloads: ReadonlyArray<RawPRPayload>;
-	// PRs that exist but couldn't be turned into a RawPRPayload (most commonly: no
-	// declared-direction marker in the body, INV-1's fail-closed case) — surfaced so a
-	// caller can tell "nothing to ingest" apart from "N PRs were silently excluded".
+	// PRs that exist but couldn't be turned into a RawPRPayload (e.g. a diff or file-list
+	// fetch error) — surfaced so a caller can tell "nothing to ingest" apart from "N PRs
+	// were silently excluded". A missing declared-direction marker is NOT a skip reason —
+	// it still ingests, falling back to a title/body-derived direction (see
+	// extractDeclaredDirection in octokitClient.ts).
 	skipped: ReadonlyArray<SkippedPullRequest>;
 }
 

@@ -12,6 +12,7 @@ function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
 		number: 1,
 		headSha: "sha-1",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: ["src/auth.ts"],
 		symbolsTouched: [],
@@ -60,9 +61,9 @@ describe("runGate", () => {
 
 	it("does not flag two undeclared-direction PRs as duplicates of each other", async () => {
 		const config: GateConfig = { criteria: [{ name: "duplicate", mode: "enforce" }] };
-		const existing = [makePR({ id: "pr-0", declaredDirection: UNDECLARED_DIRECTION })];
+		const existing = [makePR({ id: "pr-0", declaredDirection: UNDECLARED_DIRECTION, directionInferred: true })];
 		const result = await runGate(
-			makePR({ id: "pr-1", declaredDirection: UNDECLARED_DIRECTION }),
+			makePR({ id: "pr-1", declaredDirection: UNDECLARED_DIRECTION, directionInferred: true }),
 			config,
 			audit,
 			existing,
@@ -75,7 +76,7 @@ describe("runGate", () => {
 			criteria: [{ name: "outOfScope", mode: "enforce" }],
 			scopeKeywords: ["auth"],
 		};
-		const result = await runGate(makePR({ declaredDirection: UNDECLARED_DIRECTION }), config, audit);
+		const result = await runGate(makePR({ declaredDirection: UNDECLARED_DIRECTION, directionInferred: true }), config, audit);
 		expect(result.outcome.result).toBe("pass");
 	});
 

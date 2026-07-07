@@ -47,6 +47,7 @@ function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 		diff: "diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -0,0 +1 @@\n+export function login() {}\n",
 		ciStatus: "success",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		filesTouched: ["src/auth.ts"],
 		...overrides,
 	};
@@ -69,6 +70,7 @@ function makeQueuedPr(id: string): PullRequest {
 		number: 1,
 		headSha: "sha-1",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: ["src/auth.ts"],
 		symbolsTouched: [],
@@ -78,7 +80,13 @@ function makeQueuedPr(id: string): PullRequest {
 }
 
 function makeBundleFor(pr: PullRequest): Bundle {
-	return { id: `bundle-${pr.id}`, direction: pr.declaredDirection, effectSummary: "adds OTP-based login", members: [pr] };
+	return {
+		id: `bundle-${pr.id}`,
+		direction: pr.declaredDirection,
+		directionInferred: pr.directionInferred,
+		effectSummary: "adds OTP-based login",
+		members: [pr],
+	};
 }
 
 function makeMergeability(overrides: Partial<MergeabilityResult> = {}): MergeabilityResult {
@@ -328,6 +336,7 @@ describe("webhookRouter", () => {
 		const bundle: Bundle = {
 			id: "bundle-123",
 			direction: pr1.declaredDirection,
+			directionInferred: pr1.directionInferred,
 			effectSummary: "adds OTP-based login",
 			members: [pr1, pr2, pr3],
 		};
@@ -361,6 +370,7 @@ describe("webhookRouter", () => {
 		const bundle: Bundle = {
 			id: "bundle-123",
 			direction: pr1.declaredDirection,
+			directionInferred: pr1.directionInferred,
 			effectSummary: "adds OTP-based login",
 			members: [pr1, pr2, pr3],
 		};

@@ -10,6 +10,7 @@ export function rawPRPayloadToIncomingPR(pr: RawPRPayload): IncomingPR {
 		number: pr.number,
 		headSha: pr.headSha,
 		declaredDirection: pr.declaredDirection,
+		directionInferred: pr.directionInferred,
 		...(pr.linkedIssueNumber !== undefined ? { linkedIssueNumber: pr.linkedIssueNumber } : {}),
 		diff: { raw: pr.diff, hunks: parseUnifiedDiff(pr.diff) },
 		filesTouched: [...pr.filesTouched],

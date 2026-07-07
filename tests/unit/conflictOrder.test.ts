@@ -10,6 +10,7 @@ function makePr(id: string, filesTouched: ReadonlyArray<string>): PullRequest {
 		number: 1,
 		headSha: "sha-1",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched,
 		symbolsTouched: [],
@@ -22,6 +23,7 @@ function makeBundle(id: string, filesTouched: ReadonlyArray<string>): Bundle {
 	return {
 		id,
 		direction: "add passwordless auth",
+		directionInferred: false,
 		effectSummary: "adds OTP-based login",
 		members: [makePr(`${id}-pr-1`, filesTouched)],
 	};
@@ -54,6 +56,7 @@ describe("orderByConflictRisk", () => {
 		const large: Bundle = {
 			id: "large",
 			direction: "add passwordless auth",
+			directionInferred: false,
 			effectSummary: "adds OTP-based login",
 			members: [makePr("large-pr-1", ["src/shared.ts", "src/extra-1.ts", "src/extra-2.ts"])],
 		};

@@ -16,6 +16,7 @@ function makeRawPR(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 		ciStatus: "success",
 		headSha: "sha-1",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		filesTouched: ["src/auth.ts"],
 		...overrides,
 	};

@@ -13,6 +13,7 @@ function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
 		number: 1,
 		headSha: "sha-1",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: ["src/auth.ts"],
 		symbolsTouched: [],

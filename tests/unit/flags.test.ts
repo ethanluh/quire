@@ -10,6 +10,7 @@ function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
 		number: 1,
 		headSha: "sha-1",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: [],
 		symbolsTouched: [],
@@ -23,6 +24,7 @@ function makeBundle(members: ReadonlyArray<PullRequest>): Bundle {
 	return {
 		id: "bundle-1",
 		direction: "add passwordless auth",
+		directionInferred: false,
 		effectSummary: "adds OTP-based login",
 		members,
 	};
