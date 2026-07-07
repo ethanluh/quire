@@ -96,7 +96,7 @@
 
   .gesture-hints {
     flex: 0 0 auto; display: flex; justify-content: space-between; padding: var(--space-3) var(--space-6) var(--space-1);
-    font-size: var(--text-xs); color: var(--color-text-faint); letter-spacing: var(--tracking-wide);
+    font-size: var(--text-xs); color: var(--color-text-muted); letter-spacing: var(--tracking-wide);
   }
   .gesture-hints span { display: inline-flex; align-items: center; gap: var(--space-1); }
   .gesture-hints svg { width: var(--space-3); height: var(--space-3); }
@@ -116,6 +116,16 @@
   .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
   .queue-entry-actions { display: flex; align-items: center; gap: var(--space-2); }
   .queue-entry-actions .btn { width: auto; margin-top: 0; padding: var(--space-1) var(--space-3); }
+  /* Separates the informational "Details" button from the state-changing action
+     cluster with a hairline divider, so a row of up to 4 same-weight buttons still
+     reads as two groups rather than one flat list. */
+  .queue-entry-actions .btn-group { display: flex; gap: var(--space-2); margin-left: var(--space-2); padding-left: var(--space-2); border-left: 1px solid var(--color-border); }
+
+  /* Dense, repeated list rows get tighter padding on narrow viewports; the single
+     full-bleed stack-card and modals stay at the generous --space-5/--space-6. */
+  @media (max-width: 480px) {
+    .list-card, .queue-entry, .audit-entry { padding: var(--space-4); }
+  }
   .status-badge { font-size: var(--text-xs); padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); }
   .status-queued  { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
   .status-landing { background: var(--color-flagged-wash); color: var(--color-flagged); }
@@ -1030,7 +1040,13 @@ async function loadQueue() {
   lastRenderedJson.queue = json;
   const el = document.getElementById('queue-list');
   if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
-  el.innerHTML = entries.map(e => `<div class="queue-entry card">
+  el.innerHTML = entries.map(e => {
+    const actionButtons = [
+      e.status === 'queued' && isOwner() ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : '',
+      ['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept" onclick="reattemptQueueEntry('${escapeHtml(e.bundleId)}')">Reattempt</button>` : '',
+      ['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject" onclick="abortQueueEntry('${escapeHtml(e.bundleId)}', ${e.mergedPrIds.length}, ${e.bundle.members.length})">Abort</button>` : '',
+    ].filter(Boolean).join('');
+    return `<div class="queue-entry card">
     <div>
       <div>${escapeHtml(e.bundle.direction)}</div>
       <div class="entry-id">${escapeHtml(e.bundleId)}</div>
@@ -1038,11 +1054,10 @@ async function loadQueue() {
     <div class="queue-entry-actions">
       <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
       <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
-      ${e.status === 'queued' && isOwner() ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : ''}
-      ${['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept" onclick="reattemptQueueEntry('${escapeHtml(e.bundleId)}')">Reattempt</button>` : ''}
-      ${['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject" onclick="abortQueueEntry('${escapeHtml(e.bundleId)}', ${e.mergedPrIds.length}, ${e.bundle.members.length})">Abort</button>` : ''}
+      ${actionButtons ? `<span class="btn-group">${actionButtons}</span>` : ''}
     </div>
-  </div>`).join('');
+  </div>`;
+  }).join('');
 }
 
 async function removeFromQueue(bundleId) {
