@@ -74,6 +74,15 @@ export interface TenantSharedConfig {
 	// every caller only ever looks up the current request's own signed-in login.
 	userTokenCache: UserTokenCache;
 	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>;
+	// Narrows the merged, installation-scoped repo list down to what the requesting user can
+	// personally see on GitHub (public, owned, or shared with them) — see repos.ts's
+	// filterReposAccessibleToUser for why this can't just piggyback on enrichWithUserToken's
+	// best-effort degrade.
+	filterReposForUser: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>;
+	// Single-repo counterpart, used by POST /repos/select to re-check server-side that the
+	// requester can actually see the specific repo they're adding — the GET /repos filter above
+	// is a picker convenience, not a security boundary on its own.
+	canUserAccessRepo: (owner: string, name: string, accessToken: string) => Promise<boolean>;
 	// Needed to silently mint a fresh user access token from a persisted refresh token on
 	// tenant load (see refreshUserTokenFromDisk in userToken.ts) — the same OAuth app config
 	// routes/account.ts uses for the initial exchange.
@@ -250,6 +259,8 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 			secureCookies: shared.isProduction,
 			userTokenCache: shared.userTokenCache,
 			enrichWithUserToken: shared.enrichWithUserToken,
+			filterReposForUser: shared.filterReposForUser,
+			canUserAccessRepo: shared.canUserAccessRepo,
 			listInstallationsForUser,
 			isInstallationBoundToAnotherTeam: (installationId) => registry.isInstallationBoundToOtherTeam(installationId, teamId),
 			dataDir: shared.dataDir,

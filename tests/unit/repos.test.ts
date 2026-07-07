@@ -1,7 +1,24 @@
 import { describe, it, expect, jest } from "@jest/globals";
 import type { Octokit } from "@octokit/rest";
-import { listInstallationRepositories, enrichWithStarredAndPinned } from "../../src/engine/github/repos.js";
+import {
+	listInstallationRepositories,
+	enrichWithStarredAndPinned,
+	fetchUserAccessibleRepoNames,
+	filterReposAccessibleToUser,
+	isRepoAccessibleToUser,
+} from "../../src/engine/github/repos.js";
 import type { RepoSummary } from "../../src/engine/github/repos.js";
+
+// Same duck-typed HttpError shape octokitClient.test.ts's own fake uses — both the real
+// @octokit/request-error's RequestError and this satisfy isHttpError's structural check.
+class FakeHttpError extends Error {
+	status: number;
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = "HttpError";
+		this.status = status;
+	}
+}
 
 function makeFakeOctokit(repos: ReadonlyArray<Record<string, unknown>>): Octokit {
 	const listReposAccessibleToInstallation = jest.fn();
@@ -170,5 +187,88 @@ describe("enrichWithStarredAndPinned", () => {
 
 		expect(result.map((r) => r.fullName)).toEqual(["acme/a", "acme/b"]);
 		expect(result.every((r) => !r.pinned)).toBe(true);
+	});
+});
+
+function makeFakeAuthenticatedUserOctokit(fullNames: ReadonlyArray<string>, opts?: { fails?: boolean }): Octokit {
+	const listForAuthenticatedUser = jest.fn();
+	const paginate = jest.fn(async () => {
+		if (opts?.fails === true) throw new Error("boom");
+		return fullNames.map((full_name) => ({ full_name }));
+	});
+	return { rest: { repos: { listForAuthenticatedUser } }, paginate } as unknown as Octokit;
+}
+
+describe("fetchUserAccessibleRepoNames", () => {
+	it("returns the paginated full-name set for the authenticated user", async () => {
+		const octokit = makeFakeAuthenticatedUserOctokit(["acme/a", "acme/b"]);
+
+		const names = await fetchUserAccessibleRepoNames(octokit);
+
+		expect(names).toEqual(new Set(["acme/a", "acme/b"]));
+	});
+
+	it("throws rather than degrading to an empty set on failure — the caller decides the fallback", async () => {
+		const octokit = makeFakeAuthenticatedUserOctokit([], { fails: true });
+
+		await expect(fetchUserAccessibleRepoNames(octokit)).rejects.toThrow("boom");
+	});
+});
+
+describe("filterReposAccessibleToUser", () => {
+	it("keeps public repos and private repos in the user's own accessible set, drops the rest", async () => {
+		const repos = [
+			repo({ fullName: "acme/public", private: false }),
+			repo({ fullName: "acme/shared-with-me", private: true }),
+			repo({ fullName: "acme/not-mine", private: true }),
+		];
+		const octokit = makeFakeAuthenticatedUserOctokit(["acme/shared-with-me"]);
+
+		const result = await filterReposAccessibleToUser(repos, octokit);
+
+		expect(result.map((r) => r.fullName)).toEqual(["acme/public", "acme/shared-with-me"]);
+	});
+
+	it("fails closed to public-only when the user's accessible set can't be fetched", async () => {
+		const repos = [repo({ fullName: "acme/public", private: false }), repo({ fullName: "acme/private", private: true })];
+		const octokit = makeFakeAuthenticatedUserOctokit([], { fails: true });
+
+		const result = await filterReposAccessibleToUser(repos, octokit);
+
+		expect(result.map((r) => r.fullName)).toEqual(["acme/public"]);
+	});
+});
+
+function makeFakeSingleRepoOctokit(opts: { rejects?: Error }): Octokit {
+	const get = jest.fn(async () => {
+		if (opts.rejects !== undefined) throw opts.rejects;
+		return { data: {} };
+	});
+	return { rest: { repos: { get } } } as unknown as Octokit;
+}
+
+describe("isRepoAccessibleToUser", () => {
+	it("returns true when GitHub's repos.get succeeds for the user's token", async () => {
+		const octokit = makeFakeSingleRepoOctokit({});
+
+		await expect(isRepoAccessibleToUser("acme", "widgets", octokit)).resolves.toBe(true);
+	});
+
+	it("returns false on a 404 (repo doesn't exist, or isn't visible to this user)", async () => {
+		const octokit = makeFakeSingleRepoOctokit({ rejects: new FakeHttpError("Not Found", 404) });
+
+		await expect(isRepoAccessibleToUser("acme", "widgets", octokit)).resolves.toBe(false);
+	});
+
+	it("returns false on a 403 (visible to the installation, but not to this user)", async () => {
+		const octokit = makeFakeSingleRepoOctokit({ rejects: new FakeHttpError("Forbidden", 403) });
+
+		await expect(isRepoAccessibleToUser("acme", "widgets", octokit)).resolves.toBe(false);
+	});
+
+	it("rethrows on an unrelated failure rather than treating it as 'no access'", async () => {
+		const octokit = makeFakeSingleRepoOctokit({ rejects: new FakeHttpError("Server error", 500) });
+
+		await expect(isRepoAccessibleToUser("acme", "widgets", octokit)).rejects.toThrow("Server error");
 	});
 });

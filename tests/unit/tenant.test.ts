@@ -64,6 +64,8 @@ describe("TenantRegistry", () => {
 			resolveDefaultLlmProvider: () => ({ provider: new StubLlmProvider(), description: "stub" }),
 			userTokenCache: createUserTokenCache(),
 			enrichWithUserToken: async (repos) => repos,
+			filterReposForUser: async (repos) => repos,
+			canUserAccessRepo: async () => true,
 			oauth: makeOAuth(async () => {
 				throw new OAuthExchangeError("no stored token expected in most tests");
 			}),
