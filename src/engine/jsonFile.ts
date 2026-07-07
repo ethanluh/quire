@@ -1,6 +1,8 @@
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+import { createKeyedLock } from "./util/keyedLock.js";
 
 // Shared by every module that persists a bit of state to a single JSON file: on-disk
 // account, merge queue, decided-PR record. Reads validate via a caller-supplied type guard
@@ -27,9 +29,19 @@ export async function ensureDir(path: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
 }
 
+// Two overlapping writes to the *same* path (e.g. two teammates' requests both saving a
+// team's queue.json) must never race: each gets its own temp file (unique suffix) so a
+// concurrent writer can't clobber another's in-flight tmp file, and the writes themselves
+// are serialized per path so the rename that lands last is deterministically the write that
+// was *issued* last — not whichever happened to win the fs race. Mirrors the per-key
+// promise-chain pattern already used for refresh coalescing (refreshRepoQueue.ts).
+const writeLock = createKeyedLock();
+
 export async function writeJsonFileAtomic(path: string, data: unknown): Promise<void> {
-	await ensureDir(path);
-	const tmp = `${path}.tmp`;
-	await writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
-	await rename(tmp, path);
+	await writeLock(path, async () => {
+		await ensureDir(path);
+		const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+		await writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
+		await rename(tmp, path);
+	});
 }
