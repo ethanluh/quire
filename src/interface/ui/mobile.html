@@ -1700,6 +1700,7 @@ checkSignedIn().then((signedIn) => {
     loadAudit();
     startPolling();
     startLiveUpdates();
+    startBackgroundRefresh();
   }
 });
 
@@ -1730,6 +1731,28 @@ function pollActivePane() {
 function startPolling() {
   if (pollTimer) return;
   pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
+}
+
+// Independent of the cheap poll above and the SSE push below — this is the fallback for when
+// neither a webhook nor the reconciliation timer has run yet (a missed/misconfigured webhook
+// delivery, or a stretch with no push connection). Calls the real refresh endpoint on a slow
+// cadence so new/closed PRs surface within about a minute even with no push at all, instead of
+// waiting on the server's own (much longer) reconciliation interval.
+const BACKGROUND_REFRESH_INTERVAL_MS = 60000;
+let backgroundRefreshTimer = null;
+
+function backgroundRefresh() {
+  if (document.hidden) return;
+  // Same guard as pollActivePane: don't rebuild the swipeable stack out from under an
+  // in-progress gesture — the current drag/commit will finish and the next tick will pick
+  // up whatever changed.
+  if (gestureInFlight || (topCardEl && topCardEl.classList.contains('dragging'))) return;
+  refreshAndLoadReview();
+}
+
+function startBackgroundRefresh() {
+  if (backgroundRefreshTimer) return;
+  backgroundRefreshTimer = setInterval(backgroundRefresh, BACKGROUND_REFRESH_INTERVAL_MS);
 }
 
 // Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
