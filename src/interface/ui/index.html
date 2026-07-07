@@ -1853,6 +1853,7 @@ if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop
       loadAudit();
       startPolling();
       startLiveUpdates();
+      startBackgroundRefresh();
     }
   });
 }
@@ -1876,6 +1877,24 @@ function pollActivePane() {
 function startPolling() {
   if (pollTimer) return;
   pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
+}
+
+// Independent of the cheap poll above and the SSE push below — this is the fallback for when
+// neither a webhook nor the reconciliation timer has run yet (a missed/misconfigured webhook
+// delivery, or a stretch with no push connection). Calls the real refresh endpoint on a slow
+// cadence so new/closed PRs surface within about a minute even with no push at all, instead of
+// waiting on the server's own (much longer) reconciliation interval.
+const BACKGROUND_REFRESH_INTERVAL_MS = 60000;
+let backgroundRefreshTimer = null;
+
+function backgroundRefresh() {
+  if (document.hidden) return;
+  refreshAndLoadReview();
+}
+
+function startBackgroundRefresh() {
+  if (backgroundRefreshTimer) return;
+  backgroundRefreshTimer = setInterval(backgroundRefresh, BACKGROUND_REFRESH_INTERVAL_MS);
 }
 
 // Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
