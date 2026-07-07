@@ -9,6 +9,7 @@ function makeCard(bundleId: string): ReviewCard {
 	return {
 		bundleId,
 		directionSummary: "add passwordless auth",
+		directionInferred: false,
 		repoOwner: "org",
 		repoName: "repo",
 		blastRadius: 1,
@@ -27,6 +28,7 @@ function makeBundle(id: string, filesTouched: ReadonlyArray<string> = []): Bundl
 	return {
 		id,
 		direction: "add passwordless auth",
+		directionInferred: false,
 		effectSummary: "adds OTP-based login",
 		members: [
 			{
@@ -36,6 +38,7 @@ function makeBundle(id: string, filesTouched: ReadonlyArray<string> = []): Bundl
 				number: 1,
 				headSha: "sha-1",
 				declaredDirection: "add passwordless auth",
+				directionInferred: false,
 				diff: { raw: "", hunks: [] },
 				filesTouched,
 				symbolsTouched: [],

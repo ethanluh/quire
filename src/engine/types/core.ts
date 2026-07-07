@@ -15,9 +15,12 @@ export interface Diff {
 	hunks: ReadonlyArray<DiffHunk>;
 }
 
-// Explicit "no direction was declared" label. Distinct from any real declaration so it
-// can never collide with real text; recognized downstream (bundling, gate criteria) to
-// force per-PR handling without ever inferring a direction from the diff (INV-1).
+// Last-resort label for when a PR has neither the declared-direction marker nor any
+// title/body text to fall back on (see extractDeclaredDirection in octokitClient.ts).
+// Distinct from any real declaration so it can never collide with real text. Combined
+// with `directionInferred` below, downstream code (bundling, gate criteria, spec
+// conformance) recognizes "no real declaration" without ever inferring a direction from
+// the diff itself (INV-1).
 export const UNDECLARED_DIRECTION = "(no declared direction)";
 
 export interface PullRequest {
@@ -29,6 +32,13 @@ export interface PullRequest {
 	// since a prior pipeline run (see src/engine/cache/prCache.ts) — never a verdict input.
 	headSha: string;
 	declaredDirection: string;
+	// True when declaredDirection was synthesized from the PR's title/body because the
+	// <!-- declared-direction --> marker was missing, rather than taken from an explicit
+	// author declaration. Still not a real declaration under INV-1's discipline — code that
+	// special-cased the old UNDECLARED_DIRECTION sentinel (bundler singleton-forcing, gate
+	// duplicate/outOfScope exemptions, spec conformance) keys off this flag instead, so a
+	// title/body guess never gets treated as declared-and-comparable.
+	directionInferred: boolean;
 	// Parsed from a GitHub closing keyword in the PR body (e.g. `Closes #12`). undefined
 	// when the PR doesn't reference an issue — spec conformance has nothing to compare
 	// against in that case (see src/engine/specConformance/check.ts).
@@ -43,6 +53,9 @@ export interface PullRequest {
 export interface Bundle {
 	id: string;
 	direction: string;
+	// Mirrors the anchor member's PullRequest.directionInferred — lets the review card
+	// disclose that `direction` is a title/body guess, not an author declaration.
+	directionInferred: boolean;
 	// Extracted-effect evidence (blind to declaredDirection, INV-2) that formed this
 	// bundle. The drift check compares members against this, never against
 	// `direction` — declaredDirection is a label for humans, not a verdict input (INV-1).
@@ -86,6 +99,10 @@ export type SpecConformanceVerdict =
 export interface ReviewCard {
 	bundleId: string;
 	directionSummary: string;
+	// Mirrors Bundle.directionInferred — true when directionSummary is a title/body guess
+	// rather than an explicit author declaration, so the UI can disclose it (see
+	// index.html/mobile.html) instead of presenting a guess as a real declaration.
+	directionInferred: boolean;
 	// Derived from the bundle's members (every ingestion run clusters PRs from a single
 	// repo, see isBundleForRepo in server/refreshRepoQueue.ts) — lets the UI show/filter by
 	// repo without fetching bundle detail.

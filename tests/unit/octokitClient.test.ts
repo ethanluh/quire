@@ -225,11 +225,20 @@ describe("OctokitGitHubClient", () => {
 			expect(payload.filesTouched).toEqual(["src/auth.ts"]);
 		});
 
-		it("labels declaredDirection as undeclared when the PR body has no marker (INV-1: never inferred)", async () => {
+		it("falls back to a title/body-derived direction when the PR body has no marker (INV-1: never a real declaration)", async () => {
 			const { octokit } = makeFakeOctokit({ pr: makePrResponse("just a plain description") });
 			const client = new OctokitGitHubClient(octokit);
 			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.declaredDirection).toBe("add passwordless auth: just a plain description");
+			expect(payload.directionInferred).toBe(true);
+		});
+
+		it("falls back to UNDECLARED_DIRECTION when the PR has no marker and no title/body to fall back to", async () => {
+			const { octokit } = makeFakeOctokit({ pr: makePrResponse("   ", { title: "   " }) });
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
 			expect(payload.declaredDirection).toBe(UNDECLARED_DIRECTION);
+			expect(payload.directionInferred).toBe(true);
 		});
 
 		it("extracts linkedIssueNumber from a closing keyword in the PR body", async () => {
@@ -326,8 +335,9 @@ describe("OctokitGitHubClient", () => {
 			expect(payloads.map((p) => p.number)).toEqual([5, 6]);
 			expect(payloads.map((p) => p.declaredDirection)).toEqual([
 				"add passwordless auth",
-				UNDECLARED_DIRECTION,
+				"add passwordless auth: no marker here",
 			]);
+			expect(payloads.map((p) => p.directionInferred)).toEqual([false, true]);
 			expect(skipped).toEqual([]);
 		});
 
@@ -444,6 +454,7 @@ describe("OctokitGitHubClient", () => {
 			await client.postReviewCardComment("org", "repo", 7, "accept", {
 				bundleId: "b-1",
 				directionSummary: "add passwordless auth",
+				directionInferred: false,
 				repoOwner: "org",
 				repoName: "repo",
 				blastRadius: 2,
@@ -474,6 +485,7 @@ describe("OctokitGitHubClient", () => {
 				client.postReviewCardComment("org", "repo", 7, "accept", {
 					bundleId: "b-1",
 					directionSummary: "add passwordless auth",
+					directionInferred: false,
 					repoOwner: "org",
 					repoName: "repo",
 					blastRadius: 2,

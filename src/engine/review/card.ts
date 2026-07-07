@@ -62,6 +62,7 @@ export function buildReviewCard(
 	return {
 		bundleId: bundle.id,
 		directionSummary: bundle.direction,
+		directionInferred: bundle.directionInferred,
 		repoOwner: anchor.repoOwner,
 		repoName: anchor.repoName,
 		blastRadius: computeBlastRadius(bundle),
@@ -89,6 +90,7 @@ export function reuseReviewCard(bundle: Bundle, priorCard: ReviewCard): ReviewCa
 		...priorCard,
 		bundleId: bundle.id,
 		directionSummary: bundle.direction,
+		directionInferred: bundle.directionInferred,
 		repoOwner: anchor.repoOwner,
 		repoName: anchor.repoName,
 		memberCount: bundle.members.length,

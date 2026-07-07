@@ -20,6 +20,7 @@ function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
 		number: 1,
 		headSha: "head-sha",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: ["src/auth.ts"],
 		symbolsTouched: [],

@@ -6,6 +6,7 @@ function makeCard(overrides: Partial<ReviewCard> = {}): ReviewCard {
 	return {
 		bundleId: "b-1",
 		directionSummary: "add passwordless auth",
+		directionInferred: false,
 		repoOwner: "org",
 		repoName: "repo",
 		blastRadius: 3,

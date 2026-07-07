@@ -1,4 +1,4 @@
-import { UNDECLARED_DIRECTION, type PullRequest } from "../types/core.js";
+import type { PullRequest } from "../types/core.js";
 import type { LlmMessage, LlmProvider } from "../drift/effectList/provider.js";
 import { stripCodeFence } from "../drift/effectList/stripCodeFence.js";
 
@@ -63,7 +63,11 @@ export async function checkSpecConformance(
 	issue: LinkedIssue | undefined,
 	provider: LlmProvider,
 ): Promise<SpecConformanceResult> {
-	if (pr.declaredDirection === UNDECLARED_DIRECTION || issue === undefined) {
+	// A title/body-derived guess is still not an explicit declaration (INV-1) — comparing
+	// it against the linked issue would judge the issue against text we synthesized
+	// ourselves, not something the author actually declared. Same "inconclusive" outcome
+	// as having no real declaration at all.
+	if (pr.directionInferred || issue === undefined) {
 		return { outcome: "inconclusive" };
 	}
 

@@ -86,6 +86,7 @@ function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 		diff: "diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -0,0 +1 @@\n+export function login() {}\n",
 		ciStatus: "success",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		filesTouched: ["src/auth.ts"],
 		...overrides,
 	};

@@ -1,4 +1,4 @@
-import { UNDECLARED_DIRECTION, type Bundle, type PullRequest } from "../types/core.js";
+import type { Bundle, PullRequest } from "../types/core.js";
 import type { LlmProvider } from "../drift/effectList/provider.js";
 import { extractEffects } from "../drift/effectList/extractor.js";
 import { clusterPRs, type ClusteringFailure, type ClusterSeed } from "./similarity.js";
@@ -137,13 +137,15 @@ export async function buildBundles(
 	}
 	const toCluster = extracted.filter((pr) => !seededIds.has(pr.id));
 
-	// PRs with no declared direction must never be grouped with another PR — not with a
-	// declared PR (that would attribute a fabricated direction to them, INV-1) and not
-	// with each other on the strength of sharing the same placeholder text (that would
-	// manufacture agreement out of mutual absence of a declaration, INV-1/INV-3). Pull
-	// them out before similarity clustering runs and give each its own singleton bundle.
-	const undeclared = toCluster.filter((pr) => pr.declaredDirection === UNDECLARED_DIRECTION);
-	const toClusterDeclared = toCluster.filter((pr) => pr.declaredDirection !== UNDECLARED_DIRECTION);
+	// PRs with no real declared direction must never be grouped with another PR — not with
+	// a declared PR (that would attribute a fabricated direction to them, INV-1) and not
+	// with each other on the strength of sharing similar title/body text (that would
+	// manufacture agreement out of mutual absence of a declaration, INV-1/INV-3). This
+	// covers both "no fallback possible" (the sentinel) and "fallback inferred from
+	// title/description" — directionInferred is true either way. Pull them out before
+	// similarity clustering runs and give each its own singleton bundle.
+	const undeclared = toCluster.filter((pr) => pr.directionInferred);
+	const toClusterDeclared = toCluster.filter((pr) => !pr.directionInferred);
 
 	const { clusters, failures: clusteringFailures } = await clusterPRs(
 		toClusterDeclared, effectsByPr, provider, { threshold: config.similarityThreshold }, seeds, prCache, modelKey,
@@ -157,6 +159,7 @@ export async function buildBundles(
 		return {
 			id: stableId(members.map((m) => m.id)),
 			direction: anchor.declaredDirection,
+			directionInferred: anchor.directionInferred,
 			effectSummary: (effectsByPr.get(anchor.id) ?? []).join(". "),
 			members,
 		};

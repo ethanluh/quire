@@ -44,6 +44,7 @@ function makePR(id: string, direction: string, overrides: Partial<PullRequest> =
 		id, repoOwner: "org", repoName: "repo", number: 1,
 		headSha: `sha-${id}`,
 		declaredDirection: direction,
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: [`src/${id}.ts`],
 		symbolsTouched: [], testNamesChanged: [], ciStatus: "success",
@@ -137,8 +138,8 @@ describe("buildBundles — clusters on drift-check evidence, not declaredDirecti
 		// test fails loudly if the forced-singleton path is bypassed.
 
 		const prs = [
-			makePR("pr-a", UNDECLARED_DIRECTION),
-			makePR("pr-b", UNDECLARED_DIRECTION),
+			makePR("pr-a", UNDECLARED_DIRECTION, { directionInferred: true }),
+			makePR("pr-b", UNDECLARED_DIRECTION, { directionInferred: true }),
 		];
 
 		const { bundles } = await buildBundles(prs, stub, { similarityThreshold: 0.75 });

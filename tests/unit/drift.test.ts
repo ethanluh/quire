@@ -9,7 +9,7 @@ import type { Bundle, Diff, PullRequest } from "../../src/engine/types/core.js";
 const EMPTY_DIFF: Diff = { raw: "", hunks: [] };
 
 function makeBundle(members: PullRequest[] = []): Bundle {
-	return { id: "bundle-1", direction: "add passwordless auth", effectSummary: "adds OTP-based login", members };
+	return { id: "bundle-1", direction: "add passwordless auth", directionInferred: false, effectSummary: "adds OTP-based login", members };
 }
 
 function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
@@ -17,6 +17,7 @@ function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
 		id: "pr-1", repoOwner: "org", repoName: "repo", number: 1,
 		headSha: "sha-1",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: EMPTY_DIFF, filesTouched: ["src/auth.ts"],
 		symbolsTouched: [], testNamesChanged: [], ciStatus: "success",
 		...overrides,

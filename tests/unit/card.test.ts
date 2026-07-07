@@ -11,6 +11,7 @@ function makePR(id: string, overrides: Partial<PullRequest> = {}): PullRequest {
 		number: 1,
 		headSha: `sha-${id}`,
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: [`src/${id}.ts`],
 		symbolsTouched: [],
@@ -26,6 +27,7 @@ function makeBundle(members: ReadonlyArray<PullRequest>): Bundle {
 	return {
 		id: "b-1",
 		direction: anchor.declaredDirection,
+		directionInferred: anchor.directionInferred,
 		effectSummary: "adds OTP-based login",
 		members,
 	};
@@ -104,6 +106,7 @@ describe("reuseReviewCard — repo derivation", () => {
 		const priorCard: ReviewCard = {
 			bundleId: "b-1",
 			directionSummary: "add passwordless auth",
+			directionInferred: false,
 			repoOwner: "stale-owner",
 			repoName: "stale-repo",
 			blastRadius: 1,

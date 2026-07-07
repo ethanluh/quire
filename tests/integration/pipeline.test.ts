@@ -56,6 +56,7 @@ function makePR(id: string, direction: string, overrides: Partial<PullRequest> =
 		number: parseInt(id.replace(/\D/g, "") || "1"),
 		headSha: `sha-${id}`,
 		declaredDirection: direction,
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: [`src/${id}.ts`],
 		symbolsTouched: [], testNamesChanged: [], ciStatus: "success",

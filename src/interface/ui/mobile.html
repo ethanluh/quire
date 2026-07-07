@@ -550,9 +550,15 @@ function renderSignals(drift, members) {
   return `<div class="drift-signals"><strong>Drift signals (noted, not an error)</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
 }
 
+function directionInferredBadge(inferred) {
+  return inferred
+    ? `<span class="badge badge-neutral" title="No declared-direction marker was found on this PR; the direction shown was inferred from its title/description, not explicitly declared.">Inferred</span>`
+    : '';
+}
+
 function cardBodyHtml(card) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
-  return `<div class="card-direction">${escapeHtml(card.directionSummary)}</div>
+  return `<div class="card-direction">${escapeHtml(card.directionSummary)} ${directionInferredBadge(card.directionInferred)}</div>
     <div class="card-meta">
       <span class="badge badge-neutral">${card.memberCount} PR${card.memberCount === 1 ? '' : 's'}</span>
       <span class="badge badge-neutral">Blast radius: ${card.blastRadius} files</span>
@@ -605,7 +611,7 @@ function prMemberListHtml(members, drift, mergeStatus) {
     return `<div class="pr-member-row">
       <div class="pr-member-info">
         <a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}</a>
-        <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)}</span>
+        <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)} ${directionInferredBadge(pr.directionInferred)}</span>
       </div>
       <div class="pr-member-tags">
         ${prMergeStatusBadge(pr, mergeStatus)}
@@ -665,7 +671,7 @@ detailModalBody.addEventListener('click', async (event) => {
 function detailBodyHtml(detail, opts) {
   opts = opts || {};
   return `
-    <div class="card-direction">${escapeHtml(detail.directionSummary || detail.direction || '')}</div>
+    <div class="card-direction">${escapeHtml(detail.directionSummary || detail.direction || '')} ${directionInferredBadge(detail.directionInferred)}</div>
     ${detail.effectSummary ? `<p class="residual">${escapeHtml(detail.effectSummary)}</p>` : ''}
     ${detail.blastRadius !== undefined ? `<div class="card-meta">
       <span class="badge badge-neutral">Blast radius: ${detail.blastRadius} files</span>

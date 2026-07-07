@@ -15,6 +15,7 @@ function makePR(id: string): PullRequest {
 		id, repoOwner: "org", repoName: "repo", number: 1,
 		headSha: `sha-${id}`,
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: [`src/${id}.ts`],
 		symbolsTouched: [], testNamesChanged: [], ciStatus: "success",

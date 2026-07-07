@@ -131,17 +131,43 @@ function normalizeMergeableState(draft: boolean, mergeableState: string): Mergea
 	}
 }
 
-function extractDeclaredDirection(body: string | null): string {
+// How much of the PR body to fold into the fallback direction when there's no marker —
+// enough to carry real signal, short enough to stay a label rather than a full re-read.
+const FALLBACK_BODY_MAX_LENGTH = 200;
+
+// Builds a direction label from the PR's own title/body when the author never filled in
+// the marker. Still not an explicit declaration (INV-1's discipline) — the caller marks
+// the result `inferred: true` so downstream code keeps treating it as "no real evidence,"
+// same as the old UNDECLARED_DIRECTION-only behavior, just with a legible label instead
+// of an opaque placeholder.
+function synthesizeDirectionFromDetails(title: string, body: string | null): string {
+	const trimmedTitle = title.trim();
+	const trimmedBody = (body ?? "").trim();
+	const truncatedBody =
+		trimmedBody.length > FALLBACK_BODY_MAX_LENGTH
+			? `${trimmedBody.slice(0, FALLBACK_BODY_MAX_LENGTH).trim()}…`
+			: trimmedBody;
+	if (trimmedTitle.length === 0) return truncatedBody;
+	if (truncatedBody.length === 0) return trimmedTitle;
+	return `${trimmedTitle}: ${truncatedBody}`;
+}
+
+function extractDeclaredDirection(body: string | null, title: string): { direction: string; inferred: boolean } {
 	const match = body !== null ? DECLARED_DIRECTION_MARKER.exec(body) : null;
-	const direction = match?.[1]?.trim();
-	if (direction === undefined || direction.length === 0) {
-		// INV-1: a verdict needs an explicit declared prior, never an inferred one — so a
-		// missing marker gets an explicit "undeclared" label instead of being skipped or
-		// having a direction inferred from the diff. Downstream (bundling, gate criteria)
-		// treats this sentinel as "no evidence," never as a real declaration to compare.
-		return UNDECLARED_DIRECTION;
+	const declared = match?.[1]?.trim();
+	if (declared !== undefined && declared.length > 0) {
+		return { direction: declared, inferred: false };
 	}
-	return direction;
+	// INV-1: a verdict needs an explicit declared prior, never an inferred one — so a
+	// missing marker never gets treated as a real declaration. Rather than an opaque
+	// placeholder, fall back to the PR's own title/description when there's one to use;
+	// downstream (bundling, gate criteria, spec conformance) keys off `inferred` — never
+	// `direction` — to keep this out of any comparison that needs a real declaration.
+	const fallback = synthesizeDirectionFromDetails(title, body);
+	if (fallback.length > 0) {
+		return { direction: fallback, inferred: true };
+	}
+	return { direction: UNDECLARED_DIRECTION, inferred: true };
 }
 
 // Exported for unit tests (octokitClient.test.ts) — the closing-keyword regex is the only
@@ -175,8 +201,9 @@ export class OctokitGitHubClient implements GitHubClient {
 				// down ingestion for every other open PR in the same repo — but the
 				// caller still needs to know it happened instead of seeing an empty queue
 				// with no explanation. A missing declared-direction marker no longer
-				// lands here — extractDeclaredDirection() labels it UNDECLARED_DIRECTION
-				// instead of throwing, so that PR still ingests normally.
+				// lands here — extractDeclaredDirection() falls back to the PR's title/
+				// body (or UNDECLARED_DIRECTION if both are empty) instead of throwing,
+				// so that PR still ingests normally.
 				const reason = String(result.reason);
 				console.error(`Skipping ${owner}/${repo}#${prs[i]?.number}: ${reason}`);
 				skipped.push({ number: prs[i]?.number ?? -1, reason });
@@ -494,6 +521,7 @@ export class OctokitGitHubClient implements GitHubClient {
 		]);
 
 		const linkedIssueNumber = extractLinkedIssueNumber(pr.body);
+		const { direction, inferred } = extractDeclaredDirection(pr.body, pr.title);
 		return {
 			id: String(pr.id),
 			number: pr.number,
@@ -504,7 +532,8 @@ export class OctokitGitHubClient implements GitHubClient {
 			headSha: pr.head.sha,
 			diff: diffResponse.data as string,
 			ciStatus,
-			declaredDirection: extractDeclaredDirection(pr.body),
+			declaredDirection: direction,
+			directionInferred: inferred,
 			...(linkedIssueNumber !== undefined ? { linkedIssueNumber } : {}),
 			filesTouched: files.map((f) => f.filename),
 		};

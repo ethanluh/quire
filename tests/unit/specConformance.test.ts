@@ -11,6 +11,7 @@ function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
 		number: 1,
 		headSha: "sha-1",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: ["src/auth.ts"],
 		symbolsTouched: [],
@@ -30,9 +31,13 @@ describe("checkSpecConformance", () => {
 		expect(stub.calls).toHaveLength(0);
 	});
 
-	it("is inconclusive when declaredDirection is undeclared, and never calls the provider", async () => {
+	it("is inconclusive when the direction is inferred (not a real declaration), and never calls the provider", async () => {
 		const stub = new StubLlmProvider();
-		const result = await checkSpecConformance(makePR({ declaredDirection: UNDECLARED_DIRECTION }), ISSUE, stub);
+		const result = await checkSpecConformance(
+			makePR({ declaredDirection: UNDECLARED_DIRECTION, directionInferred: true }),
+			ISSUE,
+			stub,
+		);
 		expect(result).toEqual({ outcome: "inconclusive" });
 		expect(stub.calls).toHaveLength(0);
 	});

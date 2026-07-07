@@ -22,6 +22,7 @@ function makeBundle(id: string, members: ReadonlyArray<PullRequest> = []): Bundl
 	return {
 		id,
 		direction: "add passwordless auth",
+		directionInferred: false,
 		effectSummary: "adds OTP-based login",
 		members,
 	};
@@ -35,6 +36,7 @@ function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
 		number: 1,
 		headSha: "head-sha",
 		declaredDirection: "add passwordless auth",
+		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: ["src/auth.ts"],
 		symbolsTouched: [],
@@ -78,6 +80,7 @@ function makeCard(bundleId: string): ReviewCard {
 	return {
 		bundleId,
 		directionSummary: "add passwordless auth",
+		directionInferred: false,
 		repoOwner: "org",
 		repoName: "repo",
 		blastRadius: 1,
