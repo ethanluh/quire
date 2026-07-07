@@ -5,7 +5,7 @@ import type { GitHubAppConfig } from "../../engine/github/installationClient.js"
 import { InstallationRevokedError, buildInstallationOctokit, buildUserOctokit } from "../../engine/github/installationClient.js";
 import { fetchAuthenticatedUser } from "../../engine/github/verifyToken.js";
 import { createUserTokenCache } from "../../engine/github/userTokenCache.js";
-import { enrichWithStarredAndPinned } from "../../engine/github/repos.js";
+import { enrichWithStarredAndPinned, filterReposAccessibleToUser, isRepoAccessibleToUser } from "../../engine/github/repos.js";
 import type { RepoSummary } from "../../engine/github/repos.js";
 import { resolveLlmProvider } from "./resolveLlmProvider.js";
 import { resolveSessionSecret } from "./sessionSecret.js";
@@ -113,6 +113,10 @@ async function main(): Promise<void> {
 	const userTokenCache = createUserTokenCache();
 	const enrichWithUserToken = (repos: ReadonlyArray<RepoSummary>, accessToken: string) =>
 		enrichWithStarredAndPinned(repos, buildUserOctokit(accessToken));
+	const filterReposForUser = (repos: ReadonlyArray<RepoSummary>, accessToken: string) =>
+		filterReposAccessibleToUser(repos, buildUserOctokit(accessToken));
+	const canUserAccessRepo = (owner: string, name: string, accessToken: string) =>
+		isRepoAccessibleToUser(owner, name, buildUserOctokit(accessToken));
 
 	// Constructed before sharedConfig (rather than alongside registry below) so
 	// TenantSharedConfig can hand the same instance to every tenant's githubAppRouter —
@@ -130,6 +134,8 @@ async function main(): Promise<void> {
 		resolveDefaultLlmProvider: () => resolveLlmProvider(process.env),
 		userTokenCache,
 		enrichWithUserToken,
+		filterReposForUser,
+		canUserAccessRepo,
 		oauth: oauthDeps,
 		teamStore,
 	};

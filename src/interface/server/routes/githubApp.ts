@@ -70,6 +70,8 @@ export interface GithubAppRouterOptions {
 	secureCookies: boolean;
 	userTokenCache: UserTokenCache;
 	enrichWithUserToken: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>;
+	filterReposForUser: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>;
+	canUserAccessRepo: (owner: string, name: string, accessToken: string) => Promise<boolean>;
 	listInstallationsForUser: (accessToken: string) => Promise<ReadonlyArray<AccessibleInstallation>>;
 	// Multi-tenant only: lets this team's router refuse to bind an installation another
 	// team already has bound, so findByInstallationId's lookup in tenant.ts never has to
@@ -96,6 +98,8 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 		secureCookies,
 		userTokenCache,
 		enrichWithUserToken,
+		filterReposForUser,
+		canUserAccessRepo,
 		listInstallationsForUser,
 		isInstallationBoundToAnotherTeam,
 		dataDir,
@@ -378,7 +382,16 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 				await refreshUserTokenFromDisk(login, userTokenPath(dataDir, login), oauth, userTokenCache);
 			}
 			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
-			const responseRepos = userToken !== undefined ? await enrichWithUserToken(repos, userToken) : repos;
+
+			// The merged list above reflects what the team's installation(s) were granted at
+			// GitHub-install time — that's an org/account-level grant, not this specific
+			// member's own GitHub access, so a teammate's broader installation must never leak
+			// repos this user can't otherwise see. Narrowed to public/owned/shared-with-them
+			// before enrichment; no user token to check against means we can't confirm
+			// anything beyond "public", so that's the fallback rather than trusting the
+			// unfiltered installation-level list.
+			const visibleRepos = userToken !== undefined ? await filterReposForUser(repos, userToken) : repos.filter((r) => !r.private);
+			const responseRepos = userToken !== undefined ? await enrichWithUserToken(visibleRepos, userToken) : visibleRepos;
 
 			res.json({ repos: responseRepos, selected: watchedRepos, failedAccounts, sortingAvailable: userToken !== undefined });
 		} catch (err) {
@@ -401,6 +414,22 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 			}
 			if (current.repos.some((r) => r.owner === owner && r.name === name)) {
 				res.status(409).json({ error: "This repo is already being watched" });
+				return;
+			}
+
+			// The GET /repos picker already filters to what the requester can personally see,
+			// but that's a UX convenience, not a security boundary — this re-checks the same
+			// condition server-side so a direct API call can't add a repo the requester has no
+			// GitHub access to, just because it happens to be covered by the team's (broader)
+			// installation grant. Fails closed: no verifiable user token is treated the same as
+			// "can't confirm access," not "assume it's fine."
+			const login = res.locals.login;
+			if (login !== undefined && userTokenCache.get(login) === undefined) {
+				await refreshUserTokenFromDisk(login, userTokenPath(dataDir, login), oauth, userTokenCache);
+			}
+			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
+			if (userToken === undefined || !(await canUserAccessRepo(owner, name, userToken))) {
+				res.status(403).json({ error: "You don't have access to this repository" });
 				return;
 			}
 

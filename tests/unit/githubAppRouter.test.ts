@@ -203,6 +203,14 @@ describe("githubAppRouter", () => {
 		},
 		listTeamMemberLogins: (forTeamId: string) => Promise<ReadonlyArray<string>> = async () => [],
 		teamId = "test-team",
+		// Trailing (rather than inserted alongside enrichWithUserToken above, which is where
+		// githubAppRouter itself expects it) so every existing positional setup(...) call above
+		// stays valid unchanged — only tests that care about filtering/access-checking need to
+		// pass these.
+		filterReposForUser: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>> = async (
+			repos,
+		) => repos,
+		canUserAccessRepo: (owner: string, name: string, accessToken: string) => Promise<boolean> = async () => true,
 	): { accountPath: string; dataDir: string; state: ServerState; refreshDeps: RefreshDeps; userTokenCache: UserTokenCache } {
 		const accountPath = join(dir, "installation.json");
 		const holder = new GitHubClientHolder(client);
@@ -249,6 +257,8 @@ describe("githubAppRouter", () => {
 				secureCookies: false,
 				userTokenCache,
 				enrichWithUserToken,
+				filterReposForUser,
+				canUserAccessRepo,
 				listInstallationsForUser,
 				isInstallationBoundToAnotherTeam,
 				dataDir: dir,
@@ -767,6 +777,90 @@ describe("githubAppRouter", () => {
 		expect(body["sortingAvailable"]).toBe(true);
 	});
 
+	it("filters the merged repo list down to what the requesting user can personally access", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			repo({ fullName: "acme-corp/public-repo", installationId: 555, accountLogin: "acme-corp", private: false }),
+			repo({ fullName: "acme-corp/shared-repo", installationId: 555, accountLogin: "acme-corp", private: true }),
+			repo({ fullName: "acme-corp/secret-repo", installationId: 555, accountLogin: "acme-corp", private: true }),
+		];
+		// Stands in for filterReposAccessibleToUser: a real installation grant (e.g. from
+		// another team member's own installation) can include private repos this particular
+		// requester has no GitHub access to — only "shared-repo" is in their own accessible set.
+		const filterReposForUser = jest.fn(async (input: ReadonlyArray<RepoSummary>) =>
+			input.filter((r) => !r.private || r.fullName === "acme-corp/shared-repo"),
+		);
+		const { userTokenCache } = setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			},
+			undefined,
+			undefined,
+			"octocat",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			filterReposForUser,
+		);
+		userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(filterReposForUser).toHaveBeenCalledTimes(1);
+		expect((body["repos"] as RepoSummary[]).map((r) => r.fullName).sort()).toEqual([
+			"acme-corp/public-repo",
+			"acme-corp/shared-repo",
+		]);
+	});
+
+	it("falls back to public-only when no user token can be resolved for the requester", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const repos: ReadonlyArray<RepoSummary> = [
+			repo({ fullName: "acme-corp/public-repo", installationId: 555, accountLogin: "acme-corp", private: false }),
+			repo({ fullName: "acme-corp/secret-repo", installationId: 555, accountLogin: "acme-corp", private: true }),
+		];
+		const filterReposForUser = jest.fn(async (input: ReadonlyArray<RepoSummary>) => input);
+		setup(
+			async () => repos,
+			new StubGitHubClient(),
+			new StubLlmProvider(),
+			{
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			},
+			undefined,
+			undefined,
+			"octocat",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			filterReposForUser,
+		);
+		// Deliberately not calling userTokenCache.set — no cached token for "octocat", so there's
+		// no way to confirm anything beyond public visibility.
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(filterReposForUser).not.toHaveBeenCalled();
+		expect(body["repos"]).toEqual([repos[0]]);
+	});
+
 	it("returns 400 for /repos when no installation is bound", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		setup();
@@ -786,10 +880,19 @@ describe("githubAppRouter", () => {
 			const provider = new StubLlmProvider();
 			provider.queueCompletion('["adds OTP login"]');
 			provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
-			const { accountPath, state } = setup(async () => [], client, provider, {
-				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
-				repos: [],
-			});
+			const { accountPath, state, userTokenCache } = setup(
+				async () => [],
+				client,
+				provider,
+				{
+					installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+					repos: [],
+				},
+				undefined,
+				undefined,
+				"octocat",
+			);
+			userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
 			await new Promise((resolve) => server.once("listening", resolve));
 
 			const { status, body } = await call(server, "POST", "/account/github/repos/select", {
@@ -812,10 +915,19 @@ describe("githubAppRouter", () => {
 		it("adds a second distinct repo alongside an already-watched one", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 			const client = new StubGitHubClient();
-			const { accountPath } = setup(async () => [], client, new StubLlmProvider(), {
-				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
-				repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
-			});
+			const { accountPath, userTokenCache } = setup(
+				async () => [],
+				client,
+				new StubLlmProvider(),
+				{
+					installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+					repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
+				},
+				undefined,
+				undefined,
+				"octocat",
+			);
+			userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
 			await new Promise((resolve) => server.once("listening", resolve));
 
 			const { status, body } = await call(server, "POST", "/account/github/repos/select", {
@@ -847,6 +959,65 @@ describe("githubAppRouter", () => {
 
 			expect(status).toBe(409);
 			expect(body["error"]).toBe("This repo is already being watched");
+		});
+
+		it("403s when the requesting user has no personal GitHub access to the repo, without mutating state", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const canUserAccessRepo = jest.fn(async () => false);
+			const { refreshDeps, userTokenCache } = setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{
+					installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+					repos: [],
+				},
+				undefined,
+				undefined,
+				"octocat",
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				canUserAccessRepo,
+			);
+			userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/select", {
+				owner: "acme-corp",
+				name: "widgets",
+				installationId: 555,
+			});
+
+			expect(status).toBe(403);
+			expect(body["error"]).toBe("You don't have access to this repository");
+			expect(canUserAccessRepo).toHaveBeenCalledWith("acme-corp", "widgets", "user-token");
+			expect(refreshDeps.accountState.current.repos).toEqual([]);
+		});
+
+		it("403s when no user token can be resolved for the requester, without mutating state", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const { refreshDeps } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			});
+			// Deliberately no loginForRequests/userTokenCache setup — nothing to verify access with.
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/select", {
+				owner: "acme-corp",
+				name: "widgets",
+				installationId: 555,
+			});
+
+			expect(status).toBe(403);
+			expect(body["error"]).toBe("You don't have access to this repository");
+			expect(refreshDeps.accountState.current.repos).toEqual([]);
 		});
 
 		it("rejects repo selection against an installation that isn't bound", async () => {
@@ -900,13 +1071,22 @@ describe("githubAppRouter", () => {
 			const provider = new StubLlmProvider();
 			provider.queueCompletion('["adds OTP login"]');
 			provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
-			const { state, refreshDeps } = setup(async () => [], client, provider, {
-				installations: [
-					{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
-					{ installationId: 777, accountLogin: "octocat", accountType: "User", boundAt: "2026-06-30T00:00:00.000Z" },
-				],
-				repos: [],
-			});
+			const { state, refreshDeps, userTokenCache } = setup(
+				async () => [],
+				client,
+				provider,
+				{
+					installations: [
+						{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+						{ installationId: 777, accountLogin: "octocat", accountType: "User", boundAt: "2026-06-30T00:00:00.000Z" },
+					],
+					repos: [],
+				},
+				undefined,
+				undefined,
+				"octocat",
+			);
+			userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
 			await new Promise((resolve) => server.once("listening", resolve));
 
 			const first = await call(server, "POST", "/account/github/repos/select", { owner: "acme-corp", name: "widgets", installationId: 555 });

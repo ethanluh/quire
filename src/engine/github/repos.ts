@@ -1,4 +1,5 @@
 import type { Octokit } from "@octokit/rest";
+import { isHttpError } from "./octokitClient.js";
 
 export interface RepoSummary {
 	owner: string;
@@ -111,4 +112,53 @@ export async function enrichWithStarredAndPinned(
 		pinned: pinnedNames.has(r.fullName),
 	}));
 	return [...enriched].sort((a, b) => priority(a) - priority(b));
+}
+
+// The signed-in user's own full repo list (owner + collaborator + org-member affiliation,
+// `listForAuthenticatedUser`'s default) — deliberately NOT best-effort like
+// fetchStarredRepoNames/fetchPinnedRepoNames above: those degrade to "assume none" because
+// starred/pinned is decorative, but here "assume none" would be indistinguishable from "GitHub
+// confirmed no access," which the caller needs to tell apart from "we couldn't check" in order
+// to fail closed instead of silently trusting an unfetched list. So this throws on failure and
+// leaves the fallback decision to the caller.
+export async function fetchUserAccessibleRepoNames(userOctokit: Octokit): Promise<Set<string>> {
+	const repos = await userOctokit.paginate(userOctokit.rest.repos.listForAuthenticatedUser, { per_page: 100 });
+	return new Set(repos.map((r) => r.full_name));
+}
+
+// Narrows a merged, installation-scoped repo list (which reflects what a team's GitHub App
+// installation(s) were granted — nothing to do with any one team member's own GitHub access)
+// down to what the requesting user could see themselves: public, or in their own
+// owner/collaborator/org-member set. On a failed fetch of that set, fails closed to
+// public-only rather than assuming the user has whatever private access the unfiltered list
+// implied.
+export async function filterReposAccessibleToUser(
+	repos: ReadonlyArray<RepoSummary>,
+	userOctokit: Octokit,
+): Promise<ReadonlyArray<RepoSummary>> {
+	let accessibleNames: Set<string>;
+	try {
+		accessibleNames = await fetchUserAccessibleRepoNames(userOctokit);
+	} catch (err) {
+		console.warn("User-accessible-repo lookup failed, filtering to public repos only:", err);
+		return repos.filter((r) => !r.private);
+	}
+	return repos.filter((r) => !r.private || accessibleNames.has(r.fullName));
+}
+
+// Single-repo counterpart to filterReposAccessibleToUser, for call sites (like
+// POST /repos/select) that only need to check one (owner, name) rather than filter a whole
+// list — a targeted `GET /repos/{owner}/{repo}` as the user's own token is cheaper than
+// paginating their entire repo list for a one-off check. GitHub answers this directly: 200
+// means the token can see the repo (public, owned, or collaborator/org access); 403/404 means
+// it can't. Any other failure (network blip, rate limit) is not treated as "no access" —
+// it's rethrown so the caller doesn't silently deny a legitimate request on a transient error.
+export async function isRepoAccessibleToUser(owner: string, name: string, userOctokit: Octokit): Promise<boolean> {
+	try {
+		await userOctokit.rest.repos.get({ owner, repo: name });
+		return true;
+	} catch (err) {
+		if (isHttpError(err) && (err.status === 403 || err.status === 404)) return false;
+		throw err;
+	}
 }
