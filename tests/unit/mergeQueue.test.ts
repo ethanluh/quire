@@ -240,7 +240,7 @@ describe("MergeQueue.listEntries — ordering", () => {
 		expect(entries.map((e) => e.bundleId)).toEqual(["bundle-2", "bundle-1"]);
 	});
 
-	it("keeps a still-queued entry after the landed group even though it was enqueued first", async () => {
+	it("keeps a still-queued entry ahead of the landed group even though it landed after", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const statePath = join(dir, "queue.json");
 		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
@@ -251,11 +251,11 @@ describe("MergeQueue.listEntries — ordering", () => {
 		await queue.dequeueNext(); // lands bundle-1, bundle-2 stays queued
 
 		const entries = await queue.listEntries();
-		expect(entries.map((e) => e.bundleId)).toEqual(["bundle-1", "bundle-2"]);
-		expect(entries[1]?.status).toBe("queued");
+		expect(entries.map((e) => e.bundleId)).toEqual(["bundle-2", "bundle-1"]);
+		expect(entries[0]?.status).toBe("queued");
 	});
 
-	it("sorts still-queued entries most-recently-enqueued first, beneath the landed group", async () => {
+	it("sorts still-queued entries most-recently-enqueued first, ahead of the landed group", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const statePath = join(dir, "queue.json");
 		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));

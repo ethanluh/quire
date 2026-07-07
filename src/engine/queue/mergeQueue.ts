@@ -299,20 +299,21 @@ export class MergeQueue {
 		return revertUrl;
 	}
 
-	// Floats "landed" entries to the top, most recently landed first, so a bundle that just
-	// merged is visible without scrolling past everything still queued behind it. Every other
-	// status is sorted most-recently-enqueued first beneath the landed group. This is a
-	// display-only sort — it reads this.state.entries, it never writes it, and dequeueNextLocked/
+	// Floats everything still actionable ("queued", "landing", "conflict", "investigating",
+	// "aborted") above "landed" entries, most-recently-enqueued first, so a bundle waiting in
+	// the queue is visible without scrolling past a growing history of already-merged bundles.
+	// "landed" entries trail at the bottom, most recently landed first. This is a display-only
+	// sort — it reads this.state.entries, it never writes it, and dequeueNextLocked/
 	// refreshQueuedBranches/pollInvestigationsLocked all read this.state.entries directly rather
 	// than through here, so actual processing order is untouched.
 	async listEntries(): Promise<ReadonlyArray<MergeQueueEntry>> {
+		const active = this.state.entries
+			.filter((e) => e.status !== "landed")
+			.sort((a, b) => (b.enqueuedAt ?? "").localeCompare(a.enqueuedAt ?? ""));
 		const landed = this.state.entries
 			.filter((e) => e.status === "landed")
 			.sort((a, b) => (b.landedAt ?? "").localeCompare(a.landedAt ?? ""));
-		const rest = this.state.entries
-			.filter((e) => e.status !== "landed")
-			.sort((a, b) => (b.enqueuedAt ?? "").localeCompare(a.enqueuedAt ?? ""));
-		return [...landed, ...rest];
+		return [...active, ...landed];
 	}
 
 	async getEntry(bundleId: string): Promise<MergeQueueEntry | undefined> {
