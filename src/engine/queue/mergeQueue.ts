@@ -148,7 +148,17 @@ export class MergeQueue {
 			// attempt that merged it but crashed before recording mergedPrIds) — calling
 			// mergePullRequest again would just 405 against an already-closed PR.
 			if (check.alreadyMerged !== true) {
-				await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+				try {
+					await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+				} catch (err) {
+					// A network/response failure here doesn't say whether GitHub actually
+					// committed the merge before erroring — re-check live rather than assume
+					// failure, so a merge that in fact succeeded doesn't surface as an error to
+					// the caller (a Process click, or background auto-merge) while under-
+					// reporting reality in queue.json until some later pass notices.
+					const after = await this.github.getMergeability(pr.repoOwner, pr.repoName, pr.number);
+					if (!after.merged) throw err;
+				}
 			}
 			entry = { ...entry, mergedPrIds: [...entry.mergedPrIds, pr.id] };
 			await this.setEntry(entry.bundleId, entry);

@@ -89,6 +89,29 @@ function makeAccount(overrides: { autoMergeOnAccept?: boolean } = {}): Installat
 	};
 }
 
+// Two repos, each independently toggleable, for exercising bundleAutoMergeEnabled's
+// per-member scoping (see accountState.ts) rather than makeAccount's single-repo shape.
+function makeTwoRepoAccount(repoAutoMerge: boolean, repo2AutoMerge: boolean): InstallationAccountState {
+	return {
+		installations: [{ installationId: 1, accountLogin: "test-user", accountType: "User", boundAt: new Date(0).toISOString() }],
+		repos: [
+			{ owner: "org", name: "repo", installationId: 1, addedAt: new Date(0).toISOString(), addedBy: "test-user", autoMergeOnAccept: repoAutoMerge },
+			{ owner: "org", name: "repo-2", installationId: 1, addedAt: new Date(0).toISOString(), addedBy: "test-user", autoMergeOnAccept: repo2AutoMerge },
+		],
+	};
+}
+
+function makeCrossRepoBundle(id: string): Bundle {
+	const bundle = makeBundle(id);
+	return {
+		...bundle,
+		members: [
+			bundle.members[0]!,
+			{ ...bundle.members[0]!, id: `${id}-pr-2`, repoName: "repo-2", number: 2 },
+		],
+	};
+}
+
 // Auto-merge now runs as a fire-and-forget background call (see gestures.ts), so a test can't
 // just await the gesture response to observe its outcome — it has to poll queue state instead.
 async function waitForEntryStatus(
@@ -272,6 +295,37 @@ describe("gesturesRouter — review queue removal", () => {
 
 		const entries = await queue.listEntries();
 		expect(entries[0]?.card).toEqual(makeCard("b-1c"));
+	});
+
+	it("does not auto-merge a cross-repo bundle when only one member's repo opted in", async () => {
+		// Regression: the check used to key off bundle.members[0]'s repo only, so a bundle
+		// spanning repos could auto-land even though a later member's own repo never opted in.
+		accountState.current = makeTwoRepoAccount(true, false);
+		const bundle = makeCrossRepoBundle("b-cross");
+		state.bundles.set("b-cross", bundle);
+		state.cards.set("b-cross", makeCard("b-cross", { memberCount: 2, flags: ["spans multiple repos"] }));
+
+		const res = await gesture("b-cross", "accept", true);
+		expect(res.status).toBe(200);
+
+		// Give any (wrongly-firing) background auto-merge a chance to run before asserting.
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(github.mergedPrs).toEqual([]);
+		expect((await queue.getEntry("b-cross"))?.status).toBe("queued");
+	});
+
+	it("auto-merges a cross-repo bundle once every member's repo has opted in", async () => {
+		accountState.current = makeTwoRepoAccount(true, true);
+		const bundle = makeCrossRepoBundle("b-cross-ok");
+		state.bundles.set("b-cross-ok", bundle);
+		state.cards.set("b-cross-ok", makeCard("b-cross-ok", { memberCount: 2, flags: ["spans multiple repos"] }));
+
+		const res = await gesture("b-cross-ok", "accept", true);
+		expect(res.status).toBe(200);
+
+		const landed = await waitForEntryStatus(queue, "b-cross-ok", "landed");
+		expect(landed.status).toBe("landed");
+		expect(github.mergedPrs.slice().sort()).toEqual(["org/repo-2/2", "org/repo/1"]);
 	});
 
 	it("removes the card from the review queue on reject", async () => {

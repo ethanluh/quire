@@ -301,6 +301,109 @@ describe("webhookRouter", () => {
 		expect(body).toEqual({ ignored: true });
 	});
 
+	function checkSuiteEventPayload(
+		owner: string,
+		repo: string,
+		action: string,
+		conclusion: string | null,
+		prIds: number[],
+		installationId = BINDING.installationId,
+	): unknown {
+		return {
+			action,
+			check_suite: { conclusion, pull_requests: prIds.map((id) => ({ id, number: 1 })) },
+			repository: { owner: { login: owner }, name: repo },
+			installation: { id: installationId },
+		};
+	}
+
+	it("ignores a check_suite event that hasn't completed yet", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+		const pr = makeQueuedPr("123");
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundleFor(pr));
+		await queue.dequeueNext();
+
+		const { status, body } = await post(checkSuiteEventPayload("octocat", "hello-world", "in_progress", null, [123]), "check_suite");
+
+		expect(status).toBe(200);
+		expect(body).toEqual({ ignored: true });
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("conflict");
+	});
+
+	it("ignores a completed check_suite that didn't succeed", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+		const pr = makeQueuedPr("123");
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundleFor(pr));
+		await queue.dequeueNext();
+
+		const { status, body } = await post(checkSuiteEventPayload("octocat", "hello-world", "completed", "failure", [123]), "check_suite");
+
+		expect(status).toBe(200);
+		expect(body).toEqual({ ignored: true });
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("conflict");
+	});
+
+	it("clears a matching \"conflict\" queue entry when a check_suite succeeds, without merging when autoMergeOnAccept is off", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+		const pr = makeQueuedPr("123");
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unstable" }));
+		await queue.enqueue(makeBundleFor(pr));
+		const blocked = await queue.dequeueNext();
+		expect(blocked?.status).toBe("conflict");
+		expect(blocked?.conflict?.kind).toBe("unstable");
+
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		const { status } = await post(checkSuiteEventPayload("octocat", "hello-world", "completed", "success", [123]), "check_suite");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("queued");
+		expect(client.mergedPrs).toEqual([]);
+	});
+
+	it("also lands the bundle when a check_suite succeeds and autoMergeOnAccept is on", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { refreshDeps, queue } = await setup(client);
+		refreshDeps.accountState.current = {
+			...refreshDeps.accountState.current,
+			repos: refreshDeps.accountState.current.repos.map((r) => ({ ...r, autoMergeOnAccept: true })),
+		};
+		const pr = makeQueuedPr("123");
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unstable" }));
+		await queue.enqueue(makeBundleFor(pr));
+		const blocked = await queue.dequeueNext();
+		expect(blocked?.status).toBe("conflict");
+
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		const { status } = await post(checkSuiteEventPayload("octocat", "hello-world", "completed", "success", [123]), "check_suite");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("landed");
+		expect(client.mergedPrs).toEqual([`${pr.repoOwner}/${pr.repoName}/${pr.number}`]);
+	});
+
+	it("is a no-op when a check_suite's PR has no matching conflict entry", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+
+		const { status } = await post(checkSuiteEventPayload("octocat", "hello-world", "completed", "success", [123]), "check_suite");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(await queue.listEntries()).toHaveLength(0);
+	});
+
 	function pullRequestClosedPayload(owner: string, repo: string, merged: boolean, prId = 123, installationId = BINDING.installationId): unknown {
 		return {
 			action: "closed",

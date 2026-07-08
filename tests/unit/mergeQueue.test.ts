@@ -519,6 +519,39 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		expect(blocked?.conflict?.reason).toContain("did not finish computing");
 		expect(blocked?.conflict?.kind).toBe("timedOut");
 	});
+
+	it("treats a mergePullRequest exception as success once GitHub confirms the merge actually went through", async () => {
+		// Regression: a response timeout or similar transient failure right after GitHub
+		// commits the merge server-side used to propagate straight out of dequeueNextLocked,
+		// leaving the entry understating reality ("landing") until some unrelated pass
+		// (a webhook, or the next dequeueNext() resuming) happened to notice via alreadyMerged.
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.mergePullRequestError = new Error("response timeout");
+		github.mergePullRequestErrorButActuallyMerged = true;
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		const landed = await queue.dequeueNext();
+
+		expect(landed?.status).toBe("landed");
+		expect(landed?.mergedPrIds).toEqual([pr.id]);
+		expect(github.mergedPrs).toEqual([]); // never recorded as a plain (non-throwing) merge call
+	});
+
+	it("rethrows a mergePullRequest exception when GitHub did not actually merge", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.mergePullRequestError = new Error("network blip");
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		await expect(queue.dequeueNext()).rejects.toThrow("network blip");
+
+		// Left in "landing" (not "conflict") so the next dequeueNext() resumes cleanly and
+		// re-attempts this exact member, same as a mid-merge crash.
+		const entry = await queue.getEntry("bundle-1");
+		expect(entry?.status).toBe("landing");
+		expect(entry?.mergedPrIds).toEqual([]);
+	});
 });
 
 describe("MergeQueue concurrency", () => {

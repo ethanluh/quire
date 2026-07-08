@@ -245,7 +245,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	router.use("/bundles", bundlesRouter(state));
 	router.use("/bundles", gesturesRouter(state, queue, deferLogPath, clientHolder, decidedStore, accountState, shelfPath));
 	router.use("/bundles", assignmentsRouter(state));
-	router.use("/queue", queueRouter(queue, state, decidedStore));
+	router.use("/queue", queueRouter(queue, state, decidedStore, accountState));
 	router.use("/shelf", shelfRouter(state, decidedStore, shelfPath));
 	router.use("/audit", auditRouter(auditStore));
 	router.use(
