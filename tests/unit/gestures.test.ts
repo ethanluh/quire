@@ -17,6 +17,7 @@ import { StubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.
 import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 import { createAccountState } from "../../src/interface/server/accountState.js";
 import type { AccountState } from "../../src/interface/server/accountState.js";
+import { onStateChanged } from "../../src/interface/server/changeEvents.js";
 import type { InstallationAccountState } from "../../src/engine/github/installation.js";
 import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import type { Bundle, GestureAction, ReviewCard } from "../../src/engine/types/core.js";
@@ -358,6 +359,25 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(cards).toEqual([]);
 		expect(state.shelf.has("b-3")).toBe(true);
 		expect(decidedStore.isDecided("b-3-pr-1")).toBe(true);
+	});
+
+	// Regression: reject/defer don't touch MergeQueue at all (so its own onChanged hook can't
+	// cover them), and a plain accept used to only notify inside the now-conditional auto-merge
+	// branch — every gesture needs its own signal so other open tabs see the review-queue change
+	// without waiting on their own poll.
+	it.each<GestureAction>(["accept", "reject", "defer"])("notifies state-changed listeners on %s", async (action) => {
+		const bundleId = `b-notify-${action}`;
+		state.bundles.set(bundleId, makeBundle(bundleId));
+		state.cards.set(bundleId, makeCard(bundleId));
+		const listener = jest.fn();
+		const unsubscribe = onStateChanged(listener);
+
+		try {
+			await gesture(bundleId, action);
+			expect(listener).toHaveBeenCalled();
+		} finally {
+			unsubscribe();
+		}
 	});
 
 	it("keeps the full bundle alongside the card on defer, for the detail view", async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "@jest/globals";
+import { describe, it, expect, afterEach, jest } from "@jest/globals";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,6 +94,65 @@ function makeCard(bundleId: string): ReviewCard {
 		requiresAcceptConfirmation: false,
 	};
 }
+
+describe("MergeQueue onChanged hook", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	async function setup(): Promise<{ github: StubGitHubClient; queue: MergeQueue; onChanged: jest.Mock }> {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const onChanged = jest.fn();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"), undefined, undefined, undefined, onChanged);
+		await queue.load();
+		return { github, queue, onChanged };
+	}
+
+	// The single choke point every mutating method goes through (persist()) fires this —
+	// callers (routes, the webhook, poll timers) no longer each have to remember to notify
+	// their own SSE emitter after calling into MergeQueue.
+	it("fires on enqueue and again as dequeueNext progresses the entry", async () => {
+		const { queue, onChanged } = await setup();
+		const pr = makePr();
+
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		expect(onChanged).toHaveBeenCalledTimes(1);
+
+		await queue.dequeueNext();
+		expect(onChanged.mock.calls.length).toBeGreaterThan(1);
+	});
+
+	it("fires on revertPr and removeQueued", async () => {
+		const { queue, onChanged } = await setup();
+		const pr = makePr();
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.dequeueNext();
+		onChanged.mockClear();
+
+		await queue.revertPr("bundle-1", pr.id);
+		expect(onChanged).toHaveBeenCalledTimes(1);
+
+		await queue.enqueue(makeBundle("bundle-2"));
+		onChanged.mockClear();
+		await queue.removeQueued("bundle-2");
+		expect(onChanged).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not fire from the read-only refreshQueuedBranches pass", async () => {
+		const { github, queue, onChanged } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "behind" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		onChanged.mockClear();
+
+		await queue.refreshQueuedBranches();
+
+		expect(onChanged).not.toHaveBeenCalled();
+	});
+});
 
 describe("MergeQueue.clear", () => {
 	let dir: string;
@@ -963,7 +1022,10 @@ describe("MergeQueue.revertPr", () => {
 		return { github, queue };
 	}
 
-	it("reverts a PR from a fully landed bundle", async () => {
+	it("reverts a PR from a fully landed bundle and re-flags the entry as 'reverted'", async () => {
+		// Regression: a "landed" entry used to stay "landed" (green) forever after a revert,
+		// even though the merge it represented was just undone — MergeQueueEntryStatus's
+		// "reverted" value existed but nothing ever assigned it.
 		const { queue } = await setup();
 		const pr = makePr();
 		await queue.enqueue(makeBundle("bundle-1", [pr]));
@@ -972,10 +1034,12 @@ describe("MergeQueue.revertPr", () => {
 		const revertUrl = await queue.revertPr("bundle-1", pr.id);
 
 		expect(revertUrl).toEqual(expect.any(String));
-		expect((await queue.getEntry("bundle-1"))?.revertedPrIds).toEqual([pr.id]);
+		const entry = await queue.getEntry("bundle-1");
+		expect(entry?.revertedPrIds).toEqual([pr.id]);
+		expect(entry?.status).toBe("reverted");
 	});
 
-	it("reverts a PR that merged before the bundle was aborted", async () => {
+	it("reverts a PR that merged before the bundle was aborted, leaving the 'aborted' status untouched", async () => {
 		const { github, queue } = await setup();
 		const pr1 = makePr({ id: "pr-1", number: 1 });
 		const pr2 = makePr({ id: "pr-2", number: 2 });
@@ -987,7 +1051,9 @@ describe("MergeQueue.revertPr", () => {
 		const revertUrl = await queue.revertPr("bundle-1", pr1.id);
 
 		expect(revertUrl).toEqual(expect.any(String));
-		expect((await queue.getEntry("bundle-1"))?.revertedPrIds).toEqual([pr1.id]);
+		const entry = await queue.getEntry("bundle-1");
+		expect(entry?.revertedPrIds).toEqual([pr1.id]);
+		expect(entry?.status).toBe("aborted"); // already a needs-attention status; revert doesn't override it
 	});
 
 	it("rejects reverting a PR that was never merged", async () => {

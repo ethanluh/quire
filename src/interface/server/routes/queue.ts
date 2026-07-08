@@ -7,6 +7,10 @@ import { requireRole } from "../middleware/requireRole.js";
 import { validateBody } from "../middleware/validation.js";
 import type { AccountState } from "../accountState.js";
 import { bundleAutoMergeEnabled } from "../accountState.js";
+// MergeQueue now notifies on every persisted mutation itself (see its onChanged hook, wired
+// in tenant.ts) — the only place this route still needs to notify explicitly is DELETE
+// /:bundleId below, which also mutates ServerState's review queue, a change the queue's own
+// hook has no visibility into.
 import { notifyStateChanged } from "../changeEvents.js";
 
 // Path taken via the request body, not a URL segment — a file path routinely contains
@@ -36,7 +40,6 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 			if (entry === undefined) {
 				res.json({ status: "empty" });
 			} else {
-				notifyStateChanged();
 				// entry.status reflects the real outcome — "landed" or, since a member PR
 				// couldn't be made mergeable, "conflict" (with entry.conflict disclosing why).
 				res.json({ status: entry.status, bundleId: entry.bundleId, ...(entry.conflict !== undefined ? { conflict: entry.conflict } : {}) });
@@ -59,12 +62,8 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 				res.status(400).json({ error: `Bundle ${bundleId} is not in a conflict or aborted state` });
 				return;
 			}
-			notifyStateChanged();
 			if (bundleAutoMergeEnabled(accountState.current, retried.bundle)) {
-				queue
-					.dequeueNext()
-					.catch((err: unknown) => console.error(`Background auto-merge failed for ${bundleId}:`, err))
-					.finally(() => notifyStateChanged());
+				queue.dequeueNext().catch((err: unknown) => console.error(`Background auto-merge failed for ${bundleId}:`, err));
 			}
 			res.json({ status: "queued", bundleId });
 		} catch (err) {
@@ -84,7 +83,6 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 				res.status(400).json({ error: `Bundle ${bundleId} is not in an abortable state` });
 				return;
 			}
-			notifyStateChanged();
 			res.json({ status: "aborted", bundleId });
 		} catch (err) {
 			next(err);
@@ -106,12 +104,8 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 				res.status(400).json({ error: `No awaiting-review investigation for ${path} on bundle ${bundleId}` });
 				return;
 			}
-			notifyStateChanged();
 			if (bundleAutoMergeEnabled(accountState.current, updated.bundle)) {
-				queue
-					.dequeueNext()
-					.catch((err: unknown) => console.error(`Background auto-merge failed for ${bundleId}:`, err))
-					.finally(() => notifyStateChanged());
+				queue.dequeueNext().catch((err: unknown) => console.error(`Background auto-merge failed for ${bundleId}:`, err));
 			}
 			res.json({ status: "queued", bundleId });
 		} catch (err) {
@@ -128,7 +122,6 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 				res.status(400).json({ error: `No awaiting-review investigation for ${path} on bundle ${bundleId}` });
 				return;
 			}
-			notifyStateChanged();
 			res.json({ status: "conflict", bundleId });
 		} catch (err) {
 			next(err);
@@ -140,7 +133,6 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 			const bundleId = req.params["bundleId"] ?? "";
 			const prId = req.params["prId"] ?? "";
 			const url = await queue.revertPr(bundleId, prId);
-			notifyStateChanged();
 			res.json({ status: "reverted", revertUrl: url });
 		} catch (err) {
 			next(err);

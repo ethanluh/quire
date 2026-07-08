@@ -1,7 +1,6 @@
 import { Router } from "express";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
-import { notifyStateChanged } from "../changeEvents.js";
 import { bundleAutoMergeEnabled } from "../accountState.js";
 import type { MergeQueueEntry } from "../../../engine/types/queue.js";
 
@@ -113,9 +112,11 @@ function parseCheckSuiteEvent(body: unknown): CheckSuiteEvent | undefined {
 // Shared by every path that clears a queue entry back to "queued" from a GitHub-side signal
 // (a fresh commit, checks going green, or a direct external merge) — auto-merge only fires
 // once every member's own repo has opted in (see bundleAutoMergeEnabled), same gate as
-// accept-time merging in gestures.ts.
+// accept-time merging in gestures.ts. No explicit notifyStateChanged() needed here: the
+// caller's reattemptForPr()/recordExternalMerge() already persisted (and thus notified via
+// MergeQueue's own onChanged hook) by the time `entry` reaches this function; dequeueNext()
+// below notifies again itself if it changes anything further.
 async function triggerAutoMergeIfEnabled(entry: MergeQueueEntry, refreshDeps: RefreshDeps): Promise<void> {
-	notifyStateChanged();
 	if (bundleAutoMergeEnabled(refreshDeps.accountState.current, entry.bundle)) {
 		await refreshDeps.queue.dequeueNext();
 	}
