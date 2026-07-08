@@ -276,6 +276,11 @@ body {
 	flex: 0 0 auto;
 }
 
+.btn-icon svg {
+	width: var(--text-lg);
+	height: var(--text-lg);
+}
+
 /* Two-column desktop settings: nav rail + single visible panel. */
 .settings-shell {
 	display: flex;
