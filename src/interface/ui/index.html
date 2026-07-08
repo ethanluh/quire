@@ -506,6 +506,8 @@
 
 <div id="toast"></div>
 
+<script src="shared/api.js"></script>
+<script src="shared/render.js"></script>
 <script>
 function showTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
@@ -556,29 +558,6 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && settingsModalBackdrop.style.display !== 'none') closeSettingsModal();
 });
 
-async function api(method, path, body) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
-  if (body !== undefined) opts.body = JSON.stringify(body);
-  const r = await fetch(path, opts);
-  if (r.status === 401) {
-    showSigninGate();
-    return { error: 'Sign in required' };
-  }
-  return r.json();
-}
-
-function showToast(message, tone) {
-  const toast = document.getElementById('toast');
-  toast.textContent = message;
-  toast.className = `toast-${tone || 'error'} visible`;
-  clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => toast.classList.remove('visible'), 3500);
-}
-
-function showError(message) {
-  showToast(message, 'error');
-}
-
 const confirmModalBackdrop = document.getElementById('confirm-modal-backdrop');
 const confirmModalCard = confirmModalBackdrop.querySelector('.card');
 const confirmModalTitle = document.getElementById('confirm-modal-title');
@@ -620,50 +599,6 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && confirmModalBackdrop.style.display !== 'none') closeConfirmModal(false);
 });
 
-async function withPending(btn, pendingLabel, fn) {
-  const original = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = pendingLabel;
-  try {
-    return await fn();
-  } finally {
-    btn.disabled = false;
-    btn.textContent = original;
-  }
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function driftBadge(drift) {
-  if (drift.status === 'clean') return '<span class="badge badge-clean">Clean</span>';
-  return '<span class="badge badge-flagged">Drift flagged</span>';
-}
-
-function renderSignals(drift, members) {
-  if (drift.status !== 'flagged') return '';
-  const items = drift.signals.map(s => {
-    const pr = members && members.find(m => m.id === s.prId);
-    const prefix = pr ? `[${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}] ` : '';
-    if (s.kind === 'effectList') return `${prefix}Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
-    if (s.kind === 'footprintAnomaly') return `${prefix}Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
-    return `${prefix}${escapeHtml(s.description)}`;
-  });
-  return `<div class="drift-signals"><strong>Drift signals (noted, not an error)</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
-}
-
-function directionInferredBadge(inferred) {
-  return inferred
-    ? `<span class="badge badge-neutral" title="No declared-direction marker was found on this PR; the direction shown was inferred from its title/description, not explicitly declared.">Inferred</span>`
-    : '';
-}
-
 function cardHtml(card, shelfMode) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
   const bundleId = escapeHtml(card.bundleId);
@@ -694,101 +629,11 @@ const detailModalBackdrop = document.getElementById('detail-modal-backdrop');
 const detailModalBody = document.getElementById('detail-modal-body');
 let queueEntries = [];
 
-function ciStatusBadge(status) {
-  const cls = status === 'success' ? 'badge-clean' : status === 'failure' ? 'badge-flagged' : 'badge-neutral';
-  return `<span class="badge ${cls}">CI: ${escapeHtml(status)}</span>`;
-}
-
-function prDriftBadges(prId, drift) {
-  if (!drift || drift.status !== 'flagged') return '';
-  const signals = drift.signals.filter(s => s.prId === prId);
-  const footprintCount = signals.filter(s => s.kind === 'footprintAnomaly').length;
-  const behavioralCount = signals.filter(s => s.kind === 'behavioralDelta').length;
-  const effectCount = signals.filter(s => s.kind === 'effectList').length;
-  const badges = [];
-  // footprintAnomaly/behavioralDelta are grounded in static analysis or confirmed
-  // behavior, not an LLM judgment call — treated as the more severe tier (red).
-  // effectList is the matcher's best-effort read on declared vs. actual effects,
-  // more prone to false positives — the existing "flagged" tier (amber).
-  if (footprintCount > 0) badges.push(`<span class="badge badge-critical">Footprint: ${footprintCount}</span>`);
-  if (behavioralCount > 0) badges.push(`<span class="badge badge-critical">Behavioral: ${behavioralCount}</span>`);
-  if (effectCount > 0) badges.push(`<span class="badge badge-flagged">Effects: ${effectCount}</span>`);
-  return badges.join('');
-}
-
 // Why a PR can't merge, mapped to a badge tier + label. `mergeStatus.conflict.kind` is
 // absent on entries persisted before this discriminant existed — fall back to the
 // mergeConflict entry so old data keeps reading as it always has.
-const CONFLICT_KIND_BADGE = {
-  mergeConflict: { cls: 'badge-critical', label: 'Conflict' },
-  blocked: { cls: 'badge-flagged', label: 'Blocked' },
-  unstable: { cls: 'badge-flagged', label: 'Checks failing' },
-  timedOut: { cls: 'badge-neutral', label: 'Pending GitHub' },
-  unresolvable: { cls: 'badge-flagged', label: "Can't merge" },
-};
-
 // Maps a per-PR merge status onto the shared 4-tier badge vocabulary (neutral/clean/
 // flagged/critical) instead of a parallel, page-local color scheme — see docs/design-system.md.
-const PR_MERGE_STATUS_TIER = { pending: 'neutral', merged: 'clean', reverted: 'critical' };
-
-function prMergeStatusBadge(pr, mergeStatus) {
-  if (!mergeStatus) return '';
-  if (mergeStatus.revertedPrIds.includes(pr.id)) return `<span class="badge badge-${PR_MERGE_STATUS_TIER.reverted}">Merge: reverted</span>`;
-  if (mergeStatus.mergedPrIds.includes(pr.id)) return `<span class="badge badge-${PR_MERGE_STATUS_TIER.merged}">Merge: merged</span>`;
-  if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) {
-    const { cls, label } = CONFLICT_KIND_BADGE[mergeStatus.conflict.kind] || CONFLICT_KIND_BADGE.mergeConflict;
-    return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
-  }
-  return `<span class="badge badge-${PR_MERGE_STATUS_TIER.pending}">Merge: pending</span>`;
-}
-
-function prMemberListHtml(members, drift, mergeStatus) {
-  if (!members.length) return '<div class="empty">No member PRs.</div>';
-  return '<div class="pr-member-list">' + members.map(pr => {
-    const url = `https://github.com/${pr.repoOwner}/${pr.repoName}/pull/${pr.number}`;
-    return `<div class="pr-member-row">
-      <div class="pr-member-info">
-        <a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}</a>
-        <span class="pr-member-direction">${escapeHtml(pr.declaredDirection)} ${directionInferredBadge(pr.directionInferred)}</span>
-      </div>
-      <div class="pr-member-tags">
-        ${prMergeStatusBadge(pr, mergeStatus)}
-        ${prDriftBadges(pr.id, drift)}
-        ${ciStatusBadge(pr.ciStatus)}
-        <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
-      </div>
-    </div>`;
-  }).join('') + '</div>';
-}
-
-function investigationsHtml(bundleId, investigations) {
-  if (!investigations || !investigations.length) return '';
-  return investigations.map((inv) => {
-    if (inv.status === 'running') {
-      return `<div class="residual">Deep investigation in progress for <code>${escapeHtml(inv.path)}</code>&hellip;</div>`;
-    }
-    if (inv.status === 'failed') {
-      return `<div class="residual">Deep investigation for <code>${escapeHtml(inv.path)}</code> did not produce a usable result: ${escapeHtml(inv.failureReason || 'unknown error')}</div>`;
-    }
-    if (inv.status !== 'awaitingReview' || !inv.decisionPacket) {
-      return `<div class="residual">Investigation for <code>${escapeHtml(inv.path)}</code>: ${escapeHtml(inv.status)}</div>`;
-    }
-    const p = inv.decisionPacket;
-    return `<div class="decision-packet">
-      <h4>Deep investigation result: ${escapeHtml(inv.path)}</h4>
-      <p>${escapeHtml(p.rationale)}</p>
-      <p><strong>Confidence:</strong> ${escapeHtml(p.confidence)} &middot; <strong>Tests:</strong> ${escapeHtml(p.testResult)}</p>
-      ${(p.evidence || []).length ? `<ul>${p.evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
-      ${(p.testsRun || []).length ? `<p><strong>Ran:</strong> ${p.testsRun.map(escapeHtml).join(', ')}</p>` : ''}
-      ${p.openQuestion ? `<p class="residual">Open question: ${escapeHtml(p.openQuestion)}</p>` : ''}
-      <div class="gestures">
-        <button class="btn btn-accept btn-investigation-accept" data-bundle-id="${escapeHtml(bundleId)}" data-path="${escapeHtml(inv.path)}">Accept</button>
-        <button class="btn btn-reject btn-investigation-reject" data-bundle-id="${escapeHtml(bundleId)}" data-path="${escapeHtml(inv.path)}">Reject</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-
 detailModalBody.addEventListener('click', async (event) => {
   const btn = event.target.closest('.btn-investigation-accept, .btn-investigation-reject');
   if (!btn) return;
@@ -808,35 +653,10 @@ detailModalBody.addEventListener('click', async (event) => {
 
 // Headline/guidance per conflict kind for the detail-modal residual banner — the full
 // `reason` string is always shown too (INV-6), this only varies the framing around it.
-const CONFLICT_KIND_COPY = {
-  mergeConflict: { headline: 'Merge conflict detected', guidance: "Automated resolution did not apply — see the conflicting PR's GitHub link below for details, or retry." },
-  blocked: { headline: 'Blocked, not a merge conflict', guidance: 'Resolve the required review or branch-protection rule on GitHub, then retry.' },
-  unstable: { headline: 'Checks failing or pending, not a merge conflict', guidance: 'Wait for CI or fix the failing check, then retry.' },
-  timedOut: { headline: 'Mergeability still unknown', guidance: "GitHub hasn't finished computing this yet — this usually clears on its own; retry in a moment." },
-  unresolvable: { headline: "Can't merge", guidance: 'See the PR on GitHub for details, or retry.' },
-};
-
-function conflictResidualHtml(conflict) {
-  const { headline, guidance } = CONFLICT_KIND_COPY[conflict.kind] || CONFLICT_KIND_COPY.mergeConflict;
-  return `<div class="residual">${escapeHtml(headline)} ${escapeHtml(conflict.detectedAt)} — ${escapeHtml(conflict.reason)}. ${escapeHtml(guidance)}</div>`;
-}
-
-// Maps the coarse queue-entry status onto the shared 4-tier badge vocabulary.
-const QUEUE_STATUS_TIER = { queued: 'neutral', landing: 'flagged', landed: 'clean', conflict: 'critical', aborted: 'critical', investigating: 'flagged', reverted: 'critical' };
-
 // The queue-entry-level pill means "queue stuck here, needs a human" — when the status is
 // "conflict" and a granular kind is known, both the label and the tier narrow to match the
 // actual cause (e.g. "Blocked" reads as flagged, not critical); otherwise falls back to the
 // coarse status tier/text.
-function queueStatusBadge(e) {
-  if (e.status === 'conflict' && e.conflict && e.conflict.kind) {
-    const { cls, label } = CONFLICT_KIND_BADGE[e.conflict.kind] || CONFLICT_KIND_BADGE.mergeConflict;
-    return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
-  }
-  const tier = QUEUE_STATUS_TIER[e.status] || 'neutral';
-  return `<span class="badge badge-${tier}">${escapeHtml(e.status)}</span>`;
-}
-
 function detailBodyHtml(detail, opts) {
   opts = opts || {};
   return `
@@ -1131,30 +951,11 @@ async function loadAudit() {
   el.innerHTML = entries.length ? entries.map(auditEntryHtml).join('') : '<div class="empty">No shadow-mode audit entries.</div>';
 }
 
-async function overturnAudit(entryId) {
-  await api('POST', `/audit/${entryId}/overturn`);
-  loadAudit();
-}
-
 async function removeFromQueue(bundleId) {
   if (!(await confirmAction('Remove this bundle from the merge queue?'))) return;
   await api('DELETE', `/queue/${bundleId}`);
   loadQueue();
   loadReview();
-}
-
-async function abortQueueEntry(bundleId, mergedCount, totalCount) {
-  const message = mergedCount > 0
-    ? `Abort this bundle? ${mergedCount} of ${totalCount} member PRs already merged and will stay merged — aborting only stops Quire from retrying the rest. Nothing is reverted.`
-    : 'Abort this bundle? It will stop being retried and remain in the queue marked as aborted.';
-  if (!(await confirmAction(message))) return;
-  await api('POST', `/queue/${bundleId}/abort`, undefined);
-  loadQueue();
-}
-
-async function reattemptQueueEntry(bundleId) {
-  await api('POST', `/queue/${bundleId}/retry`, undefined);
-  loadQueue();
 }
 
 async function gesture(bundleId, action, needsConfirm) {
@@ -1173,12 +974,6 @@ async function gesture(bundleId, action, needsConfirm) {
     buttons.forEach((b) => { b.disabled = false; });
     showError(`Could not ${action} — ${err.message}`);
   }
-}
-
-async function promote(bundleId) {
-  await api('DELETE', `/shelf/${bundleId}`);
-  loadShelf();
-  loadReview();
 }
 
 document.getElementById('btn-process').addEventListener('click', async (e) => {
@@ -1277,19 +1072,6 @@ function hideSigninGate(login) {
 // Shared by "Sign in with GitHub" and "Reconnect GitHub" — both just need to run the OAuth
 // flow again. Safe to call even while already signed in: it doesn't touch the installation
 // binding or selected repo, only the session cookie and the in-memory starred/pinned token.
-async function startOAuth(btn, errorEl) {
-  btn.disabled = true;
-  const result = await fetch('/account/github/oauth/start').then((r) => r.json());
-  if (result.error) {
-    errorEl.textContent = 'Error: ' + result.error;
-    errorEl.className = 'result-msg error';
-    errorEl.style.display = 'block';
-    btn.disabled = false;
-    return;
-  }
-  location.href = result.authorizeUrl;
-}
-
 document.getElementById('btn-signin').addEventListener('click', () => {
   startOAuth(document.getElementById('btn-signin'), document.getElementById('signin-result'));
 });
@@ -1303,35 +1085,10 @@ signoutBtn.addEventListener('click', async () => {
   location.reload();
 });
 
-async function checkSignedIn() {
-  const res = await fetch('/account/github/session');
-  if (res.status === 401) {
-    showSigninGate();
-    return false;
-  }
-  const { login } = await res.json();
-  hideSigninGate(login);
-  return true;
-}
-
 const repoPanel = document.getElementById('repo-panel');
 const installBtn = document.getElementById('btn-account-install');
 const accountDisconnectAllBtn = document.getElementById('btn-account-disconnect-all');
 let loadedInstallations = [];
-
-function installationHtml(installation) {
-  return `<div class="repo-entry">
-    <span class="badge badge-neutral">${escapeHtml(installation.accountType)}</span>
-    <span class="repo-name">${escapeHtml(installation.accountLogin)}</span>
-    <button class="btn btn-reject" onclick="disconnectInstallation(${installation.installationId})">Disconnect</button>
-  </div>`;
-}
-
-async function disconnectInstallation(installationId) {
-  if (!(await confirmAction('Disconnect this GitHub App installation?'))) return;
-  await api('POST', `/account/github/disconnect/${installationId}`, undefined);
-  loadAccount();
-}
 
 function connectableInstallationHtml(installation) {
   return `<div class="repo-entry">
@@ -1393,55 +1150,6 @@ function renderAutomationStatus(repos) {
 
 // A team can watch several repos at once, each with its own auto-merge/flag-conflicts/
 // deep-investigation settings — one row per repo instead of one global checkbox row.
-function watchedRepoRowHtml(repo) {
-  const settingsDisabled = isOwner() ? '' : 'disabled';
-  const removeDisabled = canManageMembers() ? '' : 'disabled';
-  return `<div class="watched-repo-row" data-owner="${escapeHtml(repo.owner)}" data-name="${escapeHtml(repo.name)}">
-    <div class="watched-repo-header">
-      <span class="repo-name">${escapeHtml(repo.owner)}/${escapeHtml(repo.name)}</span>
-      <button class="btn btn-reject btn-remove-repo" ${removeDisabled}>Remove</button>
-    </div>
-    <label class="auto-merge-toggle">
-      <input type="checkbox" class="chk-repo-setting" data-setting="autoMergeOnAccept" ${repo.autoMergeOnAccept ? 'checked' : ''} ${settingsDisabled}>
-      Automatically merge accepted bundles (skips the manual "Process next" step)
-    </label>
-    <label class="auto-merge-toggle">
-      <input type="checkbox" class="chk-repo-setting" data-setting="flagConflictsForFleet" ${repo.flagConflictsForFleet ? 'checked' : ''} ${settingsDisabled}>
-      Flag unresolved merge conflicts back to my agent fleet (posts a PR comment)
-    </label>
-    <label class="auto-merge-toggle">
-      <input type="checkbox" class="chk-repo-setting" data-setting="enableDeepConflictInvestigation" ${repo.enableDeepConflictInvestigation ? 'checked' : ''} ${settingsDisabled}>
-      Escalate unresolved merge conflicts to a Quire-hosted deep investigation (requires an Anthropic API key connected below)
-    </label>
-  </div>`;
-}
-
-function renderWatchedRepos(repos) {
-  const el = document.getElementById('watched-repos-list');
-  el.innerHTML = repos.length
-    ? repos.map(watchedRepoRowHtml).join('')
-    : '<div class="empty">No repos selected yet — pick one below.</div>';
-}
-
-async function updateRepoSetting(row) {
-  const checkboxes = [...row.querySelectorAll('.chk-repo-setting')];
-  checkboxes.forEach((cb) => { cb.disabled = true; });
-  try {
-    const body = {};
-    checkboxes.forEach((cb) => { body[cb.dataset.setting] = cb.checked; });
-    await api('POST', `/account/github/repos/${encodeURIComponent(row.dataset.owner)}/${encodeURIComponent(row.dataset.name)}/settings`, body);
-  } finally {
-    checkboxes.forEach((cb) => { cb.disabled = !isOwner(); });
-  }
-}
-
-async function removeRepo(owner, name) {
-  if (!(await confirmAction(`Stop watching ${owner}/${name}? Its review queue and merge queue entries will be cleared.`, { danger: true }))) return;
-  await api('DELETE', `/account/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, undefined);
-  await loadAccount();
-  loadReview();
-}
-
 document.getElementById('watched-repos-list').addEventListener('change', (e) => {
   if (!e.target.classList.contains('chk-repo-setting')) return;
   updateRepoSetting(e.target.closest('.watched-repo-row'));
@@ -1483,16 +1191,6 @@ async function loadAccount() {
   }
   loadConnectableInstallations();
   renderHeaderRepo(status.selectedRepo);
-}
-
-function renderHeaderRepo(selectedRepo) {
-  const badge = document.getElementById('header-repo-badge');
-  if (!selectedRepo) {
-    badge.style.display = 'none';
-    return;
-  }
-  badge.textContent = `${selectedRepo.owner}/${selectedRepo.name}`;
-  badge.style.display = 'inline-flex';
 }
 
 // A lighter-weight sibling of loadAccount() for the header: just the selected repo, on
@@ -1619,40 +1317,6 @@ let myRole = null;
 function canManageMembers() { return myRole === 'owner' || myRole === 'admin'; }
 function isOwner() { return myRole === 'owner'; }
 
-function memberRowHtml(m) {
-  const badge = `<span class="badge badge-neutral">${escapeHtml(m.role)}</span>`;
-  if (!canManageMembers() || (m.role === 'owner' && !isOwner())) {
-    return `<div class="repo-entry"><span class="repo-name">${escapeHtml(m.login)}</span>${badge}</div>`;
-  }
-  const roleOptions = ['owner', 'admin', 'member']
-    .filter((r) => r !== 'owner' || isOwner())
-    .map((r) => `<option value="${r}" ${r === m.role ? 'selected' : ''}>${r}</option>`)
-    .join('');
-  return `<div class="repo-entry">
-    <span class="repo-name">${escapeHtml(m.login)}</span>
-    ${badge}
-    <select onchange="setMemberRole('${escapeHtml(m.login)}', this.value)">${roleOptions}</select>
-    <button class="btn btn-reject" onclick="removeMember('${escapeHtml(m.login)}')">Remove</button>
-  </div>`;
-}
-
-async function setMemberRole(login, role) {
-  const result = await api('POST', `/account/team/members/${login}/role`, { role });
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-  }
-  loadTeam();
-}
-
-async function removeMember(login) {
-  if (!(await confirmAction(`Remove ${login} from this team?`))) return;
-  const result = await api('POST', `/account/team/members/${login}/remove`, undefined);
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-  }
-  loadTeam();
-}
-
 // Owner-only controls live outside the Team panel too (queue processing, auto-merge) —
 // applied here so every loadTeam() call keeps them in sync with the caller's current role.
 // Rename/invite are gated to owner+admin server-side (PATCH /account/team, POST
@@ -1694,22 +1358,6 @@ async function loadTeam() {
 // (its currently active/default team, changed immediately on pick) once it belongs to
 // more than one — no point cluttering the header with a dropdown that only ever offers
 // one choice.
-function renderHeaderTeam(activeName, teams) {
-  const badge = document.getElementById('header-team-badge');
-  const switcher = document.getElementById('header-team-switcher');
-  if (teams.length > 1) {
-    switcher.innerHTML = teams
-      .map((t) => `<option value="${escapeHtml(t.teamId)}" ${t.active ? 'selected' : ''}>${escapeHtml(t.name)}</option>`)
-      .join('');
-    switcher.style.display = 'inline-block';
-    badge.style.display = 'none';
-  } else {
-    badge.textContent = activeName;
-    badge.style.display = 'inline-flex';
-    switcher.style.display = 'none';
-  }
-}
-
 document.getElementById('header-team-switcher').addEventListener('change', async (e) => {
   const result = await api('POST', '/account/team/switch', { teamId: e.target.value });
   if (result.error) {
@@ -1718,13 +1366,6 @@ document.getElementById('header-team-switcher').addEventListener('change', async
   }
   await refreshAfterTeamChange();
 });
-
-function showTeamResult(message, isError) {
-  const resultEl = document.getElementById('team-result');
-  resultEl.textContent = message;
-  resultEl.className = isError ? 'result-msg error' : 'result-msg';
-  resultEl.style.display = 'block';
-}
 
 document.getElementById('team-switcher').addEventListener('change', async (e) => {
   const result = await api('POST', '/account/team/switch', { teamId: e.target.value });
@@ -2005,11 +1646,6 @@ function startBackgroundRefresh() {
 // instead of waiting for the next poll tick. The interval above stays
 // running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
 // server's own reconciliation timer is a fallback for a missed webhook delivery.
-function startLiveUpdates() {
-  const source = new EventSource('/events');
-  source.onmessage = () => pollActivePane();
-}
-
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) pollActivePane();
 });
