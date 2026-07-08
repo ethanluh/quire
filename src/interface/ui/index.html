@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzYzNjZmMSIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjZmZmZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5RPC90ZXh0Pjwvc3ZnPg==">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzdjM2IzMiIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjZmJmNmVjIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5RPC90ZXh0Pjwvc3ZnPg==">
 <title>Quire</title>
 <link rel="stylesheet" href="styles/tokens.css">
 <link rel="stylesheet" href="styles/components.css">
@@ -258,29 +258,6 @@
      reads as two groups rather than one flat list. */
   .queue-entry-actions .btn-group { display: flex; gap: var(--space-2); margin-left: var(--space-2); padding-left: var(--space-2); border-left: 1px solid var(--color-border); }
 
-  .status-badge {
-    font-size: var(--text-xs);
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-pill);
-  }
-  .status-queued   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
-  .status-landing  { background: var(--color-flagged-wash); color: var(--color-flagged); }
-  .status-landed   { background: var(--color-accept-wash); color: var(--color-accept); }
-  /* Same reject tier as pr-status-conflict — automated resolution was attempted and
-     failed; the bundle is stopped and waiting on a human, not mid-retry. */
-  .status-conflict { background: var(--color-reject-wash); color: var(--color-reject); }
-  /* Reject tier, not flagged: abort is a deliberate human give-up (like the reject
-     gesture), not a routine/retryable state the way conflict is. */
-  .status-aborted  { background: var(--color-reject-wash); color: var(--color-reject); }
-  /* Flagged tier, like status-landing: an in-flight investigation is a normal waiting
-     state, not a failure — it only becomes "conflict" once there's something to review. */
-  .status-investigating { background: var(--color-flagged-wash); color: var(--color-flagged); }
-
-  .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
-  .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
-  .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
-  .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
-
   .decision-packet {
     margin-top: var(--space-3);
     padding: var(--space-4);
@@ -309,11 +286,14 @@
 
   #toast {
     position: fixed; left: var(--space-4); right: var(--space-4); bottom: var(--space-4);
-    background: var(--color-reject-wash); color: var(--color-reject); border: 1px solid var(--color-reject);
     border-radius: var(--radius-md); padding: var(--space-3); font-size: var(--text-sm); text-align: center;
     opacity: 0; pointer-events: none; transition: opacity var(--duration-base) var(--ease-standard); z-index: 100;
   }
   #toast.visible { opacity: 1; }
+  #toast.toast-error   { background: var(--color-reject-wash);  color: var(--color-reject);  border: 1px solid var(--color-reject); }
+  /* "Noted, not a siren" — routine nudges use the same flagged tier as a drift flag. */
+  #toast.toast-notice  { background: var(--color-flagged-wash); color: var(--color-flagged); border: 1px solid var(--color-flagged); }
+  #toast.toast-neutral { background: var(--color-surface-sunken); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
 </style>
 </head>
 <body>
@@ -333,7 +313,7 @@
   <div class="header-identity">
     <img class="header-avatar" id="header-avatar" style="display:none" alt="" onerror="this.style.display='none'">
     <span class="subtitle" id="signed-in-as" style="display:none"></span>
-    <button class="btn btn-icon" id="btn-settings" title="Settings" aria-label="Settings" style="display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <button class="btn btn-icon" id="btn-settings" title="Settings" aria-label="Settings" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
   </div>
 </header>
 
@@ -390,7 +370,7 @@
   <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
     <div class="settings-header">
       <h3 class="modal-title" id="settings-modal-title">Settings</h3>
-      <button class="btn btn-defer btn-icon" id="btn-settings-modal-close" title="Close" aria-label="Close settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      <button class="btn btn-defer btn-icon" id="btn-settings-modal-close" title="Close" aria-label="Close settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
 
     <div class="settings-shell">
@@ -573,12 +553,16 @@ async function api(method, path, body) {
   return r.json();
 }
 
-function showError(message) {
+function showToast(message, tone) {
   const toast = document.getElementById('toast');
   toast.textContent = message;
-  toast.classList.add('visible');
-  clearTimeout(showError._t);
-  showError._t = setTimeout(() => toast.classList.remove('visible'), 3500);
+  toast.className = `toast-${tone || 'error'} visible`;
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.remove('visible'), 3500);
+}
+
+function showError(message) {
+  showToast(message, 'error');
 }
 
 async function withPending(btn, pendingLabel, fn) {
@@ -688,15 +672,19 @@ const CONFLICT_KIND_BADGE = {
   unresolvable: { cls: 'badge-flagged', label: "Can't merge" },
 };
 
+// Maps a per-PR merge status onto the shared 4-tier badge vocabulary (neutral/clean/
+// flagged/critical) instead of a parallel, page-local color scheme — see docs/design-system.md.
+const PR_MERGE_STATUS_TIER = { pending: 'neutral', merged: 'clean', reverted: 'critical' };
+
 function prMergeStatusBadge(pr, mergeStatus) {
   if (!mergeStatus) return '';
-  if (mergeStatus.revertedPrIds.includes(pr.id)) return '<span class="badge pr-status-reverted">Merge: reverted</span>';
-  if (mergeStatus.mergedPrIds.includes(pr.id)) return '<span class="badge pr-status-merged">Merge: merged</span>';
+  if (mergeStatus.revertedPrIds.includes(pr.id)) return `<span class="badge badge-${PR_MERGE_STATUS_TIER.reverted}">Merge: reverted</span>`;
+  if (mergeStatus.mergedPrIds.includes(pr.id)) return `<span class="badge badge-${PR_MERGE_STATUS_TIER.merged}">Merge: merged</span>`;
   if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) {
     const { cls, label } = CONFLICT_KIND_BADGE[mergeStatus.conflict.kind] || CONFLICT_KIND_BADGE.mergeConflict;
     return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
   }
-  return '<span class="badge pr-status-pending">Merge: pending</span>';
+  return `<span class="badge badge-${PR_MERGE_STATUS_TIER.pending}">Merge: pending</span>`;
 }
 
 function prMemberListHtml(members, drift, mergeStatus) {
@@ -778,13 +766,20 @@ function conflictResidualHtml(conflict) {
   return `<div class="residual">${escapeHtml(headline)} ${escapeHtml(conflict.detectedAt)} — ${escapeHtml(conflict.reason)}. ${escapeHtml(guidance)}</div>`;
 }
 
-// The queue-entry-level pill means "queue stuck here, needs a human" (still status-conflict,
-// still the reject tier) — only the displayed text differentiates by cause when known.
-function queueStatusLabel(e) {
+// Maps the coarse queue-entry status onto the shared 4-tier badge vocabulary.
+const QUEUE_STATUS_TIER = { queued: 'neutral', landing: 'flagged', landed: 'clean', conflict: 'critical', aborted: 'critical', investigating: 'flagged' };
+
+// The queue-entry-level pill means "queue stuck here, needs a human" — when the status is
+// "conflict" and a granular kind is known, both the label and the tier narrow to match the
+// actual cause (e.g. "Blocked" reads as flagged, not critical); otherwise falls back to the
+// coarse status tier/text.
+function queueStatusBadge(e) {
   if (e.status === 'conflict' && e.conflict && e.conflict.kind) {
-    return (CONFLICT_KIND_BADGE[e.conflict.kind] || {}).label || e.status;
+    const { cls, label } = CONFLICT_KIND_BADGE[e.conflict.kind] || CONFLICT_KIND_BADGE.mergeConflict;
+    return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
   }
-  return e.status;
+  const tier = QUEUE_STATUS_TIER[e.status] || 'neutral';
+  return `<span class="badge badge-${tier}">${escapeHtml(e.status)}</span>`;
 }
 
 function detailBodyHtml(detail, opts) {
@@ -800,7 +795,7 @@ function detailBodyHtml(detail, opts) {
     ${detail.drift ? renderSignals(detail.drift, detail.members) : ''}
     ${detail.residualDisclosure ? `<div class="residual">${escapeHtml(detail.residualDisclosure)}</div>` : ''}
     ${opts.queueMeta ? `<div class="card-meta">
-      <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(queueStatusLabel(opts.queueMeta))}</span>
+      ${queueStatusBadge(opts.queueMeta)}
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
     ${opts.mergeStatus && opts.mergeStatus.conflict ? conflictResidualHtml(opts.mergeStatus.conflict) : ''}
@@ -1034,7 +1029,7 @@ function queueEntryHtml(e) {
       <div class="entry-id">${escapeHtml(entryRepoLabel(e))} &middot; ${escapeHtml(e.bundleId)}</div>
     </div>
     <div class="queue-entry-actions">
-      <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(queueStatusLabel(e))}</span>
+      ${queueStatusBadge(e)}
       <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
       ${actionButtons ? `<span class="btn-group">${actionButtons}</span>` : ''}
     </div>
