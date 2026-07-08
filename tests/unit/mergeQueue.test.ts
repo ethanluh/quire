@@ -327,6 +327,54 @@ describe("MergeQueue.listEntries — ordering", () => {
 		const entries = await queue.listEntries();
 		expect(entries.map((e) => e.bundleId)).toEqual(["bundle-2", "bundle-1"]);
 	});
+
+	it("interleaves 'closed' into the trailing resolved group alongside 'landed', ordered by whichever resolution timestamp applies", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const statePath = join(dir, "queue.json");
+		const queue = new MergeQueue(statePath, new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+
+		await writeFile(
+			statePath,
+			JSON.stringify({
+				entries: [
+					{
+						bundleId: "bundle-landed",
+						bundle: makeBundle("bundle-landed", [makePr({ id: "pr-1" })]),
+						enqueuedAt: new Date(0).toISOString(),
+						status: "landed",
+						landedAt: new Date(1).toISOString(),
+						revertedPrIds: [],
+						mergedPrIds: ["pr-1"],
+					},
+					{
+						bundleId: "bundle-closed",
+						bundle: makeBundle("bundle-closed", [makePr({ id: "pr-2" })]),
+						enqueuedAt: new Date(0).toISOString(),
+						status: "closed",
+						closedAt: new Date(2).toISOString(),
+						revertedPrIds: [],
+						mergedPrIds: [],
+					},
+					{
+						bundleId: "bundle-queued",
+						bundle: makeBundle("bundle-queued", [makePr({ id: "pr-3" })]),
+						enqueuedAt: new Date(0).toISOString(),
+						status: "queued",
+						revertedPrIds: [],
+						mergedPrIds: [],
+					},
+				],
+			}),
+			"utf8",
+		);
+		await queue.load();
+
+		const entries = await queue.listEntries();
+		// bundle-queued (active) leads; bundle-closed resolved more recently (ts 2) than
+		// bundle-landed (ts 1), so it trails first within the resolved group.
+		expect(entries.map((e) => e.bundleId)).toEqual(["bundle-queued", "bundle-closed", "bundle-landed"]);
+	});
 });
 
 describe("MergeQueue.dequeueNext — mergeability handling", () => {
@@ -934,6 +982,96 @@ describe("MergeQueue.recordExternalMerge", () => {
 		const { queue } = await setup();
 
 		await expect(queue.recordExternalMerge("pr-missing")).resolves.toBeUndefined();
+	});
+});
+
+describe("MergeQueue.enqueueClosed", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	it("records a rejected bundle as a terminal 'closed' entry, never 'queued'", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		const bundle = makeBundle("bundle-1", [makePr()]);
+
+		await queue.enqueueClosed(bundle, makeCard("bundle-1"));
+
+		const entry = await queue.getEntry("bundle-1");
+		expect(entry?.status).toBe("closed");
+		expect(entry?.closedAt).toEqual(expect.any(String));
+		expect(entry?.card?.bundleId).toBe("bundle-1");
+	});
+});
+
+describe("MergeQueue.recordExternalClose", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	async function setup(): Promise<{ github: StubGitHubClient; queue: MergeQueue }> {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		return { github, queue };
+	}
+
+	it("closes a queued bundle whose only member was closed on GitHub without merging", async () => {
+		const { queue } = await setup();
+		const pr = makePr();
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		const updated = await queue.recordExternalClose(pr.id);
+
+		expect(updated?.status).toBe("closed");
+		expect(updated?.closedAt).toEqual(expect.any(String));
+	});
+
+	it("closes the whole bundle even when other members haven't merged yet, unlike recordExternalMerge's per-member accumulation", async () => {
+		const { queue } = await setup();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2]));
+
+		const updated = await queue.recordExternalClose(pr1.id);
+
+		expect(updated?.status).toBe("closed");
+	});
+
+	it("closes a bundle stuck in conflict, stripping the stale conflict and abortedAt", async () => {
+		const { github, queue } = await setup();
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		github.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2]));
+		const blocked = await queue.dequeueNext(); // merges pr1, blocks (conflict) on pr2
+		expect(blocked?.status).toBe("conflict");
+
+		const updated = await queue.recordExternalClose(pr2.id);
+
+		expect(updated?.status).toBe("closed");
+		expect(updated?.conflict).toBeUndefined();
+	});
+
+	it("is a no-op when the bundle never reached the merge queue", async () => {
+		const { queue } = await setup();
+
+		await expect(queue.recordExternalClose("pr-missing")).resolves.toBeUndefined();
+	});
+
+	it("is a no-op on an already-terminal entry", async () => {
+		const { queue } = await setup();
+		const pr = makePr();
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.recordExternalMerge(pr.id); // lands it
+
+		await expect(queue.recordExternalClose(pr.id)).resolves.toBeUndefined();
 	});
 });
 

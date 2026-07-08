@@ -16,7 +16,7 @@ const CONFLICT_KIND_COPY = {
   unresolvable: { headline: "Can't merge", guidance: 'See the PR on GitHub for details, or retry.' },
 };
 
-const QUEUE_STATUS_TIER = { queued: 'neutral', landing: 'flagged', landed: 'clean', conflict: 'critical', aborted: 'critical', investigating: 'flagged', reverted: 'critical' };
+const QUEUE_STATUS_TIER = { queued: 'neutral', landing: 'flagged', landed: 'clean', closed: 'neutral', conflict: 'critical', aborted: 'critical', investigating: 'flagged', reverted: 'critical' };
 
 function ciStatusBadge(status) {
   const cls = status === 'success' ? 'badge-clean' : status === 'failure' ? 'badge-flagged' : 'badge-neutral';

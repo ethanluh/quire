@@ -158,6 +158,11 @@ export function gesturesRouter(
 					for (const pr of bundle.members) {
 						await github.closePullRequest(pr.repoOwner, pr.repoName, pr.number);
 					}
+					// Record a terminal "closed" entry in the queue so the reject is visible in
+					// the bundle status view (same disclosed-history treatment a landed bundle
+					// gets) instead of the bundle just vanishing once the review queue below
+					// deletes its own copy.
+					await queue.enqueueClosed(assignedBundle, card);
 					state.bundles.delete(bundleId);
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action, decisionContext);

@@ -338,6 +338,12 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 				if (updated !== undefined) {
 					await triggerAutoMergeIfEnabled(updated, refreshDeps);
 				}
+			} else if (parsed.action === "closed" && !parsed.merged) {
+				// Closed without merging — a member PR this queue entry needed is gone, so the
+				// bundle can never fully land. Record it as "closed" instead of leaving the entry
+				// to poll/retry forever against a PR that will never become mergeable. No
+				// auto-merge trigger: closing isn't a landing event.
+				await refreshDeps.queue.recordExternalClose(parsed.pullRequestId);
 			}
 			await enqueueRefresh(parsed.repoOwner, parsed.repoName, refreshDeps);
 		})().catch((err: unknown) => {

@@ -112,7 +112,7 @@ async function removeMember(login) {
 }
 
 async function removeRepo(owner, name) {
-  if (!(await confirmAction(`Stop watching ${owner}/${name}? Its review queue and merge queue entries will be cleared.`, { danger: true }))) return;
+  if (!(await confirmAction(`Stop watching ${owner}/${name}? Its review queue and bundle status entries will be cleared.`, { danger: true }))) return;
   await api('DELETE', `/account/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, undefined);
   await loadAccount();
   loadReview();

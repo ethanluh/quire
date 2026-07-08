@@ -100,6 +100,25 @@ export class MergeQueue {
 		await this.persist();
 	}
 
+	// Records a bundle rejected via the review-queue gesture straight into a terminal "closed"
+	// entry instead of "queued" — it will never be processed. Gives a reject the same disclosed,
+	// visible-in-the-queue treatment a landed bundle gets, instead of the bundle just vanishing
+	// once the review queue deletes its own copy.
+	async enqueueClosed(bundle: Bundle, card?: ReviewCard): Promise<void> {
+		const entry: MergeQueueEntry = {
+			bundleId: bundle.id,
+			bundle,
+			...(card !== undefined ? { card } : {}),
+			enqueuedAt: new Date().toISOString(),
+			status: "closed",
+			closedAt: new Date().toISOString(),
+			revertedPrIds: [],
+			mergedPrIds: [],
+		};
+		this.state = { entries: [...this.state.entries, entry] };
+		await this.persist();
+	}
+
 	private async setEntry(bundleId: string, updated: MergeQueueEntry): Promise<void> {
 		this.state = {
 			entries: this.state.entries.map((e) => (e.bundleId === bundleId ? updated : e)),
@@ -352,20 +371,22 @@ export class MergeQueue {
 	}
 
 	// Floats everything still actionable ("queued", "landing", "conflict", "investigating",
-	// "aborted") above "landed" entries, most-recently-enqueued first, so a bundle waiting in
-	// the queue is visible without scrolling past a growing history of already-merged bundles.
-	// "landed" entries trail at the bottom, most recently landed first. This is a display-only
-	// sort — it reads this.state.entries, it never writes it, and dequeueNextLocked/
-	// refreshQueuedBranches/pollInvestigationsLocked all read this.state.entries directly rather
-	// than through here, so actual processing order is untouched.
+	// "aborted") above resolved entries, most-recently-enqueued first, so a bundle waiting in
+	// the queue is visible without scrolling past a growing history of already-resolved bundles.
+	// "landed" and "closed" entries are both terminal exits (merged vs. didn't) and trail
+	// together at the bottom, most recently resolved first, ordered by whichever of
+	// landedAt/closedAt applies. This is a display-only sort — it reads this.state.entries, it
+	// never writes it, and dequeueNextLocked/refreshQueuedBranches/pollInvestigationsLocked all
+	// read this.state.entries directly rather than through here, so actual processing order is
+	// untouched.
 	async listEntries(): Promise<ReadonlyArray<MergeQueueEntry>> {
 		const active = this.state.entries
-			.filter((e) => e.status !== "landed")
+			.filter((e) => e.status !== "landed" && e.status !== "closed")
 			.sort((a, b) => (b.enqueuedAt ?? "").localeCompare(a.enqueuedAt ?? ""));
-		const landed = this.state.entries
-			.filter((e) => e.status === "landed")
-			.sort((a, b) => (b.landedAt ?? "").localeCompare(a.landedAt ?? ""));
-		return [...active, ...landed];
+		const resolved = this.state.entries
+			.filter((e) => e.status === "landed" || e.status === "closed")
+			.sort((a, b) => (b.landedAt ?? b.closedAt ?? "").localeCompare(a.landedAt ?? a.closedAt ?? ""));
+		return [...active, ...resolved];
 	}
 
 	async getEntry(bundleId: string): Promise<MergeQueueEntry | undefined> {
@@ -474,6 +495,38 @@ export class MergeQueue {
 		};
 		await this.setEntry(entry.bundleId, updated);
 		return updated;
+	}
+
+	// A member PR was closed on GitHub without merging — the webhook on a `closed` event with
+	// `merged: false` calls this. Unlike recordExternalMerge, this doesn't accumulate per-member
+	// progress: one member closing without merging means the bundle as a whole can never fully
+	// land, so the entire entry moves straight to "closed" rather than waiting to see what the
+	// other members do. No-op if the bundle never reached the merge queue, or its entry is
+	// already terminal ("landed"/"closed").
+	async recordExternalClose(prId: string): Promise<MergeQueueEntry | undefined> {
+		return this.withLock(() => this.recordExternalCloseLocked(prId));
+	}
+
+	private async recordExternalCloseLocked(prId: string): Promise<MergeQueueEntry | undefined> {
+		const found = this.state.entries.find(
+			(e) => e.bundle.members.some((m) => m.id === prId) && e.status !== "landed" && e.status !== "closed",
+		);
+		if (found === undefined) return undefined;
+
+		// Same "moot now" treatment recordExternalMergeLocked gives a live investigation — the
+		// bundle is closing regardless of what a deep-investigation session eventually proposes.
+		const investigations = found.investigations?.map((inv): FileInvestigation =>
+			inv.status === "running" || inv.status === "awaitingReview" ? { ...inv, status: "rejected" } : inv,
+		);
+		const entry: MergeQueueEntry = investigations !== undefined ? { ...found, investigations } : found;
+		// Strips conflict/abortedAt, matching clearToQueued/recordExternalMergeLocked — a
+		// "closed" entry shouldn't carry a stale conflict or abortedAt from whatever state it
+		// closed out of.
+		const { conflict: _conflict, abortedAt: _abortedAt, ...rest } = entry;
+
+		const closed: MergeQueueEntry = { ...rest, status: "closed", closedAt: new Date().toISOString() };
+		await this.setEntry(entry.bundleId, closed);
+		return closed;
 	}
 
 	// A human gave up waiting on a bundle stuck mid-landing (possibly with some members
