@@ -247,7 +247,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			expect(res.status).toBe(400);
 		});
 
-		it("requeues a conflicted bundle", async () => {
+		it("reattempts a conflicted bundle immediately and lands it once mergeable", async () => {
 			const github = new StubGitHubClient();
 			const bundle = makeBundle("bundle-1");
 			github.setMergeability(
@@ -271,18 +271,26 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const address = localServer.address();
 			if (address === null || typeof address === "string") throw new Error("expected AddressInfo");
 
+			// The human fixes the branch-protection issue on GitHub, then retries.
+			github.setMergeability(
+				bundle.members[0]!.repoOwner,
+				bundle.members[0]!.repoName,
+				bundle.members[0]!.number,
+				{ state: "clean", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
+			);
 			const res = await fetch(`http://127.0.0.1:${address.port}/queue/bundle-1/retry`, { method: "POST" });
 			expect(res.status).toBe(200);
-			expect(await res.json()).toEqual({ status: "queued", bundleId: "bundle-1" });
+			expect(await res.json()).toEqual({ status: "landed", bundleId: "bundle-1" });
 
 			const entry = await localQueue.getEntry("bundle-1");
-			expect(entry?.status).toBe("queued");
+			expect(entry?.status).toBe("landed");
 			expect(entry?.conflict).toBeUndefined();
+			expect(github.mergedPrs).toEqual(["org/repo/1"]);
 
 			await new Promise<void>((resolve) => localServer.close(() => resolve()));
 		});
 
-		it("requeues an aborted bundle", async () => {
+		it("reattempts an aborted bundle immediately and lands it once mergeable", async () => {
 			const github = new StubGitHubClient();
 			const bundle = makeBundle("bundle-1");
 			github.setMergeability(
@@ -307,13 +315,20 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const address = localServer.address();
 			if (address === null || typeof address === "string") throw new Error("expected AddressInfo");
 
+			github.setMergeability(
+				bundle.members[0]!.repoOwner,
+				bundle.members[0]!.repoName,
+				bundle.members[0]!.number,
+				{ state: "clean", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
+			);
 			const res = await fetch(`http://127.0.0.1:${address.port}/queue/bundle-1/retry`, { method: "POST" });
 			expect(res.status).toBe(200);
-			expect(await res.json()).toEqual({ status: "queued", bundleId: "bundle-1" });
+			expect(await res.json()).toEqual({ status: "landed", bundleId: "bundle-1" });
 
 			const entry = await localQueue.getEntry("bundle-1");
-			expect(entry?.status).toBe("queued");
+			expect(entry?.status).toBe("landed");
 			expect(entry?.abortedAt).toBeUndefined();
+			expect(github.mergedPrs).toEqual(["org/repo/1"]);
 
 			await new Promise<void>((resolve) => localServer.close(() => resolve()));
 		});

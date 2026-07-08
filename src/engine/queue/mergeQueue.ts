@@ -125,8 +125,15 @@ export class MergeQueue {
 			await this.setEntry(entry.bundleId, entry);
 		}
 
-		// Merge each member PR, skipping ones already merged in a prior attempt, and
-		// persisting progress after every member so a crash here can resume cleanly.
+		return this.runLandingEntry(entry);
+	}
+
+	// Merges each member PR of an entry already in "landing" status, skipping ones already
+	// merged in a prior attempt, and persisting progress after every member so a crash here
+	// can resume cleanly. Shared by dequeueNextLocked (FIFO pickup) and reattemptLocked
+	// (targeted immediate retry from the Reattempt button) so both attempt paths land/conflict
+	// the same way.
+	private async runLandingEntry(entry: MergeQueueEntry): Promise<MergeQueueEntry> {
 		for (const pr of entry.bundle.members) {
 			if (entry.mergedPrIds.includes(pr.id)) continue;
 
@@ -373,10 +380,11 @@ export class MergeQueue {
 		return entry;
 	}
 
-	// Clears a "conflict" or "aborted" entry back to "queued" so the next dequeueNext() tries
-	// again — used whether a human fixed the underlying issue manually, changed their mind
-	// about an abort, or just wants another attempt. mergedPrIds is untouched, so a bundle
-	// that partially landed before conflicting/being aborted resumes from where it left off.
+	// Clears a "conflict" or "aborted" entry and runs the merge attempt immediately — a human
+	// clicking Reattempt expects it to try right now, not just re-enter the FIFO queue behind
+	// everything else waiting on a later dequeueNext()/"Process" pass. mergedPrIds is untouched,
+	// so a bundle that partially landed before conflicting/being aborted resumes from where it
+	// left off.
 	async reattempt(bundleId: string): Promise<MergeQueueEntry | undefined> {
 		return this.withLock(() => this.reattemptLocked(bundleId));
 	}
@@ -384,7 +392,10 @@ export class MergeQueue {
 	private async reattemptLocked(bundleId: string): Promise<MergeQueueEntry | undefined> {
 		const entry = this.state.entries.find((e) => e.bundleId === bundleId && (e.status === "conflict" || e.status === "aborted"));
 		if (entry === undefined) return undefined;
-		return this.clearToQueued(entry);
+		const { conflict: _conflict, abortedAt: _abortedAt, ...rest } = entry;
+		const landing: MergeQueueEntry = { ...rest, status: "landing" };
+		await this.setEntry(bundleId, landing);
+		return this.runLandingEntry(landing);
 	}
 
 	// Same "conflict" → "queued" transition as reattempt(), but looked up by the PR a

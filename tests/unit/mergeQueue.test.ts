@@ -660,7 +660,7 @@ describe("MergeQueue.reattempt", () => {
 		await expect(queue.reattempt("bundle-1")).resolves.toBeUndefined();
 	});
 
-	it("clears the conflict and requeues, so a later dequeueNext can land it", async () => {
+	it("clears the conflict and lands the bundle immediately", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const github = new StubGitHubClient();
 		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
@@ -674,15 +674,12 @@ describe("MergeQueue.reattempt", () => {
 		// The human fixes the branch-protection issue on GitHub, then retries.
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
 		const retried = await queue.reattempt("bundle-1");
-		expect(retried?.status).toBe("queued");
+		expect(retried?.status).toBe("landed");
 		expect(retried?.conflict).toBeUndefined();
-
-		const landed = await queue.dequeueNext();
-		expect(landed?.status).toBe("landed");
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
 	});
 
-	it("clears abortedAt and requeues an aborted bundle, resuming from its partial merge progress", async () => {
+	it("clears abortedAt and resumes an aborted bundle's partial merge progress immediately", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const github = new StubGitHubClient();
 		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
@@ -696,14 +693,28 @@ describe("MergeQueue.reattempt", () => {
 
 		github.setMergeability(pr2.repoOwner, pr2.repoName, pr2.number, makeMergeability({ state: "clean" }));
 		const retried = await queue.reattempt("bundle-1");
-		expect(retried?.status).toBe("queued");
+		expect(retried?.status).toBe("landed");
 		expect(retried?.abortedAt).toBeUndefined();
-		expect(retried?.mergedPrIds).toEqual([pr1.id]);
-
-		const landed = await queue.dequeueNext();
-		expect(landed?.status).toBe("landed");
 		// pr1 was merged before the abort; pr2 merges now — pr1 is never re-merged.
 		expect(github.mergedPrs).toEqual(["org/repo/1", "org/repo/2"]);
+	});
+
+	it("returns the entry still in conflict when the retry attempt fails again", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		const blocked = await queue.dequeueNext();
+		expect(blocked?.status).toBe("conflict");
+
+		// Still blocked — the human retried before actually fixing anything.
+		const retried = await queue.reattempt("bundle-1");
+		expect(retried?.status).toBe("conflict");
+		expect(retried?.conflict?.prId).toBe(pr.id);
+		expect(github.mergedPrs).toEqual([]);
 	});
 });
 

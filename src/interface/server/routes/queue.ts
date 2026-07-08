@@ -50,10 +50,12 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 	});
 
 	// A bundle stuck in "conflict" (automated resolution didn't apply or couldn't confidently
-	// resolve it — see INV-6) or "aborted" (a human gave up on it earlier) goes back to
-	// "queued" so the next /process pass tries again. Mirrors the webhook's reattemptForPr
-	// (see routes/webhook.ts): if every member's repo has autoMergeOnAccept on, don't make the
-	// human click /process too — drain it the same way a fresh conflict-clearing commit would.
+	// resolve it — see INV-6) or "aborted" (a human gave up on it earlier) is retried right
+	// away, same as /process — the response's status reflects the real outcome ("landed",
+	// "conflict" again, or "investigating"), not just a requeue. Same autoMergeOnAccept
+	// follow-through as /investigation/accept below: if every member's repo has it on, don't
+	// make the human click /process too — keep draining the rest of the queue in the
+	// background the same way a fresh conflict-clearing commit would.
 	router.post("/:bundleId/retry", requireRole("owner"), async (req, res, next) => {
 		try {
 			const bundleId = req.params["bundleId"] ?? "";
@@ -65,7 +67,7 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 			if (bundleAutoMergeEnabled(accountState.current, retried.bundle)) {
 				queue.dequeueNext().catch((err: unknown) => console.error(`Background auto-merge failed for ${bundleId}:`, err));
 			}
-			res.json({ status: "queued", bundleId });
+			res.json({ status: retried.status, bundleId, ...(retried.conflict !== undefined ? { conflict: retried.conflict } : {}) });
 		} catch (err) {
 			next(err);
 		}

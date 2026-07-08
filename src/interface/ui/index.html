@@ -353,11 +353,11 @@
 
 <div id="pane-queue" class="pane">
   <div class="tabs queue-filter-bar" id="queue-filter-bar" style="display:none"></div>
+  <button class="btn btn-accept" style="margin-bottom:var(--space-4)" id="btn-process">Process next</button>
+  <button class="btn btn-accept" style="margin-bottom:var(--space-4)" id="btn-process-all">Process all</button>
   <div class="queue-list" id="queue-list">
     <div class="empty">Merge queue is empty.</div>
   </div>
-  <button class="btn btn-accept" style="margin-top:var(--space-4)" id="btn-process">Process next</button>
-  <button class="btn btn-accept" style="margin-top:var(--space-4)" id="btn-process-all">Process all</button>
 </div>
 
 <div id="pane-audit" class="pane">
@@ -1191,19 +1191,30 @@ document.getElementById('btn-process').addEventListener('click', async (e) => {
 });
 
 document.getElementById('btn-process-all').addEventListener('click', async () => {
-  const pending = queueEntries.filter(e => e.status === 'queued' || e.status === 'landing').length;
+  const isPending = (e) => ['queued', 'landing', 'conflict', 'aborted'].includes(e.status);
+  const pending = queueEntries.filter(isPending).length;
   if (!pending) return;
-  if (!(await confirmAction(`Process all ${pending} queued item(s) in the merge queue?`))) return;
+  if (!(await confirmAction(`Process all ${pending} item(s) in the merge queue, reattempting any stuck conflicts?`))) return;
 
   const btn = document.getElementById('btn-process-all');
   btn.disabled = true;
   let landed = 0, conflicts = 0, processed = 0;
+  const retriedThisRun = new Set();
 
-  // dequeueNext() always moves an entry out of "queued"/"landing" on each call, so this
-  // is bounded by the queue size at the start — cap defensively in case that ever changes.
+  // Each iteration resolves exactly one entry — either a targeted retry of one conflict/
+  // aborted bundle (at most once per bundle this run, so a still-failing one doesn't starve
+  // the rest) or dequeueNext() picking up the next queued/landing one — so this is bounded
+  // by the queue size at the start. Cap defensively in case that ever changes.
   for (let i = 0; i < pending && i < queueEntries.length; i++) {
     btn.textContent = `Processing… (${processed}/${pending})`;
-    const result = await api('POST', '/queue/process');
+    const stuck = queueEntries.find((e) => ['conflict', 'aborted'].includes(e.status) && !retriedThisRun.has(e.bundleId));
+    let result;
+    if (stuck) {
+      retriedThisRun.add(stuck.bundleId);
+      result = await api('POST', `/queue/${stuck.bundleId}/retry`);
+    } else {
+      result = await api('POST', '/queue/process');
+    }
     if (result.error) {
       showError('Could not process queue: ' + result.error);
       break;
