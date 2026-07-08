@@ -24,6 +24,7 @@ import type { DeepInvestigationDeps } from "../../engine/queue/mergeQueue.js";
 import { ensureDeepResolverAgent } from "../../engine/queue/deepConflictInvestigation.js";
 import { AnthropicManagedAgentsClient } from "../../engine/queue/managedAgentsClient.js";
 import { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
+import { notifyStateChanged } from "./changeEvents.js";
 import { PrEffectCache } from "../../engine/cache/prCache.js";
 import { AuditStore, loadAuditStore } from "../../engine/gate/auditStore.js";
 import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.js";
@@ -213,6 +214,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
 		(owner, name) => repoBinding(accountState.current, owner, name)?.flagConflictsForFleet === true,
 		deepInvestigation,
+		notifyStateChanged,
 	);
 	await queue.load();
 
@@ -245,7 +247,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	router.use("/bundles", bundlesRouter(state));
 	router.use("/bundles", gesturesRouter(state, queue, deferLogPath, clientHolder, decidedStore, accountState, shelfPath));
 	router.use("/bundles", assignmentsRouter(state));
-	router.use("/queue", queueRouter(queue, state, decidedStore));
+	router.use("/queue", queueRouter(queue, state, decidedStore, accountState));
 	router.use("/shelf", shelfRouter(state, decidedStore, shelfPath));
 	router.use("/audit", auditRouter(auditStore));
 	router.use(

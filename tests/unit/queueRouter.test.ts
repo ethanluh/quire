@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import type { Server } from "node:http";
@@ -12,8 +12,22 @@ import { StubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.
 import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { createServerState } from "../../src/interface/server/state.js";
+import { createAccountState } from "../../src/interface/server/accountState.js";
+import type { AccountState } from "../../src/interface/server/accountState.js";
+import { notifyStateChanged, onStateChanged } from "../../src/interface/server/changeEvents.js";
+import type { InstallationAccountState } from "../../src/engine/github/installation.js";
 import type { Bundle, ReviewCard } from "../../src/engine/types/core.js";
 import type { TeamRole } from "../../src/engine/types/team.js";
+
+// autoMergeOnAccept lives per-repo — attached to "org/repo" (see makeBundle) so tests that
+// need it can flip it on without affecting the other repo-scoped tests, matching the fixture
+// pattern already used in gestures.test.ts.
+function makeAccount(overrides: { autoMergeOnAccept?: boolean } = {}): InstallationAccountState {
+	return {
+		installations: [{ installationId: 1, accountLogin: "test-user", accountType: "User", boundAt: new Date(0).toISOString() }],
+		repos: [{ owner: "org", name: "repo", installationId: 1, addedAt: new Date(0).toISOString(), addedBy: "test-user", ...overrides }],
+	};
+}
 
 // Real requests run behind resolveMembership, which always sets res.locals.membership
 // before reaching this router — this stands in for that, so isolated router tests keep
@@ -76,6 +90,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 	let queue: MergeQueue;
 	let state: ReturnType<typeof createServerState>;
 	let decidedStore: DecidedPrStore;
+	let accountState: AccountState;
 
 	beforeEach(async () => {
 		dataDir = await mkdtemp(join(tmpdir(), "quire-test-"));
@@ -84,11 +99,12 @@ describe("queueRouter — DELETE /:bundleId", () => {
 		state = createServerState();
 		decidedStore = new DecidedPrStore(join(dataDir, "decided-prs.json"));
 		await decidedStore.load();
+		accountState = createAccountState(makeAccount());
 
 		const app = express();
 		app.use(express.json());
 		app.use(stubMembership("owner"));
-		app.use("/queue", queueRouter(queue, state, decidedStore));
+		app.use("/queue", queueRouter(queue, state, decidedStore, accountState));
 
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, resolve);
@@ -165,7 +181,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const localApp = express();
 			localApp.use(express.json());
 			localApp.use(stubMembership("owner"));
-			localApp.use("/queue", queueRouter(localQueue, state, decidedStore));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
 			});
@@ -179,6 +195,46 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			expect(body.conflict?.reason).toContain("branch protection");
 
 			await new Promise<void>((resolve) => localServer.close(() => resolve()));
+		});
+
+		it("notifies state-changed listeners via MergeQueue's own onChanged hook, wired the same way tenant.ts wires it", async () => {
+			// Regression: this route used to call notifyStateChanged() itself after every mutating
+			// method; now MergeQueue notifies on its own persist() (see mergeQueue.ts's onChanged
+			// hook) and the route relies on that. Construct the queue with the hook wired exactly
+			// like tenant.ts does, so this test would catch that wiring breaking, not just the
+			// hook existing in isolation.
+			const localQueue = new MergeQueue(
+				join(dataDir, "queue-notify.json"),
+				new StubGitHubClient(),
+				new LlmProviderHolder(new StubLlmProvider()),
+				join(dataDir, "conflict.ndjson"),
+				undefined,
+				undefined,
+				undefined,
+				notifyStateChanged,
+			);
+			await localQueue.load();
+			await localQueue.enqueue(makeBundle("bundle-notify"));
+
+			const localApp = express();
+			localApp.use(express.json());
+			localApp.use(stubMembership("owner"));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
+			const localServer = await new Promise<Server>((resolve) => {
+				const s = localApp.listen(0, () => resolve(s));
+			});
+			const address = localServer.address();
+			if (address === null || typeof address === "string") throw new Error("expected AddressInfo");
+
+			const listener = jest.fn();
+			const unsubscribe = onStateChanged(listener);
+			try {
+				await fetch(`http://127.0.0.1:${address.port}/queue/process`, { method: "POST" });
+				expect(listener).toHaveBeenCalled();
+			} finally {
+				unsubscribe();
+				await new Promise<void>((resolve) => localServer.close(() => resolve()));
+			}
 		});
 	});
 
@@ -208,7 +264,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const localApp = express();
 			localApp.use(express.json());
 			localApp.use(stubMembership("owner"));
-			localApp.use("/queue", queueRouter(localQueue, state, decidedStore));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
 			});
@@ -244,7 +300,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const localApp = express();
 			localApp.use(express.json());
 			localApp.use(stubMembership("owner"));
-			localApp.use("/queue", queueRouter(localQueue, state, decidedStore));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
 			});
@@ -258,6 +314,56 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const entry = await localQueue.getEntry("bundle-1");
 			expect(entry?.status).toBe("queued");
 			expect(entry?.abortedAt).toBeUndefined();
+
+			await new Promise<void>((resolve) => localServer.close(() => resolve()));
+		});
+
+		it("also lands the bundle when autoMergeOnAccept is on, without a separate /process call", async () => {
+			// Regression: retry used to only clear the conflict, leaving the bundle "queued"
+			// until some unrelated trigger (another accept, a webhook, a manual /process)
+			// happened to drain it — even with auto-merge on, unlike the webhook's own
+			// reattemptForPr path.
+			const github = new StubGitHubClient();
+			const bundle = makeBundle("bundle-1");
+			github.setMergeability(
+				bundle.members[0]!.repoOwner,
+				bundle.members[0]!.repoName,
+				bundle.members[0]!.number,
+				{ state: "blocked", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
+			);
+			const localQueue = new MergeQueue(join(dataDir, "queue6.json"), github, new LlmProviderHolder(new StubLlmProvider()), join(dataDir, "conflict.ndjson"));
+			await localQueue.load();
+			await localQueue.enqueue(bundle);
+			await localQueue.dequeueNext();
+
+			const autoMergeAccountState = createAccountState(makeAccount({ autoMergeOnAccept: true }));
+			const localApp = express();
+			localApp.use(express.json());
+			localApp.use(stubMembership("owner"));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, autoMergeAccountState));
+			const localServer = await new Promise<Server>((resolve) => {
+				const s = localApp.listen(0, () => resolve(s));
+			});
+			const address = localServer.address();
+			if (address === null || typeof address === "string") throw new Error("expected AddressInfo");
+
+			github.setMergeability(
+				bundle.members[0]!.repoOwner,
+				bundle.members[0]!.repoName,
+				bundle.members[0]!.number,
+				{ state: "clean", isFork: false, merged: false, headBranch: "feature", headSha: "h", baseBranch: "main", baseSha: "b" },
+			);
+			const res = await fetch(`http://127.0.0.1:${address.port}/queue/bundle-1/retry`, { method: "POST" });
+			expect(res.status).toBe(200);
+
+			const deadline = Date.now() + 1000;
+			let entry = await localQueue.getEntry("bundle-1");
+			while (entry?.status !== "landed" && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				entry = await localQueue.getEntry("bundle-1");
+			}
+			expect(entry?.status).toBe("landed");
+			expect(github.mergedPrs).toEqual([`${bundle.members[0]!.repoOwner}/${bundle.members[0]!.repoName}/${bundle.members[0]!.number}`]);
 
 			await new Promise<void>((resolve) => localServer.close(() => resolve()));
 		});
@@ -289,7 +395,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const localApp = express();
 			localApp.use(express.json());
 			localApp.use(stubMembership("owner"));
-			localApp.use("/queue", queueRouter(localQueue, state, decidedStore));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
 			});
@@ -314,7 +420,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const app = express();
 			app.use(express.json());
 			app.use(stubMembership(role));
-			app.use("/queue", queueRouter(queue, state, decidedStore));
+			app.use("/queue", queueRouter(queue, state, decidedStore, accountState));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = app.listen(0, () => resolve(s));
 			});

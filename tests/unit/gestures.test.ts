@@ -17,6 +17,7 @@ import { StubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.
 import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 import { createAccountState } from "../../src/interface/server/accountState.js";
 import type { AccountState } from "../../src/interface/server/accountState.js";
+import { onStateChanged } from "../../src/interface/server/changeEvents.js";
 import type { InstallationAccountState } from "../../src/engine/github/installation.js";
 import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import type { Bundle, GestureAction, ReviewCard } from "../../src/engine/types/core.js";
@@ -85,6 +86,29 @@ function makeAccount(overrides: { autoMergeOnAccept?: boolean } = {}): Installat
 				addedBy: "test-user",
 				...overrides,
 			},
+		],
+	};
+}
+
+// Two repos, each independently toggleable, for exercising bundleAutoMergeEnabled's
+// per-member scoping (see accountState.ts) rather than makeAccount's single-repo shape.
+function makeTwoRepoAccount(repoAutoMerge: boolean, repo2AutoMerge: boolean): InstallationAccountState {
+	return {
+		installations: [{ installationId: 1, accountLogin: "test-user", accountType: "User", boundAt: new Date(0).toISOString() }],
+		repos: [
+			{ owner: "org", name: "repo", installationId: 1, addedAt: new Date(0).toISOString(), addedBy: "test-user", autoMergeOnAccept: repoAutoMerge },
+			{ owner: "org", name: "repo-2", installationId: 1, addedAt: new Date(0).toISOString(), addedBy: "test-user", autoMergeOnAccept: repo2AutoMerge },
+		],
+	};
+}
+
+function makeCrossRepoBundle(id: string): Bundle {
+	const bundle = makeBundle(id);
+	return {
+		...bundle,
+		members: [
+			bundle.members[0]!,
+			{ ...bundle.members[0]!, id: `${id}-pr-2`, repoName: "repo-2", number: 2 },
 		],
 	};
 }
@@ -274,6 +298,37 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(entries[0]?.card).toEqual(makeCard("b-1c"));
 	});
 
+	it("does not auto-merge a cross-repo bundle when only one member's repo opted in", async () => {
+		// Regression: the check used to key off bundle.members[0]'s repo only, so a bundle
+		// spanning repos could auto-land even though a later member's own repo never opted in.
+		accountState.current = makeTwoRepoAccount(true, false);
+		const bundle = makeCrossRepoBundle("b-cross");
+		state.bundles.set("b-cross", bundle);
+		state.cards.set("b-cross", makeCard("b-cross", { memberCount: 2, flags: ["spans multiple repos"] }));
+
+		const res = await gesture("b-cross", "accept", true);
+		expect(res.status).toBe(200);
+
+		// Give any (wrongly-firing) background auto-merge a chance to run before asserting.
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(github.mergedPrs).toEqual([]);
+		expect((await queue.getEntry("b-cross"))?.status).toBe("queued");
+	});
+
+	it("auto-merges a cross-repo bundle once every member's repo has opted in", async () => {
+		accountState.current = makeTwoRepoAccount(true, true);
+		const bundle = makeCrossRepoBundle("b-cross-ok");
+		state.bundles.set("b-cross-ok", bundle);
+		state.cards.set("b-cross-ok", makeCard("b-cross-ok", { memberCount: 2, flags: ["spans multiple repos"] }));
+
+		const res = await gesture("b-cross-ok", "accept", true);
+		expect(res.status).toBe(200);
+
+		const landed = await waitForEntryStatus(queue, "b-cross-ok", "landed");
+		expect(landed.status).toBe("landed");
+		expect(github.mergedPrs.slice().sort()).toEqual(["org/repo-2/2", "org/repo/1"]);
+	});
+
 	it("removes the card from the review queue on reject", async () => {
 		state.bundles.set("b-2", makeBundle("b-2"));
 		state.cards.set("b-2", makeCard("b-2"));
@@ -304,6 +359,25 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(cards).toEqual([]);
 		expect(state.shelf.has("b-3")).toBe(true);
 		expect(decidedStore.isDecided("b-3-pr-1")).toBe(true);
+	});
+
+	// Regression: reject/defer don't touch MergeQueue at all (so its own onChanged hook can't
+	// cover them), and a plain accept used to only notify inside the now-conditional auto-merge
+	// branch — every gesture needs its own signal so other open tabs see the review-queue change
+	// without waiting on their own poll.
+	it.each<GestureAction>(["accept", "reject", "defer"])("notifies state-changed listeners on %s", async (action) => {
+		const bundleId = `b-notify-${action}`;
+		state.bundles.set(bundleId, makeBundle(bundleId));
+		state.cards.set(bundleId, makeCard(bundleId));
+		const listener = jest.fn();
+		const unsubscribe = onStateChanged(listener);
+
+		try {
+			await gesture(bundleId, action);
+			expect(listener).toHaveBeenCalled();
+		} finally {
+			unsubscribe();
+		}
 	});
 
 	it("keeps the full bundle alongside the card on defer, for the detail view", async () => {

@@ -5,12 +5,19 @@ import type { DecidedPrStore } from "../../../engine/queue/decidedPrStore.js";
 import type { ServerState } from "../state.js";
 import { requireRole } from "../middleware/requireRole.js";
 import { validateBody } from "../middleware/validation.js";
+import type { AccountState } from "../accountState.js";
+import { bundleAutoMergeEnabled } from "../accountState.js";
+// MergeQueue now notifies on every persisted mutation itself (see its onChanged hook, wired
+// in tenant.ts) — the only place this route still needs to notify explicitly is DELETE
+// /:bundleId below, which also mutates ServerState's review queue, a change the queue's own
+// hook has no visibility into.
+import { notifyStateChanged } from "../changeEvents.js";
 
 // Path taken via the request body, not a URL segment — a file path routinely contains
 // slashes, which a URL param can't carry reliably under Express 4's default path matching.
 const InvestigationPathSchema = z.object({ path: z.string().min(1) });
 
-export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore: DecidedPrStore): Router {
+export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore: DecidedPrStore, accountState: AccountState): Router {
 	const router = Router();
 
 	router.get("/", async (_req, res, next) => {
@@ -44,7 +51,9 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 
 	// A bundle stuck in "conflict" (automated resolution didn't apply or couldn't confidently
 	// resolve it — see INV-6) or "aborted" (a human gave up on it earlier) goes back to
-	// "queued" so the next /process pass tries again.
+	// "queued" so the next /process pass tries again. Mirrors the webhook's reattemptForPr
+	// (see routes/webhook.ts): if every member's repo has autoMergeOnAccept on, don't make the
+	// human click /process too — drain it the same way a fresh conflict-clearing commit would.
 	router.post("/:bundleId/retry", requireRole("owner"), async (req, res, next) => {
 		try {
 			const bundleId = req.params["bundleId"] ?? "";
@@ -52,6 +61,9 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 			if (retried === undefined) {
 				res.status(400).json({ error: `Bundle ${bundleId} is not in a conflict or aborted state` });
 				return;
+			}
+			if (bundleAutoMergeEnabled(accountState.current, retried.bundle)) {
+				queue.dequeueNext().catch((err: unknown) => console.error(`Background auto-merge failed for ${bundleId}:`, err));
 			}
 			res.json({ status: "queued", bundleId });
 		} catch (err) {
@@ -80,7 +92,9 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 	// Applies a Managed Agents decision packet's proposed resolution and requeues the bundle
 	// (see MergeQueue.acceptInvestigation) — never auto-applied regardless of the packet's own
 	// self-reported confidence; a human always accepts or rejects explicitly. Mutates the
-	// shared queue like everything else in this file, so it's owner-gated the same way.
+	// shared queue like everything else in this file, so it's owner-gated the same way. Same
+	// autoMergeOnAccept follow-through as /retry above — accepting a resolution is the human
+	// equivalent of a conflict-clearing commit.
 	router.post("/:bundleId/investigation/accept", requireRole("owner"), validateBody(InvestigationPathSchema), async (req, res, next) => {
 		try {
 			const bundleId = req.params["bundleId"] ?? "";
@@ -89,6 +103,9 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 			if (updated === undefined) {
 				res.status(400).json({ error: `No awaiting-review investigation for ${path} on bundle ${bundleId}` });
 				return;
+			}
+			if (bundleAutoMergeEnabled(accountState.current, updated.bundle)) {
+				queue.dequeueNext().catch((err: unknown) => console.error(`Background auto-merge failed for ${bundleId}:`, err));
 			}
 			res.json({ status: "queued", bundleId });
 		} catch (err) {
@@ -130,6 +147,7 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 				res.json({ status: "removed" }); // not found, or already past "queued" — same no-op as today
 				return;
 			}
+			notifyStateChanged();
 			if (removed.card !== undefined) {
 				// Restore to the review queue (INV-5: an accept must stay reversible until the
 				// queue lands it), with the exact card the human already saw.

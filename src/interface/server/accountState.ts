@@ -1,4 +1,5 @@
 import type { InstallationAccountState, InstallationBinding, RepoBinding } from "../../engine/github/installation.js";
+import type { Bundle } from "../../engine/types/core.js";
 
 // Lifts the installation state out of githubApp.ts's private closure so the webhook route
 // and reconciliation poll — both constructed in index.ts, outside that router — can read
@@ -20,6 +21,13 @@ export function createAccountState(initial: InstallationAccountState | undefined
 // installationId backing it both live here now, per-repo rather than team-wide.
 export function repoBinding(state: InstallationAccountState, owner: string, name: string): RepoBinding | undefined {
 	return state.repos.find((r) => r.owner === owner && r.name === name);
+}
+
+// A bundle can legitimately span repos (see review/flags.ts's "spans multiple repos" high-risk
+// flag) — auto-merge only fires once every member's own repo has opted in, so a PR whose repo
+// never turned the setting on can't get swept into landing just because another member's did.
+export function bundleAutoMergeEnabled(state: InstallationAccountState, bundle: Bundle): boolean {
+	return bundle.members.every((m) => repoBinding(state, m.repoOwner, m.repoName)?.autoMergeOnAccept === true);
 }
 
 // The installation that backs a specific watched repo. Undefined both when the repo isn't

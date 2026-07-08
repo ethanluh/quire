@@ -52,6 +52,13 @@ export class MergeQueue {
 		// another's).
 		private readonly shouldFlagForFleet: (owner: string, repo: string) => boolean = () => false,
 		private readonly deepInvestigation?: DeepInvestigationDeps,
+		// Fired after every persisted state change (enqueue, setEntry, removeQueued, clear) —
+		// the single choke point every mutation already goes through, so callers (route
+		// handlers, the webhook, the investigation/branch-refresh poll timers) don't each have
+		// to remember to notify their own SSE emitter after calling into this class. Optional
+		// and interface-typed (a bare callback, not an import of changeEvents.js) so this
+		// engine-layer class stays free of a dependency on the interface layer.
+		private readonly onChanged?: () => void,
 	) {}
 
 	async load(): Promise<void> {
@@ -60,6 +67,7 @@ export class MergeQueue {
 
 	private async persist(): Promise<void> {
 		await saveState(this.statePath, this.state);
+		this.onChanged?.();
 	}
 
 	// dequeueNext(), reattempt(), and abort() are each reachable from independent triggers (a
@@ -148,7 +156,17 @@ export class MergeQueue {
 			// attempt that merged it but crashed before recording mergedPrIds) — calling
 			// mergePullRequest again would just 405 against an already-closed PR.
 			if (check.alreadyMerged !== true) {
-				await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+				try {
+					await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+				} catch (err) {
+					// A network/response failure here doesn't say whether GitHub actually
+					// committed the merge before erroring — re-check live rather than assume
+					// failure, so a merge that in fact succeeded doesn't surface as an error to
+					// the caller (a Process click, or background auto-merge) while under-
+					// reporting reality in queue.json until some later pass notices.
+					const after = await this.github.getMergeability(pr.repoOwner, pr.repoName, pr.number);
+					if (!after.merged) throw err;
+				}
 			}
 			entry = { ...entry, mergedPrIds: [...entry.mergedPrIds, pr.id] };
 			await this.setEntry(entry.bundleId, entry);
@@ -312,7 +330,17 @@ export class MergeQueue {
 
 		const revertUrl = await this.github.revertPullRequest(pr.repoOwner, pr.repoName, pr.number);
 
-		await this.setEntry(bundleId, { ...entry, revertedPrIds: [...entry.revertedPrIds, prId] });
+		const updated: MergeQueueEntry = {
+			...entry,
+			revertedPrIds: [...entry.revertedPrIds, prId],
+			// A "landed" entry whose merge just got undone is no longer accurately "landed" —
+			// re-flag it so the queue list doesn't keep showing green for a bundle with a
+			// disclosed residual (INV-6). "aborted" entries already carry their own
+			// needs-attention status; a revert on one (see the "merged before abort" case)
+			// doesn't need to override that with a different needs-attention status.
+			...(entry.status === "landed" ? { status: "reverted" as const } : {}),
+		};
+		await this.setEntry(bundleId, updated);
 		return revertUrl;
 	}
 

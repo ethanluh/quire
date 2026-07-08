@@ -64,6 +64,14 @@ export class StubGitHubClient implements GitHubClient {
 	// transient failure (e.g. a non-fast-forward race) without permanently breaking the stub.
 	updateBranchError: Error | undefined;
 	commitResolvedFilesError: Error | undefined;
+	// One-shot, like the others — simulates mergePullRequest throwing (e.g. a response
+	// timeout) after GitHub may or may not have actually committed the merge server-side.
+	mergePullRequestError: Error | undefined;
+	// When mergePullRequestError is set, controls whether the merge is treated as having
+	// actually gone through on GitHub's side despite the thrown error — flips the fixture's
+	// own mergeability record to merged, same as a real merge would, so getMergeability()
+	// called during error recovery sees it.
+	mergePullRequestErrorButActuallyMerged = false;
 	// Set false to simulate updateBranch/commitResolvedFiles succeeding but the PR staying
 	// not-mergeable anyway (e.g. the base branch moved again during resolution).
 	autoMarkMergeableAfterSuccess = true;
@@ -126,6 +134,24 @@ export class StubGitHubClient implements GitHubClient {
 	}
 
 	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+		if (this.mergePullRequestError !== undefined) {
+			const err = this.mergePullRequestError;
+			this.mergePullRequestError = undefined;
+			if (this.mergePullRequestErrorButActuallyMerged) {
+				const key = `${owner}/${repo}/${prNumber}`;
+				const current = this.mergeabilityFixtures.get(key) ?? {
+					state: "clean" as const,
+					isFork: false,
+					merged: false,
+					headBranch: "head",
+					headSha: "head-sha",
+					baseBranch: "base",
+					baseSha: "base-sha",
+				};
+				this.mergeabilityFixtures.set(key, { ...current, merged: true });
+			}
+			throw err;
+		}
 		this.mergedPrs.push(`${owner}/${repo}/${prNumber}`);
 	}
 
