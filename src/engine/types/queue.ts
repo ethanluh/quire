@@ -2,6 +2,12 @@ import type { Bundle, ReviewCard } from "./core.js";
 
 export type MergeQueueEntryStatus = "queued" | "landing" | "landed" | "reverted" | "conflict" | "aborted" | "investigating";
 
+// Why a PR couldn't merge, distinct from the coarse "conflict" queue status: mergeConflict is
+// a real text conflict Quire's own resolver couldn't clear; blocked/unstable/timedOut are
+// GitHub policy/CI/latency, never a text conflict; unresolvable is the catch-all for the
+// remaining edge cases (fork push rights, unexpected post-update state, base moved again).
+export type MergeConflictKind = "mergeConflict" | "blocked" | "unstable" | "timedOut" | "unresolvable";
+
 // The artifact a Managed Agents deep-investigation session produces for one escalated file —
 // always a proposal for a human to accept/reject, never auto-applied (the fast resolver
 // already couldn't clear this with confidence, so neither can an unreviewed agent output).
@@ -45,8 +51,9 @@ export interface MergeQueueEntry {
 	// resolution either didn't apply (branch protection, failing checks) or failed (a text
 	// conflict Quire's own hunk resolver couldn't confidently resolve). Surfaces the reason
 	// per INV-6 rather than leaving the bundle silently stuck; POST /queue/:bundleId/retry
-	// clears this to try again.
-	conflict?: { prId: string; reason: string; detectedAt: string };
+	// clears this to try again. `kind` is optional because entries persisted before it existed
+	// won't have it — consumers must fall back to treating a missing kind as `mergeConflict`.
+	conflict?: { prId: string; reason: string; kind?: MergeConflictKind; detectedAt: string };
 	// Set when status is "aborted": a human gave up waiting on a bundle stuck mid-landing or
 	// blocked on conflict, rather than letting it keep retrying. mergedPrIds is left untouched
 	// so the partial-merge residual stays visible (INV-6) — abort does not revert what already

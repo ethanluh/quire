@@ -2,7 +2,7 @@ import type { Bundle, PullRequest, ReviewCard } from "../types/core.js";
 import type { GitHubClient } from "../github/client.js";
 import type { LlmProviderHolder } from "../drift/effectList/providerHolder.js";
 import type { MergeabilityResult, MergeabilityState } from "../types/mergeability.js";
-import type { FileInvestigation, MergeQueueEntry, MergeQueueEntryStatus, QueueState } from "../types/queue.js";
+import type { FileInvestigation, MergeConflictKind, MergeQueueEntry, MergeQueueEntryStatus, QueueState } from "../types/queue.js";
 import { loadState, saveState } from "./persistence.js";
 import { resolveMergeConflict } from "./conflictResolution.js";
 import type { ConflictHunkEscalation } from "./conflictResolution.js";
@@ -19,7 +19,7 @@ export const DEFAULT_MERGEABILITY_POLL_DELAYS_MS: ReadonlyArray<number> = [1000,
 
 type MergeableCheck =
 	| { ok: true; alreadyMerged?: boolean }
-	| { ok: false; reason: string; investigating?: { path: string; sessionId: string } };
+	| { ok: false; reason: string; kind: MergeConflictKind; investigating?: { path: string; sessionId: string } };
 
 // Live, swappable dependencies for the opt-in Managed-Agents deep-investigation tier — same
 // "getter bag" shape as shouldFlagForFleet, gathered into one object because this tier needs
@@ -137,7 +137,7 @@ export class MergeQueue {
 				const blocked: MergeQueueEntry = {
 					...entry,
 					status: investigation !== undefined ? "investigating" : "conflict",
-					conflict: { prId: pr.id, reason: check.reason, detectedAt: new Date().toISOString() },
+					conflict: { prId: pr.id, reason: check.reason, kind: check.kind, detectedAt: new Date().toISOString() },
 					...(investigation !== undefined ? { investigations: [...(entry.investigations ?? []), investigation] } : {}),
 				};
 				await this.setEntry(blocked.bundleId, blocked);
@@ -178,13 +178,21 @@ export class MergeQueue {
 
 		if (mergeability.state === "behind") {
 			if (mergeability.isFork) {
-				return { ok: false, reason: "PR branch is behind base and lives in a fork this installation can't push to" };
+				return {
+					ok: false,
+					reason: "PR branch is behind base and lives in a fork this installation can't push to",
+					kind: "unresolvable",
+				};
 			}
 			await this.github.updateBranch(pr.repoOwner, pr.repoName, pr.number);
 			const afterUpdate = await this.pollMergeability(pr);
 			if (MERGEABLE_STATES.includes(afterUpdate.state)) return { ok: true };
 			if (afterUpdate.state !== "dirty") {
-				return { ok: false, reason: `branch update left the PR in an unexpected state: ${afterUpdate.state}` };
+				return {
+					ok: false,
+					reason: `branch update left the PR in an unexpected state: ${afterUpdate.state}`,
+					kind: "unresolvable",
+				};
 			}
 			return this.attemptResolution(bundleId, pr, afterUpdate);
 		}
@@ -193,14 +201,17 @@ export class MergeQueue {
 			return this.attemptResolution(bundleId, pr, mergeability);
 		}
 
-		const reasonByState: Partial<Record<typeof mergeability.state, string>> = {
-			blocked: "blocked by branch protection or required reviews, not a merge conflict",
-			unstable: "required status checks are failing or still pending, not a merge conflict",
-			unknownPending: "GitHub did not finish computing mergeability in time",
+		const outcomeByState: Partial<Record<typeof mergeability.state, { reason: string; kind: MergeConflictKind }>> = {
+			blocked: { reason: "blocked by branch protection or required reviews, not a merge conflict", kind: "blocked" },
+			unstable: { reason: "required status checks are failing or still pending, not a merge conflict", kind: "unstable" },
+			unknownPending: { reason: "GitHub did not finish computing mergeability in time", kind: "timedOut" },
 		};
-		const reason = reasonByState[mergeability.state] ?? "GitHub reported an unrecognized mergeability state";
-		await logConflictResolution(this.conflictLogPath, bundleId, pr.id, "unresolved", reason);
-		return { ok: false, reason };
+		const outcome = outcomeByState[mergeability.state] ?? {
+			reason: "GitHub reported an unrecognized mergeability state",
+			kind: "unresolvable" as const,
+		};
+		await logConflictResolution(this.conflictLogPath, bundleId, pr.id, "unresolved", outcome.reason);
+		return { ok: false, reason: outcome.reason, kind: outcome.kind };
 	}
 
 	private async attemptResolution(
@@ -233,7 +244,12 @@ export class MergeQueue {
 					`Quire could not automatically resolve this PR's merge conflict:\n\n${result.reason}`,
 				);
 			}
-			return { ok: false, reason: result.reason, ...(investigating !== undefined ? { investigating } : {}) };
+			return {
+				ok: false,
+				reason: result.reason,
+				kind: "mergeConflict",
+				...(investigating !== undefined ? { investigating } : {}),
+			};
 		}
 
 		// Give GitHub a moment to recompute mergeable_state after the new commit rather
@@ -243,6 +259,7 @@ export class MergeQueue {
 		return {
 			ok: false,
 			reason: `still not mergeable after resolving (${after.state}) — base branch likely moved again`,
+			kind: "unresolvable",
 		};
 	}
 

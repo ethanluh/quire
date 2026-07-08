@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzYzNjZmMSIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjZmZmZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5RPC90ZXh0Pjwvc3ZnPg==">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzdjM2IzMiIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjZmJmNmVjIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5RPC90ZXh0Pjwvc3ZnPg==">
 <title>Quire</title>
 <link rel="stylesheet" href="styles/tokens.css">
 <link rel="stylesheet" href="styles/components.css">
@@ -258,29 +258,6 @@
      reads as two groups rather than one flat list. */
   .queue-entry-actions .btn-group { display: flex; gap: var(--space-2); margin-left: var(--space-2); padding-left: var(--space-2); border-left: 1px solid var(--color-border); }
 
-  .status-badge {
-    font-size: var(--text-xs);
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-pill);
-  }
-  .status-queued   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
-  .status-landing  { background: var(--color-flagged-wash); color: var(--color-flagged); }
-  .status-landed   { background: var(--color-accept-wash); color: var(--color-accept); }
-  /* Same reject tier as pr-status-conflict — automated resolution was attempted and
-     failed; the bundle is stopped and waiting on a human, not mid-retry. */
-  .status-conflict { background: var(--color-reject-wash); color: var(--color-reject); }
-  /* Reject tier, not flagged: abort is a deliberate human give-up (like the reject
-     gesture), not a routine/retryable state the way conflict is. */
-  .status-aborted  { background: var(--color-reject-wash); color: var(--color-reject); }
-  /* Flagged tier, like status-landing: an in-flight investigation is a normal waiting
-     state, not a failure — it only becomes "conflict" once there's something to review. */
-  .status-investigating { background: var(--color-flagged-wash); color: var(--color-flagged); }
-
-  .pr-status-pending   { background: var(--color-surface-sunken); color: var(--color-text-secondary); }
-  .pr-status-merged    { background: var(--color-accept-wash); color: var(--color-accept); }
-  .pr-status-reverted  { background: var(--color-reject-wash); color: var(--color-reject); }
-  .pr-status-conflict  { background: var(--color-reject-wash); color: var(--color-reject); }
-
   .decision-packet {
     margin-top: var(--space-3);
     padding: var(--space-4);
@@ -309,11 +286,14 @@
 
   #toast {
     position: fixed; left: var(--space-4); right: var(--space-4); bottom: var(--space-4);
-    background: var(--color-reject-wash); color: var(--color-reject); border: 1px solid var(--color-reject);
     border-radius: var(--radius-md); padding: var(--space-3); font-size: var(--text-sm); text-align: center;
     opacity: 0; pointer-events: none; transition: opacity var(--duration-base) var(--ease-standard); z-index: 100;
   }
   #toast.visible { opacity: 1; }
+  #toast.toast-error   { background: var(--color-reject-wash);  color: var(--color-reject);  border: 1px solid var(--color-reject); }
+  /* "Noted, not a siren" — routine nudges use the same flagged tier as a drift flag. */
+  #toast.toast-notice  { background: var(--color-flagged-wash); color: var(--color-flagged); border: 1px solid var(--color-flagged); }
+  #toast.toast-neutral { background: var(--color-surface-sunken); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
 </style>
 </head>
 <body>
@@ -333,7 +313,7 @@
   <div class="header-identity">
     <img class="header-avatar" id="header-avatar" style="display:none" alt="" onerror="this.style.display='none'">
     <span class="subtitle" id="signed-in-as" style="display:none"></span>
-    <button class="btn btn-icon" id="btn-settings" title="Settings" aria-label="Settings" style="display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <button class="btn btn-icon" id="btn-settings" title="Settings" aria-label="Settings" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
   </div>
 </header>
 
@@ -390,7 +370,7 @@
   <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
     <div class="settings-header">
       <h3 class="modal-title" id="settings-modal-title">Settings</h3>
-      <button class="btn btn-defer btn-icon" id="btn-settings-modal-close" title="Close" aria-label="Close settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      <button class="btn btn-defer btn-icon" id="btn-settings-modal-close" title="Close" aria-label="Close settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
 
     <div class="settings-shell">
@@ -430,8 +410,11 @@
               <button class="btn btn-defer" id="btn-team-rename">Save name</button>
             </div>
             <div class="account-connect-actions">
-              <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
+              <input type="text" id="team-create-input" placeholder="New team name">
               <button class="btn btn-defer" id="btn-team-create">Create new team</button>
+            </div>
+            <div class="account-connect-actions">
+              <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
               <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
             </div>
             <div id="team-result" class="result-msg" style="display:none"></div>
@@ -510,6 +493,17 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="confirm-modal-backdrop" style="display:none">
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <h3 class="modal-title" id="confirm-modal-title">Confirm</h3>
+    <p id="confirm-modal-message"></p>
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-confirm-modal-cancel">Cancel</button>
+      <button class="btn btn-accept" id="btn-confirm-modal-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -573,13 +567,58 @@ async function api(method, path, body) {
   return r.json();
 }
 
-function showError(message) {
+function showToast(message, tone) {
   const toast = document.getElementById('toast');
   toast.textContent = message;
-  toast.classList.add('visible');
-  clearTimeout(showError._t);
-  showError._t = setTimeout(() => toast.classList.remove('visible'), 3500);
+  toast.className = `toast-${tone || 'error'} visible`;
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.remove('visible'), 3500);
 }
+
+function showError(message) {
+  showToast(message, 'error');
+}
+
+const confirmModalBackdrop = document.getElementById('confirm-modal-backdrop');
+const confirmModalCard = confirmModalBackdrop.querySelector('.card');
+const confirmModalTitle = document.getElementById('confirm-modal-title');
+const confirmModalMessage = document.getElementById('confirm-modal-message');
+const confirmModalConfirmBtn = document.getElementById('btn-confirm-modal-confirm');
+const confirmModalCancelBtn = document.getElementById('btn-confirm-modal-cancel');
+let confirmModalResolve = null;
+
+// Themed replacement for confirm() — returns a Promise<boolean> instead of blocking.
+// opts.danger renders the reject-toned .modal-danger variant for irreversible actions.
+function confirmAction(message, opts) {
+  opts = opts || {};
+  if (confirmModalResolve) return Promise.resolve(false); // one confirm at a time
+  confirmModalCard.classList.toggle('modal-danger', Boolean(opts.danger));
+  confirmModalTitle.textContent = opts.title || (opts.danger ? "This can't be undone" : 'Confirm');
+  confirmModalMessage.textContent = message;
+  confirmModalConfirmBtn.className = 'btn ' + (opts.danger ? 'btn-reject' : 'btn-accept');
+  confirmModalConfirmBtn.textContent = opts.confirmLabel || (opts.danger ? 'Yes, proceed' : 'Confirm');
+  confirmModalCancelBtn.textContent = opts.cancelLabel || 'Cancel';
+  confirmModalBackdrop.style.display = 'flex';
+  return new Promise((resolve) => { confirmModalResolve = resolve; });
+}
+
+function closeConfirmModal(result) {
+  confirmModalBackdrop.style.display = 'none';
+  if (confirmModalResolve) {
+    const resolve = confirmModalResolve;
+    confirmModalResolve = null;
+    resolve(result);
+  }
+}
+
+confirmModalConfirmBtn.addEventListener('click', () => closeConfirmModal(true));
+confirmModalCancelBtn.addEventListener('click', () => closeConfirmModal(false));
+confirmModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === confirmModalBackdrop) closeConfirmModal(false);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && confirmModalBackdrop.style.display !== 'none') closeConfirmModal(false);
+});
 
 async function withPending(btn, pendingLabel, fn) {
   const original = btn.textContent;
@@ -677,13 +716,30 @@ function prDriftBadges(prId, drift) {
   return badges.join('');
 }
 
+// Why a PR can't merge, mapped to a badge tier + label. `mergeStatus.conflict.kind` is
+// absent on entries persisted before this discriminant existed — fall back to the
+// mergeConflict entry so old data keeps reading as it always has.
+const CONFLICT_KIND_BADGE = {
+  mergeConflict: { cls: 'badge-critical', label: 'Conflict' },
+  blocked: { cls: 'badge-flagged', label: 'Blocked' },
+  unstable: { cls: 'badge-flagged', label: 'Checks failing' },
+  timedOut: { cls: 'badge-neutral', label: 'Pending GitHub' },
+  unresolvable: { cls: 'badge-flagged', label: "Can't merge" },
+};
+
+// Maps a per-PR merge status onto the shared 4-tier badge vocabulary (neutral/clean/
+// flagged/critical) instead of a parallel, page-local color scheme — see docs/design-system.md.
+const PR_MERGE_STATUS_TIER = { pending: 'neutral', merged: 'clean', reverted: 'critical' };
+
 function prMergeStatusBadge(pr, mergeStatus) {
   if (!mergeStatus) return '';
-  let status = 'pending';
-  if (mergeStatus.revertedPrIds.includes(pr.id)) status = 'reverted';
-  else if (mergeStatus.mergedPrIds.includes(pr.id)) status = 'merged';
-  else if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) status = 'conflict';
-  return `<span class="badge pr-status-${status}">Merge: ${escapeHtml(status)}</span>`;
+  if (mergeStatus.revertedPrIds.includes(pr.id)) return `<span class="badge badge-${PR_MERGE_STATUS_TIER.reverted}">Merge: reverted</span>`;
+  if (mergeStatus.mergedPrIds.includes(pr.id)) return `<span class="badge badge-${PR_MERGE_STATUS_TIER.merged}">Merge: merged</span>`;
+  if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) {
+    const { cls, label } = CONFLICT_KIND_BADGE[mergeStatus.conflict.kind] || CONFLICT_KIND_BADGE.mergeConflict;
+    return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
+  }
+  return `<span class="badge badge-${PR_MERGE_STATUS_TIER.pending}">Merge: pending</span>`;
 }
 
 function prMemberListHtml(members, drift, mergeStatus) {
@@ -750,6 +806,37 @@ detailModalBody.addEventListener('click', async (event) => {
   });
 });
 
+// Headline/guidance per conflict kind for the detail-modal residual banner — the full
+// `reason` string is always shown too (INV-6), this only varies the framing around it.
+const CONFLICT_KIND_COPY = {
+  mergeConflict: { headline: 'Merge conflict detected', guidance: "Automated resolution did not apply — see the conflicting PR's GitHub link below for details, or retry." },
+  blocked: { headline: 'Blocked, not a merge conflict', guidance: 'Resolve the required review or branch-protection rule on GitHub, then retry.' },
+  unstable: { headline: 'Checks failing or pending, not a merge conflict', guidance: 'Wait for CI or fix the failing check, then retry.' },
+  timedOut: { headline: 'Mergeability still unknown', guidance: "GitHub hasn't finished computing this yet — this usually clears on its own; retry in a moment." },
+  unresolvable: { headline: "Can't merge", guidance: 'See the PR on GitHub for details, or retry.' },
+};
+
+function conflictResidualHtml(conflict) {
+  const { headline, guidance } = CONFLICT_KIND_COPY[conflict.kind] || CONFLICT_KIND_COPY.mergeConflict;
+  return `<div class="residual">${escapeHtml(headline)} ${escapeHtml(conflict.detectedAt)} — ${escapeHtml(conflict.reason)}. ${escapeHtml(guidance)}</div>`;
+}
+
+// Maps the coarse queue-entry status onto the shared 4-tier badge vocabulary.
+const QUEUE_STATUS_TIER = { queued: 'neutral', landing: 'flagged', landed: 'clean', conflict: 'critical', aborted: 'critical', investigating: 'flagged' };
+
+// The queue-entry-level pill means "queue stuck here, needs a human" — when the status is
+// "conflict" and a granular kind is known, both the label and the tier narrow to match the
+// actual cause (e.g. "Blocked" reads as flagged, not critical); otherwise falls back to the
+// coarse status tier/text.
+function queueStatusBadge(e) {
+  if (e.status === 'conflict' && e.conflict && e.conflict.kind) {
+    const { cls, label } = CONFLICT_KIND_BADGE[e.conflict.kind] || CONFLICT_KIND_BADGE.mergeConflict;
+    return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
+  }
+  const tier = QUEUE_STATUS_TIER[e.status] || 'neutral';
+  return `<span class="badge badge-${tier}">${escapeHtml(e.status)}</span>`;
+}
+
 function detailBodyHtml(detail, opts) {
   opts = opts || {};
   return `
@@ -763,10 +850,10 @@ function detailBodyHtml(detail, opts) {
     ${detail.drift ? renderSignals(detail.drift, detail.members) : ''}
     ${detail.residualDisclosure ? `<div class="residual">${escapeHtml(detail.residualDisclosure)}</div>` : ''}
     ${opts.queueMeta ? `<div class="card-meta">
-      <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(opts.queueMeta.status)}</span>
+      ${queueStatusBadge(opts.queueMeta)}
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
-    ${opts.mergeStatus && opts.mergeStatus.conflict ? `<div class="residual">Merge conflict detected ${escapeHtml(opts.mergeStatus.conflict.detectedAt)}. Automated resolution did not apply — see the conflicting PR's GitHub link below for details, or retry.</div>` : ''}
+    ${opts.mergeStatus && opts.mergeStatus.conflict ? conflictResidualHtml(opts.mergeStatus.conflict) : ''}
     ${investigationsHtml(opts.bundleId, opts.investigations)}
     <h4>Member PRs</h4>
     ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
@@ -997,7 +1084,7 @@ function queueEntryHtml(e) {
       <div class="entry-id">${escapeHtml(entryRepoLabel(e))} &middot; ${escapeHtml(e.bundleId)}</div>
     </div>
     <div class="queue-entry-actions">
-      <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+      ${queueStatusBadge(e)}
       <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
       ${actionButtons ? `<span class="btn-group">${actionButtons}</span>` : ''}
     </div>
@@ -1050,7 +1137,7 @@ async function overturnAudit(entryId) {
 }
 
 async function removeFromQueue(bundleId) {
-  if (!confirm('Remove this bundle from the merge queue?')) return;
+  if (!(await confirmAction('Remove this bundle from the merge queue?'))) return;
   await api('DELETE', `/queue/${bundleId}`);
   loadQueue();
   loadReview();
@@ -1060,7 +1147,7 @@ async function abortQueueEntry(bundleId, mergedCount, totalCount) {
   const message = mergedCount > 0
     ? `Abort this bundle? ${mergedCount} of ${totalCount} member PRs already merged and will stay merged — aborting only stops Quire from retrying the rest. Nothing is reverted.`
     : 'Abort this bundle? It will stop being retried and remain in the queue marked as aborted.';
-  if (!confirm(message)) return;
+  if (!(await confirmAction(message))) return;
   await api('POST', `/queue/${bundleId}/abort`, undefined);
   loadQueue();
 }
@@ -1072,7 +1159,7 @@ async function reattemptQueueEntry(bundleId) {
 
 async function gesture(bundleId, action, needsConfirm) {
   if (action === 'accept' && needsConfirm) {
-    if (!confirm('This bundle touches auth, shared infra, or spans multiple repos. Accept anyway?')) return;
+    if (!(await confirmAction('This bundle touches auth, shared infra, or spans multiple repos. Accept anyway?'))) return;
   }
   const buttons = document.querySelectorAll(`#card-${bundleId} button`);
   buttons.forEach((b) => { b.disabled = true; });
@@ -1097,7 +1184,7 @@ async function promote(bundleId) {
 document.getElementById('btn-process').addEventListener('click', async (e) => {
   const result = await withPending(e.currentTarget, 'Processing…', () => api('POST', '/queue/process'));
   if (result.error) {
-    alert('Could not process queue: ' + result.error);
+    showError('Could not process queue: ' + result.error);
     return;
   }
   loadQueue();
@@ -1106,7 +1193,7 @@ document.getElementById('btn-process').addEventListener('click', async (e) => {
 document.getElementById('btn-process-all').addEventListener('click', async () => {
   const pending = queueEntries.filter(e => e.status === 'queued' || e.status === 'landing').length;
   if (!pending) return;
-  if (!confirm(`Process all ${pending} queued item(s) in the merge queue?`)) return;
+  if (!(await confirmAction(`Process all ${pending} queued item(s) in the merge queue?`))) return;
 
   const btn = document.getElementById('btn-process-all');
   btn.disabled = true;
@@ -1118,7 +1205,7 @@ document.getElementById('btn-process-all').addEventListener('click', async () =>
     btn.textContent = `Processing… (${processed}/${pending})`;
     const result = await api('POST', '/queue/process');
     if (result.error) {
-      alert('Could not process queue: ' + result.error);
+      showError('Could not process queue: ' + result.error);
       break;
     }
     if (result.status === 'empty') break;
@@ -1130,16 +1217,16 @@ document.getElementById('btn-process-all').addEventListener('click', async () =>
 
   btn.textContent = 'Process all';
   btn.disabled = false;
-  alert(`Processed ${processed}: ${landed} landed, ${conflicts} conflict(s).`);
+  showToast(`Processed ${processed}: ${landed} landed, ${conflicts} conflict(s).`, 'notice');
 });
 
 const clearAllBtn = document.getElementById('btn-clear-all');
 clearAllBtn.style.display = 'inline-block';
 clearAllBtn.addEventListener('click', async () => {
-  if (!confirm('Clear all stored content (bundles, shelf, merge queue, audit log)? This cannot be undone.')) return;
+  if (!(await confirmAction('Clear all stored content (bundles, shelf, merge queue, audit log)? This cannot be undone.', { danger: true }))) return;
   const result = await api('POST', '/admin/reset', undefined);
   if (result.error) {
-    alert('Could not clear data: ' + result.error);
+    showError('Could not clear data: ' + result.error);
     return;
   }
   loadReview();
@@ -1230,7 +1317,7 @@ function installationHtml(installation) {
 }
 
 async function disconnectInstallation(installationId) {
-  if (!confirm('Disconnect this GitHub App installation?')) return;
+  if (!(await confirmAction('Disconnect this GitHub App installation?'))) return;
   await api('POST', `/account/github/disconnect/${installationId}`, undefined);
   loadAccount();
 }
@@ -1278,7 +1365,7 @@ async function loadConnectableInstallations() {
 }
 
 accountDisconnectAllBtn.addEventListener('click', async () => {
-  if (!confirm('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.')) return;
+  if (!(await confirmAction('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.', { danger: true }))) return;
   await api('POST', '/account/github/disconnect-all', undefined);
   loadAccount();
 });
@@ -1338,7 +1425,7 @@ async function updateRepoSetting(row) {
 }
 
 async function removeRepo(owner, name) {
-  if (!confirm(`Stop watching ${owner}/${name}? Its review queue and merge queue entries will be cleared.`)) return;
+  if (!(await confirmAction(`Stop watching ${owner}/${name}? Its review queue and merge queue entries will be cleared.`, { danger: true }))) return;
   await api('DELETE', `/account/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, undefined);
   await loadAccount();
   loadReview();
@@ -1413,6 +1500,7 @@ function showAccountResult(message, isError) {
 }
 
 installBtn.addEventListener('click', async () => {
+  if (!(await confirmAction("Install the Quire GitHub App? You'll choose which repos to grant access to on GitHub's side.", { confirmLabel: 'Continue to GitHub' }))) return;
   // Disabled for the round trip to /install/start so a fast double-click can't fire it
   // twice before location.href navigates away — the server is idempotent either way,
   // but there's no reason to rely on that alone.
@@ -1507,7 +1595,7 @@ document.getElementById('btn-llm-modal-connect').addEventListener('click', async
 });
 
 llmDisconnectBtn.addEventListener('click', async () => {
-  if (!confirm('Disconnect the connected LLM API key?')) return;
+  if (!(await confirmAction('Disconnect the connected LLM API key?'))) return;
   await api('POST', '/account/llm/disconnect', undefined);
   loadLlmAccount();
 });
@@ -1546,7 +1634,7 @@ async function setMemberRole(login, role) {
 }
 
 async function removeMember(login) {
-  if (!confirm(`Remove ${login} from this team?`)) return;
+  if (!(await confirmAction(`Remove ${login} from this team?`))) return;
   const result = await api('POST', `/account/team/members/${login}/remove`, undefined);
   if (result.error) {
     showTeamResult('Error: ' + result.error, true);
@@ -1614,7 +1702,7 @@ function renderHeaderTeam(activeName, teams) {
 document.getElementById('header-team-switcher').addEventListener('change', async (e) => {
   const result = await api('POST', '/account/team/switch', { teamId: e.target.value });
   if (result.error) {
-    alert('Error: ' + result.error);
+    showError('Error: ' + result.error);
     return;
   }
   await refreshAfterTeamChange();
@@ -1663,18 +1751,20 @@ document.getElementById('btn-team-invite').addEventListener('click', async () =>
 });
 
 document.getElementById('btn-team-create').addEventListener('click', async () => {
-  const name = prompt("Name your new team:");
+  const input = document.getElementById('team-create-input');
+  const name = input.value.trim();
   if (!name) return;
   const result = await api('POST', '/account/team/create', { name });
   if (result.error) {
     showTeamResult('Error: ' + result.error, true);
     return;
   }
+  input.value = '';
   await refreshAfterTeamChange();
 });
 
 document.getElementById('btn-team-leave').addEventListener('click', async () => {
-  if (!loadedTeamId || !confirm('Leave this team?')) return;
+  if (!loadedTeamId || !(await confirmAction('Leave this team?'))) return;
   const result = await api('POST', '/account/team/leave', { teamId: loadedTeamId });
   if (result.error) {
     showTeamResult('Error: ' + result.error, true);
@@ -1693,8 +1783,10 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
   const signedIn = await checkSignedIn();
   if (!signedIn) return;
   const result = await api('POST', '/account/team/join', { token });
-  showTab('account');
+  openSettingsModal();
+  activateSettingsSection('team');
   await loadTeam();
+  document.getElementById('team-status').scrollIntoView({ block: 'start' });
   showTeamResult(result.error ? 'Could not join team: ' + result.error : `Joined ${result.name}.`, Boolean(result.error));
 })();
 
@@ -1804,7 +1896,7 @@ async function selectRepo(owner, name, installationId) {
     loadReview();
 
     const setupStatus = await api('POST', '/account/github/repos/setup-status', { owner, name });
-    if (!setupStatus.alreadySetUp && confirm(`Set up Quire's PR convention in ${owner}/${name}? This opens a pull request documenting the declared-direction marker in the repo's PR template and adding a CI check that enforces it.`)) {
+    if (!setupStatus.alreadySetUp && await confirmAction(`Set up Quire's PR convention in ${owner}/${name}? This opens a pull request documenting the declared-direction marker in the repo's PR template and adding a CI check that enforces it.`)) {
       const setup = await api('POST', '/account/github/repos/setup', { owner, name });
       if (setup.error) {
         showAccountResult('Setup PR failed: ' + setup.error, true);
