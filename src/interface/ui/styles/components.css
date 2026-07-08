@@ -184,6 +184,17 @@ body {
 	width: 100%;
 }
 
+/* Distinguishes an irreversible confirm (clear all data, disconnect everything) from a
+   routine one — same .card shape, just a reject-toned border/title instead of a new modal. */
+.modal-backdrop .card.modal-danger {
+	border-color: var(--color-reject);
+	box-shadow: 0 0 0 1px var(--color-reject), var(--shadow-sm);
+}
+
+.modal-danger .modal-title {
+	color: var(--color-reject);
+}
+
 .modal-title {
 	font-family: var(--font-display);
 	font-size: var(--text-md);
