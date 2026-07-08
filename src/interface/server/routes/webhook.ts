@@ -109,6 +109,48 @@ function parseCheckSuiteEvent(body: unknown): CheckSuiteEvent | undefined {
 	return { action, repoOwner: ownerLogin, repoName, installationId, conclusion, pullRequestIds };
 }
 
+interface PullRequestReviewEvent {
+	action: string;
+	repoOwner: string;
+	repoName: string;
+	installationId: number | undefined;
+	pullRequestId: string;
+	reviewState: string | undefined;
+}
+
+function parsePullRequestReviewEvent(body: unknown): PullRequestReviewEvent | undefined {
+	if (typeof body !== "object" || body === null) return undefined;
+	const record = body as Record<string, unknown>;
+
+	const action = record["action"];
+	const repository = record["repository"];
+	const pullRequest = record["pull_request"];
+	const review = record["review"];
+	if (typeof action !== "string" || typeof repository !== "object" || repository === null) return undefined;
+	if (typeof pullRequest !== "object" || pullRequest === null) return undefined;
+	if (typeof review !== "object" || review === null) return undefined;
+
+	const repoRecord = repository as Record<string, unknown>;
+	const owner = repoRecord["owner"];
+	const repoName = repoRecord["name"];
+	if (typeof owner !== "object" || owner === null || typeof repoName !== "string") return undefined;
+	const ownerLogin = (owner as Record<string, unknown>)["login"];
+	if (typeof ownerLogin !== "string") return undefined;
+
+	const prId = (pullRequest as Record<string, unknown>)["id"];
+	if (typeof prId !== "number") return undefined;
+
+	const installation = record["installation"];
+	const installationIdRaw =
+		typeof installation === "object" && installation !== null ? (installation as Record<string, unknown>)["id"] : undefined;
+	const installationId = typeof installationIdRaw === "number" ? installationIdRaw : undefined;
+
+	const reviewRecord = review as Record<string, unknown>;
+	const reviewState = typeof reviewRecord["state"] === "string" ? (reviewRecord["state"] as string) : undefined;
+
+	return { action, repoOwner: ownerLogin, repoName, installationId, pullRequestId: String(prId), reviewState };
+}
+
 // Shared by every path that clears a queue entry back to "queued" from a GitHub-side signal
 // (a fresh commit, checks going green, or a direct external merge) — auto-merge only fires
 // once every member's own repo has opted in (see bundleAutoMergeEnabled), same gate as
@@ -139,7 +181,7 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 			res.status(200).json({ pong: true });
 			return;
 		}
-		if (event !== "pull_request" && event !== "check_suite") {
+		if (event !== "pull_request" && event !== "check_suite" && event !== "pull_request_review") {
 			console.log(`Webhook: ignoring ${event ?? "unknown"} event (delivery ${deliveryId})`);
 			res.status(200).json({ ignored: true });
 			return;
@@ -191,6 +233,46 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 				}
 			})().catch((err: unknown) => {
 				console.error(`Webhook-triggered check_suite reattempt failed for ${parsedSuite.repoOwner}/${parsedSuite.repoName}:`, err);
+			});
+			return;
+		}
+
+		if (event === "pull_request_review") {
+			const parsedReview = parsePullRequestReviewEvent(payload);
+			if (parsedReview === undefined) {
+				console.warn(`Webhook: could not parse pull_request_review payload (delivery ${deliveryId})`);
+				res.status(200).json({ ignored: true });
+				return;
+			}
+			const reviewTenant = parsedReview.installationId !== undefined ? findTenant(parsedReview.installationId) : undefined;
+			const reviewRefreshDeps = reviewTenant?.refreshDeps;
+			if (reviewRefreshDeps === undefined) {
+				res.status(200).json({ ignored: true });
+				return;
+			}
+			const reviewWatchedRepo = reviewRefreshDeps.accountState.current.repos.find(
+				(r) => r.owner === parsedReview.repoOwner && r.name === parsedReview.repoName,
+			);
+			// Only a submitted approval is worth re-checking — a comment, change request, or a
+			// dismissal can only ever make branch protection stricter, never clear a "blocked"
+			// entry, and any queued (not yet "conflict") entry it affects gets re-diagnosed the
+			// normal way on its next dequeueNext() pass anyway.
+			if (reviewWatchedRepo === undefined || parsedReview.action !== "submitted" || parsedReview.reviewState !== "approved") {
+				res.status(200).json({ ignored: true });
+				return;
+			}
+
+			res.status(202).json({ accepted: true });
+			(async () => {
+				// Same reattemptForPr as a synchronize push or a green check_suite: only picks up
+				// a bundle actually blocked "conflict" on this exact PR (e.g. kind "blocked" from
+				// a missing required review) — an unrelated PR being approved is a no-op.
+				const reattempted = await reviewRefreshDeps.queue.reattemptForPr(parsedReview.pullRequestId);
+				if (reattempted !== undefined) {
+					await triggerAutoMergeIfEnabled(reattempted, reviewRefreshDeps);
+				}
+			})().catch((err: unknown) => {
+				console.error(`Webhook-triggered pull_request_review reattempt failed for ${parsedReview.repoOwner}/${parsedReview.repoName}:`, err);
 			});
 			return;
 		}

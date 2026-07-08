@@ -404,6 +404,94 @@ describe("webhookRouter", () => {
 		expect(await queue.listEntries()).toHaveLength(0);
 	});
 
+	function pullRequestReviewEventPayload(
+		owner: string,
+		repo: string,
+		action: string,
+		reviewState: string | null,
+		prId = 123,
+		installationId = BINDING.installationId,
+	): unknown {
+		return {
+			action,
+			review: { state: reviewState },
+			pull_request: { id: prId },
+			repository: { owner: { login: owner }, name: repo },
+			installation: { id: installationId },
+		};
+	}
+
+	it("ignores a pull_request_review that isn't a submitted approval", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+		const pr = makeQueuedPr("123");
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundleFor(pr));
+		await queue.dequeueNext();
+
+		const { status, body } = await post(pullRequestReviewEventPayload("octocat", "hello-world", "submitted", "changes_requested"), "pull_request_review");
+
+		expect(status).toBe(200);
+		expect(body).toEqual({ ignored: true });
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("conflict");
+	});
+
+	it("clears a matching \"conflict\" queue entry when a review is approved, without merging when autoMergeOnAccept is off", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+		const pr = makeQueuedPr("123");
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundleFor(pr));
+		const blocked = await queue.dequeueNext();
+		expect(blocked?.status).toBe("conflict");
+		expect(blocked?.conflict?.kind).toBe("blocked");
+
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		const { status } = await post(pullRequestReviewEventPayload("octocat", "hello-world", "submitted", "approved"), "pull_request_review");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("queued");
+		expect(client.mergedPrs).toEqual([]);
+	});
+
+	it("also lands the bundle when a review is approved and autoMergeOnAccept is on", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { refreshDeps, queue } = await setup(client);
+		refreshDeps.accountState.current = {
+			...refreshDeps.accountState.current,
+			repos: refreshDeps.accountState.current.repos.map((r) => ({ ...r, autoMergeOnAccept: true })),
+		};
+		const pr = makeQueuedPr("123");
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundleFor(pr));
+		const blocked = await queue.dequeueNext();
+		expect(blocked?.status).toBe("conflict");
+
+		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		const { status } = await post(pullRequestReviewEventPayload("octocat", "hello-world", "submitted", "approved"), "pull_request_review");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("landed");
+		expect(client.mergedPrs).toEqual([`${pr.repoOwner}/${pr.repoName}/${pr.number}`]);
+	});
+
+	it("is a no-op when an approved review's PR has no matching conflict entry", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+
+		const { status } = await post(pullRequestReviewEventPayload("octocat", "hello-world", "submitted", "approved"), "pull_request_review");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(await queue.listEntries()).toHaveLength(0);
+	});
+
 	function pullRequestClosedPayload(owner: string, repo: string, merged: boolean, prId = 123, installationId = BINDING.installationId): unknown {
 		return {
 			action: "closed",
