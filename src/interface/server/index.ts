@@ -138,6 +138,7 @@ async function main(): Promise<void> {
 		canUserAccessRepo,
 		oauth: oauthDeps,
 		teamStore,
+		webhooksEnabled: webhookConfig !== undefined,
 	};
 
 	// Every team gets its own isolated GitHub App installation, repo selection, PR queue,
@@ -169,7 +170,10 @@ async function main(): Promise<void> {
 		);
 		console.log("GitHub webhook receiver: enabled at /webhooks/github");
 	} else {
-		console.log("GitHub webhook receiver: disabled (QUIRE_PUBLIC_URL/GITHUB_APP_WEBHOOK_SECRET not set)");
+		console.warn(
+			"GitHub webhook receiver disabled (set QUIRE_PUBLIC_URL and GITHUB_APP_WEBHOOK_SECRET to enable) — " +
+				"PR updates rely on the 60s background refresh and 20-min reconcile poll instead of instant delivery.",
+		);
 	}
 
 	app.use(express.json());

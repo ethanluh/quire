@@ -13,7 +13,7 @@ import { checkDeclaredDirectionConvention, setUpDeclaredDirectionConvention } fr
 import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
 import { refreshUserTokenFromDisk, userTokenPath } from "../../../engine/github/userToken.js";
 import { settleWithConcurrency } from "../../../engine/util/concurrency.js";
-import { clearRepoFromQueue, enqueueRefresh } from "../refreshRepoQueue.js";
+import { clearRepoFromQueue, enqueueRefresh, InstallationRevokedError, AccountChangedError } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { validateBody } from "../middleware/validation.js";
 import { requireRole } from "../middleware/requireRole.js";
@@ -87,6 +87,9 @@ export interface GithubAppRouterOptions {
 	buildOctokit: BuildOctokit;
 	listTeamMemberLogins: (teamId: string) => Promise<ReadonlyArray<string>>;
 	teamId: string;
+	// Whether the server actually mounted the webhook receiver — surfaced on /repos/select's
+	// response so the client's (already-shipped) webhookDisabledReason message can fire.
+	webhooksEnabled: boolean;
 }
 
 export function githubAppRouter(options: GithubAppRouterOptions): Router {
@@ -107,6 +110,7 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 		buildOctokit,
 		listTeamMemberLogins,
 		teamId,
+		webhooksEnabled,
 	} = options;
 	const router = Router();
 	const { accountState, accountPath, clientHolder } = refreshDeps;
@@ -456,7 +460,7 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 			}
 
 			await saveInstallation(accountPath, updated);
-			res.json({ added: newRepo, ...summary });
+			res.json({ added: newRepo, ...summary, ...(webhooksEnabled ? {} : { webhookDisabledReason: "not configured" }) });
 		} catch (err) {
 			next(err);
 		}
@@ -543,6 +547,18 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 				return;
 			}
 			const results = await Promise.allSettled(repos.map((repo) => enqueueRefresh(repo.owner, repo.name, refreshDeps)));
+			for (const [i, result] of results.entries()) {
+				if (result.status !== "rejected") continue;
+				const repo = repos[i];
+				const err: unknown = result.reason;
+				if (err instanceof InstallationRevokedError) {
+					console.warn(`Repo refresh paused for team ${teamId} (${repo?.owner}/${repo?.name}): ${err.message}`);
+				} else if (err instanceof AccountChangedError) {
+					console.warn(`Repo refresh for team ${teamId} (${repo?.owner}/${repo?.name}) aborted: ${err.message}`);
+				} else {
+					console.error(`Repo refresh failed for team ${teamId} (${repo?.owner}/${repo?.name}):`, err);
+				}
+			}
 			res.json({
 				refreshed: true,
 				repos: repos.map((repo, i) => ({ owner: repo.owner, name: repo.name, ok: results[i]?.status === "fulfilled" })),

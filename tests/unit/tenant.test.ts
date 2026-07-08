@@ -70,6 +70,7 @@ describe("TenantRegistry", () => {
 				throw new OAuthExchangeError("no stored token expected in most tests");
 			}),
 			teamStore: new TeamStore(dir),
+			webhooksEnabled: true,
 			...overrides,
 		};
 		return new TenantRegistry(shared);

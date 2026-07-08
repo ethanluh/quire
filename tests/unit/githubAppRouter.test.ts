@@ -267,6 +267,7 @@ describe("githubAppRouter", () => {
 				buildOctokit,
 				listTeamMemberLogins,
 				teamId,
+				webhooksEnabled: true,
 			}),
 		);
 		app.use(errorHandler);
