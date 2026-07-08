@@ -1,6 +1,6 @@
 import type { Bundle, ReviewCard } from "./core.js";
 
-export type MergeQueueEntryStatus = "queued" | "landing" | "landed" | "reverted" | "conflict" | "aborted" | "investigating";
+export type MergeQueueEntryStatus = "queued" | "landing" | "landed" | "closed" | "reverted" | "conflict" | "aborted" | "investigating";
 
 // Why a PR couldn't merge, distinct from the coarse "conflict" queue status: mergeConflict is
 // a real text conflict Quire's own resolver couldn't clear; blocked/unstable/timedOut are
@@ -64,6 +64,12 @@ export interface MergeQueueEntry {
 	// (a bundle enqueued early but stuck behind a conflict can land well after ones queued
 	// after it). Absent on entries persisted before this field existed.
 	landedAt?: string;
+	// Set when status is "closed": timestamp the bundle was recorded as not going to land —
+	// either a member PR was closed on GitHub without merging (recordExternalClose) or a human
+	// rejected the bundle via the review-queue gesture (enqueueClosed). Plays the same role
+	// landedAt does for "landed": listEntries() sorts closed entries into the same trailing
+	// history bucket by whichever of the two timestamps applies.
+	closedAt?: string;
 	// Set when a deep-investigation session has been started for one or more escalated files
 	// (status "investigating" while any are still "running", back to "conflict" — carrying
 	// these for the review UI — once every investigation has a terminal outcome).

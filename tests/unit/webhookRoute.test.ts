@@ -516,6 +516,23 @@ describe("webhookRouter", () => {
 		expect(client.mergedPrs).toEqual([]); // GitHub already merged it; Quire must not merge again
 	});
 
+	it("closes a queued bundle whose only PR was closed on GitHub without merging", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		const { queue } = await setup(client);
+		const pr = makeQueuedPr("123");
+		await queue.enqueue(makeBundleFor(pr));
+
+		const { status } = await post(pullRequestClosedPayload("octocat", "hello-world", false, 123), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		const entry = await queue.getEntry(makeBundleFor(pr).id);
+		expect(entry?.status).toBe("closed");
+		expect(entry?.closedAt).toEqual(expect.any(String));
+		expect(client.mergedPrs).toEqual([]);
+	});
+
 	it("clears a matching \"conflict\" queue entry to \"queued\" on a manual merge, without draining the rest when autoMergeOnAccept is off", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
 		const client = new StubGitHubClient();
@@ -578,20 +595,6 @@ describe("webhookRouter", () => {
 		expect(client.mergedPrs.sort()).toEqual(
 			[`${pr1.repoOwner}/${pr1.repoName}/${pr1.number}`, `${pr3.repoOwner}/${pr3.repoName}/${pr3.number}`].sort(),
 		);
-	});
-
-	it("does not touch the queue on a closed event that isn't a merge", async () => {
-		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
-		const client = new StubGitHubClient();
-		const { queue } = await setup(client);
-		const pr = makeQueuedPr("123");
-		await queue.enqueue(makeBundleFor(pr));
-
-		const { status } = await post(pullRequestClosedPayload("octocat", "hello-world", false, 123), "pull_request");
-
-		expect(status).toBe(202);
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("queued");
 	});
 
 	it("is a no-op on the queue when a manually-merged PR has no matching queue entry", async () => {

@@ -341,7 +341,7 @@
 
   <div id="pane-queue" class="pane">
     <button class="btn btn-accept" style="margin-bottom:var(--space-4)" id="btn-process">Process next</button>
-    <div class="list" id="queue-list" style="flex:1"><div class="empty">Merge queue is empty.</div></div>
+    <div class="list" id="queue-list" style="flex:1"><div class="empty">Bundle status is empty.</div></div>
   </div>
 
   </main>
@@ -353,7 +353,7 @@
 <nav class="tabbar">
   <div class="tab active" data-tab="review"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg><span class="tab-badge" id="tab-badge-review" style="display:none">0</span></span>Review</div>
   <div class="tab" data-tab="shelf"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg></span>Shelf</div>
-  <div class="tab" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Queue</div>
+  <div class="tab" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Status</div>
   <div class="tab" data-tab="audit"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Audit</div>
 </nav>
 
@@ -380,7 +380,7 @@
 
     <div class="settings-section account-panel">
       <h4>Team</h4>
-      <p>Teammates on the same team share this GitHub connection, repo, LLM key, and merge queue.</p>
+      <p>Teammates on the same team share this GitHub connection, repo, LLM key, and bundle status.</p>
       <div class="account-status" id="team-status">Checking team&hellip;</div>
       <div id="team-members-list"></div>
       <select id="team-switcher"></select>
@@ -943,7 +943,7 @@ async function loadQueue() {
   if (json === lastRenderedJson.queue) return;
   lastRenderedJson.queue = json;
   const el = document.getElementById('queue-list');
-  if (!entries.length) { el.innerHTML = '<div class="empty">Merge queue is empty.</div>'; return; }
+  if (!entries.length) { el.innerHTML = '<div class="empty">Bundle status is empty.</div>'; return; }
   el.innerHTML = entries.map(e => {
     const actionButtons = [
       e.status === 'queued' && isOwner() ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : '',
@@ -965,7 +965,7 @@ async function loadQueue() {
 }
 
 async function removeFromQueue(bundleId) {
-  if (!(await confirmAction('Remove this bundle from the merge queue?'))) return;
+  if (!(await confirmAction('Remove this bundle from bundle status tracking?'))) return;
   await api('DELETE', `/queue/${bundleId}`);
   loadQueue();
 }
@@ -982,7 +982,7 @@ document.getElementById('btn-process').addEventListener('click', async (e) => {
 const clearAllBtn = document.getElementById('btn-clear-all');
 clearAllBtn.style.display = 'inline-block';
 clearAllBtn.addEventListener('click', async () => {
-  if (!(await confirmAction('Clear all stored content (bundles, shelf, merge queue, audit log)? This cannot be undone.', { danger: true }))) return;
+  if (!(await confirmAction('Clear all stored content (bundles, shelf, bundle status, audit log)? This cannot be undone.', { danger: true }))) return;
   const result = await api('POST', '/admin/reset', undefined);
   if (result.error) {
     showError('Could not clear data: ' + result.error);

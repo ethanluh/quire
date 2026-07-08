@@ -76,6 +76,28 @@
 
   .tabs { padding: var(--space-3) var(--space-6) 0; background: var(--color-surface-page); }
 
+  .queue-age-filter {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-6);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+  .queue-age-filter label { display: flex; align-items: center; gap: var(--space-2); }
+  .queue-age-filter input {
+    width: 4.5em;
+    background: var(--color-surface-overlay);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    padding: var(--space-1) var(--space-2);
+  }
+  .queue-age-filter input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
   .pane { display: none; padding: var(--space-6); }
   .pane.active { display: block; }
 
@@ -331,7 +353,7 @@
 <div class="tabs">
   <div class="tab active" data-tab="review">Review queue</div>
   <div class="tab" data-tab="shelf">Shelf</div>
-  <div class="tab" data-tab="queue">Merge queue</div>
+  <div class="tab" data-tab="queue">Bundle status</div>
   <div class="tab" data-tab="audit">Audit</div>
 </div>
 
@@ -353,10 +375,15 @@
 
 <div id="pane-queue" class="pane">
   <div class="tabs queue-filter-bar" id="queue-filter-bar" style="display:none"></div>
+  <div class="queue-age-filter" id="queue-age-filter" style="display:none">
+    <label>Landed at least <input type="number" min="0" id="queue-age-min" placeholder="0"> day(s) ago</label>
+    <label>at most <input type="number" min="0" id="queue-age-max" placeholder="&infin;"> day(s) ago</label>
+    <button class="btn btn-defer" id="btn-queue-age-clear">Clear</button>
+  </div>
   <button class="btn btn-accept" style="margin-bottom:var(--space-4)" id="btn-process">Process next</button>
   <button class="btn btn-accept" style="margin-bottom:var(--space-4)" id="btn-process-all">Process all</button>
   <div class="queue-list" id="queue-list">
-    <div class="empty">Merge queue is empty.</div>
+    <div class="empty">Bundle status is empty.</div>
   </div>
 </div>
 
@@ -396,7 +423,7 @@
         </div>
 
         <div class="settings-panel account-panel" data-section="team">
-          <p>Teammates on the same team share this GitHub connection, repo, LLM key, and merge queue.</p>
+          <p>Teammates on the same team share this GitHub connection, repo, LLM key, and bundle status.</p>
           <div class="account-status" id="team-status">Checking team&hellip;</div>
           <div id="team-members-list"></div>
 
@@ -848,7 +875,7 @@ function entryRepoLabel(entry) {
   return `${entry.bundle.members[0].repoOwner}/${entry.bundle.members[0].repoName}`;
 }
 
-// Inline repo filter for the merge queue, mirroring the review queue's (see
+// Inline repo filter for the bundle status view, mirroring the review queue's (see
 // REPO_FILTER_KEY/reviewRepoFilter above): single-select, hidden below two distinct repos,
 // persisted, re-validated against whatever's actually queued on every fetch.
 const QUEUE_REPO_FILTER_KEY = 'quire-queue-repo-filter';
@@ -892,6 +919,64 @@ function renderQueueFilterBar(entries) {
   bar.innerHTML = allTab + repoTabs;
 }
 
+// Range filter over how long ago a "landed" entry landed (landedAt), min/max days both
+// optional. Every other status (queued/landing/conflict/aborted/investigating/closed) always
+// shows regardless of this filter — it's meant to trim the ever-growing landed history, not to
+// hide anything still actionable or a "closed" bundle's own (unrelated) record.
+const QUEUE_AGE_FILTER_KEY = 'quire-queue-age-filter';
+let queueAgeFilter = (() => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(QUEUE_AGE_FILTER_KEY));
+    return stored && typeof stored === 'object' ? stored : {};
+  } catch {
+    return {};
+  }
+})();
+
+function daysSince(isoString) {
+  if (!isoString) return undefined;
+  return (Date.now() - new Date(isoString).getTime()) / (1000 * 60 * 60 * 24);
+}
+
+function passesAgeFilter(e) {
+  if (e.status !== 'landed') return true;
+  const age = daysSince(e.landedAt);
+  if (age === undefined) return true;
+  if (queueAgeFilter.minDays !== undefined && age < queueAgeFilter.minDays) return false;
+  if (queueAgeFilter.maxDays !== undefined && age > queueAgeFilter.maxDays) return false;
+  return true;
+}
+
+function setQueueAgeFilter(next) {
+  queueAgeFilter = next;
+  if (queueAgeFilter.minDays === undefined && queueAgeFilter.maxDays === undefined) {
+    localStorage.removeItem(QUEUE_AGE_FILTER_KEY);
+  } else {
+    localStorage.setItem(QUEUE_AGE_FILTER_KEY, JSON.stringify(queueAgeFilter));
+  }
+  renderQueueEntryList();
+}
+
+function renderQueueAgeFilter(entries) {
+  const row = document.getElementById('queue-age-filter');
+  row.style.display = entries.some((e) => e.status === 'landed') ? 'flex' : 'none';
+  document.getElementById('queue-age-min').value = queueAgeFilter.minDays ?? '';
+  document.getElementById('queue-age-max').value = queueAgeFilter.maxDays ?? '';
+}
+
+function readQueueAgeInputs() {
+  const minRaw = document.getElementById('queue-age-min').value;
+  const maxRaw = document.getElementById('queue-age-max').value;
+  setQueueAgeFilter({
+    ...(minRaw !== '' ? { minDays: Number(minRaw) } : {}),
+    ...(maxRaw !== '' ? { maxDays: Number(maxRaw) } : {}),
+  });
+}
+
+document.getElementById('queue-age-min').addEventListener('input', readQueueAgeInputs);
+document.getElementById('queue-age-max').addEventListener('input', readQueueAgeInputs);
+document.getElementById('btn-queue-age-clear').addEventListener('click', () => setQueueAgeFilter({}));
+
 function queueEntryHtml(e) {
   const actionButtons = [
     e.status === 'queued' && isOwner() ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : '',
@@ -913,21 +998,25 @@ function queueEntryHtml(e) {
 
 function renderQueueEntryList() {
   const el = document.getElementById('queue-list');
-  const entries = queueRepoFilter ? latestQueueEntries.filter((e) => entryRepoLabel(e) === queueRepoFilter) : latestQueueEntries;
-  const emptyMessage = queueRepoFilter ? 'No queue entries match the repo filter.' : 'Merge queue is empty.';
+  const entries = latestQueueEntries
+    .filter((e) => !queueRepoFilter || entryRepoLabel(e) === queueRepoFilter)
+    .filter(passesAgeFilter);
+  const filtered = queueRepoFilter || queueAgeFilter.minDays !== undefined || queueAgeFilter.maxDays !== undefined;
+  const emptyMessage = filtered ? 'No queue entries match the current filters.' : 'Bundle status is empty.';
   el.innerHTML = entries.length ? entries.map(queueEntryHtml).join('') : `<div class="empty">${emptyMessage}</div>`;
 }
 
 async function loadQueue() {
   const entries = await api('GET', '/queue');
   queueEntries = entries;
-  // Keyed on the filter too, same reasoning as loadReview: a filter change alone must
+  // Keyed on the filters too, same reasoning as loadReview: a filter change alone must
   // still force a re-render, while an unchanged filter on an unchanged fetch still no-ops.
-  const json = JSON.stringify({ entries, filter: queueRepoFilter });
+  const json = JSON.stringify({ entries, filter: queueRepoFilter, ageFilter: queueAgeFilter });
   if (json === lastRenderedJson.queue) return;
   lastRenderedJson.queue = json;
   latestQueueEntries = entries;
   renderQueueFilterBar(entries);
+  renderQueueAgeFilter(entries);
   renderQueueEntryList();
 }
 
@@ -952,7 +1041,7 @@ async function loadAudit() {
 }
 
 async function removeFromQueue(bundleId) {
-  if (!(await confirmAction('Remove this bundle from the merge queue?'))) return;
+  if (!(await confirmAction('Remove this bundle from bundle status tracking?'))) return;
   await api('DELETE', `/queue/${bundleId}`);
   loadQueue();
   loadReview();
@@ -1029,7 +1118,7 @@ document.getElementById('btn-process-all').addEventListener('click', async () =>
 const clearAllBtn = document.getElementById('btn-clear-all');
 clearAllBtn.style.display = 'inline-block';
 clearAllBtn.addEventListener('click', async () => {
-  if (!(await confirmAction('Clear all stored content (bundles, shelf, merge queue, audit log)? This cannot be undone.', { danger: true }))) return;
+  if (!(await confirmAction('Clear all stored content (bundles, shelf, bundle status, audit log)? This cannot be undone.', { danger: true }))) return;
   const result = await api('POST', '/admin/reset', undefined);
   if (result.error) {
     showError('Could not clear data: ' + result.error);

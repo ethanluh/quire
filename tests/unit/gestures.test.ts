@@ -349,6 +349,17 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(github.closedPrs).toEqual(["org/repo/1"]);
 	});
 
+	it("records a terminal 'closed' queue entry on reject instead of letting the bundle vanish", async () => {
+		state.bundles.set("b-2c", makeBundle("b-2c"));
+		state.cards.set("b-2c", makeCard("b-2c"));
+
+		await gesture("b-2c", "reject");
+
+		const entry = await queue.getEntry("b-2c");
+		expect(entry?.status).toBe("closed");
+		expect(entry?.closedAt).toEqual(expect.any(String));
+	});
+
 	it("removes the card from the review queue on defer", async () => {
 		state.bundles.set("b-3", makeBundle("b-3"));
 		state.cards.set("b-3", makeCard("b-3"));
@@ -361,10 +372,12 @@ describe("gesturesRouter — review queue removal", () => {
 		expect(decidedStore.isDecided("b-3-pr-1")).toBe(true);
 	});
 
-	// Regression: reject/defer don't touch MergeQueue at all (so its own onChanged hook can't
-	// cover them), and a plain accept used to only notify inside the now-conditional auto-merge
-	// branch — every gesture needs its own signal so other open tabs see the review-queue change
-	// without waiting on their own poll.
+	// Regression: defer doesn't touch MergeQueue at all (so its own onChanged hook can't cover
+	// it) — reject does now (enqueueClosed), but this route still deletes the bundle/card from
+	// review-queue state separately, a change MergeQueue's own hook has no visibility into, so
+	// this route's own explicit signal is still required. A plain accept used to only notify
+	// inside the now-conditional auto-merge branch — every gesture needs its own signal so
+	// other open tabs see the review-queue change without waiting on their own poll.
 	it.each<GestureAction>(["accept", "reject", "defer"])("notifies state-changed listeners on %s", async (action) => {
 		const bundleId = `b-notify-${action}`;
 		state.bundles.set(bundleId, makeBundle(bundleId));
