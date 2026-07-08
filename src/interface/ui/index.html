@@ -822,7 +822,7 @@ function conflictResidualHtml(conflict) {
 }
 
 // Maps the coarse queue-entry status onto the shared 4-tier badge vocabulary.
-const QUEUE_STATUS_TIER = { queued: 'neutral', landing: 'flagged', landed: 'clean', conflict: 'critical', aborted: 'critical', investigating: 'flagged' };
+const QUEUE_STATUS_TIER = { queued: 'neutral', landing: 'flagged', landed: 'clean', conflict: 'critical', aborted: 'critical', investigating: 'flagged', reverted: 'critical' };
 
 // The queue-entry-level pill means "queue stuck here, needs a human" — when the status is
 // "conflict" and a granular kind is known, both the label and the tier narrow to match the

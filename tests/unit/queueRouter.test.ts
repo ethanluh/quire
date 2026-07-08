@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import type { Server } from "node:http";
@@ -14,6 +14,7 @@ import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import { createServerState } from "../../src/interface/server/state.js";
 import { createAccountState } from "../../src/interface/server/accountState.js";
 import type { AccountState } from "../../src/interface/server/accountState.js";
+import { notifyStateChanged, onStateChanged } from "../../src/interface/server/changeEvents.js";
 import type { InstallationAccountState } from "../../src/engine/github/installation.js";
 import type { Bundle, ReviewCard } from "../../src/engine/types/core.js";
 import type { TeamRole } from "../../src/engine/types/team.js";
@@ -194,6 +195,46 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			expect(body.conflict?.reason).toContain("branch protection");
 
 			await new Promise<void>((resolve) => localServer.close(() => resolve()));
+		});
+
+		it("notifies state-changed listeners via MergeQueue's own onChanged hook, wired the same way tenant.ts wires it", async () => {
+			// Regression: this route used to call notifyStateChanged() itself after every mutating
+			// method; now MergeQueue notifies on its own persist() (see mergeQueue.ts's onChanged
+			// hook) and the route relies on that. Construct the queue with the hook wired exactly
+			// like tenant.ts does, so this test would catch that wiring breaking, not just the
+			// hook existing in isolation.
+			const localQueue = new MergeQueue(
+				join(dataDir, "queue-notify.json"),
+				new StubGitHubClient(),
+				new LlmProviderHolder(new StubLlmProvider()),
+				join(dataDir, "conflict.ndjson"),
+				undefined,
+				undefined,
+				undefined,
+				notifyStateChanged,
+			);
+			await localQueue.load();
+			await localQueue.enqueue(makeBundle("bundle-notify"));
+
+			const localApp = express();
+			localApp.use(express.json());
+			localApp.use(stubMembership("owner"));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
+			const localServer = await new Promise<Server>((resolve) => {
+				const s = localApp.listen(0, () => resolve(s));
+			});
+			const address = localServer.address();
+			if (address === null || typeof address === "string") throw new Error("expected AddressInfo");
+
+			const listener = jest.fn();
+			const unsubscribe = onStateChanged(listener);
+			try {
+				await fetch(`http://127.0.0.1:${address.port}/queue/process`, { method: "POST" });
+				expect(listener).toHaveBeenCalled();
+			} finally {
+				unsubscribe();
+				await new Promise<void>((resolve) => localServer.close(() => resolve()));
+			}
 		});
 	});
 

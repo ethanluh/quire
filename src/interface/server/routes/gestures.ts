@@ -129,6 +129,10 @@ export function gesturesRouter(
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action, decisionContext);
 					postCardToMembers(github, action, assignedBundle, card);
+					// enqueue() already notifies via MergeQueue's own onChanged hook (see mergeQueue.ts),
+					// but this route also removes the bundle/card from the review queue — a ServerState
+					// change the hook has no visibility into — so it still needs its own signal.
+					notifyStateChanged();
 				// autoMergeOnAccept is itself owner-gated (POST /account/github/repos/:owner/:name/settings
 				// requires requireRole("owner")) — turning it on IS the authorization decision for
 				// every accept that follows to drain the queue, deliberately, regardless of which
@@ -141,12 +145,10 @@ export function gesturesRouter(
 					if (bundleAutoMergeEnabled(accountState.current, assignedBundle)) {
 						// Don't block the response on the full merge (GitHub mergeability polling can
 						// take many seconds) — the bundle must appear in the merge queue immediately.
-						// The merge progresses in the background; notifyStateChanged() wakes any open
-						// SSE connection once it settles instead of making them wait for the next poll.
-						queue
-							.dequeueNext()
-							.catch((err: unknown) => console.error(`Background auto-merge failed for ${bundleId}:`, err))
-							.finally(() => notifyStateChanged());
+						// The merge progresses in the background; MergeQueue's own onChanged hook wakes
+						// any open SSE connection once it settles instead of making them wait for the
+						// next poll.
+						queue.dequeueNext().catch((err: unknown) => console.error(`Background auto-merge failed for ${bundleId}:`, err));
 					}
 					res.json({ status: "queued", bundleId });
 				} else if (action === "reject") {
@@ -160,6 +162,7 @@ export function gesturesRouter(
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action, decisionContext);
 					postCardToMembers(github, action, assignedBundle, card);
+					notifyStateChanged();
 					res.json({ status: "rejected", bundleId });
 				} else {
 					// defer
@@ -174,6 +177,7 @@ export function gesturesRouter(
 					await saveShelf(state.shelf, shelfPath);
 					await logDefer(deferLogPath, bundleId, card);
 					postCardToMembers(github, action, assignedBundle, card);
+					notifyStateChanged();
 					res.json({ status: "deferred", bundleId, shelfPosition: state.shelf.size });
 				}
 			} catch (err) {
