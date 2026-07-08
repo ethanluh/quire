@@ -387,6 +387,7 @@
       <input type="text" id="team-name-input" placeholder="Team name">
       <button class="btn btn-defer" id="btn-team-rename">Save name</button>
       <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
+      <input type="text" id="team-create-input" placeholder="New team name">
       <button class="btn btn-defer" id="btn-team-create">Create new team</button>
       <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
       <div id="team-result" class="result-msg" style="display:none"></div>
@@ -447,6 +448,17 @@
     <div id="detail-modal-body"><div class="empty">Loading&hellip;</div></div>
     <div class="modal-actions">
       <button class="btn btn-defer" id="btn-detail-modal-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="confirm-modal-backdrop" style="display:none">
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <h3 class="modal-title" id="confirm-modal-title">Confirm</h3>
+    <p id="confirm-modal-message"></p>
+    <div class="modal-actions">
+      <button class="btn btn-defer" id="btn-confirm-modal-cancel">Cancel</button>
+      <button class="btn btn-accept" id="btn-confirm-modal-confirm">Confirm</button>
     </div>
   </div>
 </div>
@@ -1006,6 +1018,47 @@ function showError(message) {
   showToast(message, 'error');
 }
 
+const confirmModalBackdrop = document.getElementById('confirm-modal-backdrop');
+const confirmModalCard = confirmModalBackdrop.querySelector('.card');
+const confirmModalTitle = document.getElementById('confirm-modal-title');
+const confirmModalMessage = document.getElementById('confirm-modal-message');
+const confirmModalConfirmBtn = document.getElementById('btn-confirm-modal-confirm');
+const confirmModalCancelBtn = document.getElementById('btn-confirm-modal-cancel');
+let confirmModalResolve = null;
+
+// Themed replacement for confirm() — returns a Promise<boolean> instead of blocking.
+// opts.danger renders the reject-toned .modal-danger variant for irreversible actions.
+function confirmAction(message, opts) {
+  opts = opts || {};
+  if (confirmModalResolve) return Promise.resolve(false); // one confirm at a time
+  confirmModalCard.classList.toggle('modal-danger', Boolean(opts.danger));
+  confirmModalTitle.textContent = opts.title || (opts.danger ? "This can't be undone" : 'Confirm');
+  confirmModalMessage.textContent = message;
+  confirmModalConfirmBtn.className = 'btn ' + (opts.danger ? 'btn-reject' : 'btn-accept');
+  confirmModalConfirmBtn.textContent = opts.confirmLabel || (opts.danger ? 'Yes, proceed' : 'Confirm');
+  confirmModalCancelBtn.textContent = opts.cancelLabel || 'Cancel';
+  confirmModalBackdrop.style.display = 'flex';
+  return new Promise((resolve) => { confirmModalResolve = resolve; });
+}
+
+function closeConfirmModal(result) {
+  confirmModalBackdrop.style.display = 'none';
+  if (confirmModalResolve) {
+    const resolve = confirmModalResolve;
+    confirmModalResolve = null;
+    resolve(result);
+  }
+}
+
+confirmModalConfirmBtn.addEventListener('click', () => closeConfirmModal(true));
+confirmModalCancelBtn.addEventListener('click', () => closeConfirmModal(false));
+confirmModalBackdrop.addEventListener('click', (event) => {
+  if (event.target === confirmModalBackdrop) closeConfirmModal(false);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && confirmModalBackdrop.style.display !== 'none') closeConfirmModal(false);
+});
+
 function commit(el, card, action, flyTransform, confirmed) {
   if (gestureInFlight) return; // already acted on this card via another input path
   gestureInFlight = true;
@@ -1039,10 +1092,10 @@ document.getElementById('btn-tap-details').addEventListener('click', () => {
   if (reviewCards.length) showBundleDetail(reviewCards[0].bundleId);
 });
 
-document.getElementById('btn-tap-accept').addEventListener('click', () => {
+document.getElementById('btn-tap-accept').addEventListener('click', async () => {
   if (!reviewCards.length || !topCardEl || gestureInFlight) return;
   const card = reviewCards[0];
-  if (!confirm('This bundle touches auth, shared infra, or spans multiple repos. Accept anyway?')) return;
+  if (!(await confirmAction('This bundle touches auth, shared infra, or spans multiple repos. Accept anyway?'))) return;
   commit(topCardEl, card, 'accept', 'translate(900px, 0px) rotate(20deg)', true);
 });
 
@@ -1098,7 +1151,7 @@ async function loadQueue() {
 }
 
 async function removeFromQueue(bundleId) {
-  if (!confirm('Remove this bundle from the merge queue?')) return;
+  if (!(await confirmAction('Remove this bundle from the merge queue?'))) return;
   await api('DELETE', `/queue/${bundleId}`);
   loadQueue();
 }
@@ -1107,7 +1160,7 @@ async function abortQueueEntry(bundleId, mergedCount, totalCount) {
   const message = mergedCount > 0
     ? `Abort this bundle? ${mergedCount} of ${totalCount} member PRs already merged and will stay merged — aborting only stops Quire from retrying the rest. Nothing is reverted.`
     : 'Abort this bundle? It will stop being retried and remain in the queue marked as aborted.';
-  if (!confirm(message)) return;
+  if (!(await confirmAction(message))) return;
   await api('POST', `/queue/${bundleId}/abort`, undefined);
   loadQueue();
 }
@@ -1120,7 +1173,7 @@ async function reattemptQueueEntry(bundleId) {
 document.getElementById('btn-process').addEventListener('click', async (e) => {
   const result = await withPending(e.currentTarget, 'Processing…', () => api('POST', '/queue/process'));
   if (result.error) {
-    alert('Could not process queue: ' + result.error);
+    showError('Could not process queue: ' + result.error);
     return;
   }
   loadQueue();
@@ -1129,10 +1182,10 @@ document.getElementById('btn-process').addEventListener('click', async (e) => {
 const clearAllBtn = document.getElementById('btn-clear-all');
 clearAllBtn.style.display = 'inline-block';
 clearAllBtn.addEventListener('click', async () => {
-  if (!confirm('Clear all stored content (bundles, shelf, merge queue, audit log)? This cannot be undone.')) return;
+  if (!(await confirmAction('Clear all stored content (bundles, shelf, merge queue, audit log)? This cannot be undone.', { danger: true }))) return;
   const result = await api('POST', '/admin/reset', undefined);
   if (result.error) {
-    alert('Could not clear data: ' + result.error);
+    showError('Could not clear data: ' + result.error);
     return;
   }
   loadReview();
@@ -1252,13 +1305,13 @@ function installationHtml(installation) {
 }
 
 async function disconnectInstallation(installationId) {
-  if (!confirm('Disconnect this GitHub App installation?')) return;
+  if (!(await confirmAction('Disconnect this GitHub App installation?'))) return;
   await api('POST', `/account/github/disconnect/${installationId}`, undefined);
   loadAccount();
 }
 
 accountDisconnectAllBtn.addEventListener('click', async () => {
-  if (!confirm('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.')) return;
+  if (!(await confirmAction('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.', { danger: true }))) return;
   await api('POST', '/account/github/disconnect-all', undefined);
   loadAccount();
 });
@@ -1308,7 +1361,7 @@ async function updateRepoSetting(row) {
 }
 
 async function removeRepo(owner, name) {
-  if (!confirm(`Stop watching ${owner}/${name}? Its review queue and merge queue entries will be cleared.`)) return;
+  if (!(await confirmAction(`Stop watching ${owner}/${name}? Its review queue and merge queue entries will be cleared.`, { danger: true }))) return;
   await api('DELETE', `/account/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, undefined);
   await loadAccount();
   loadReview();
@@ -1374,6 +1427,7 @@ async function loadHeaderRepo() {
 }
 
 installBtn.addEventListener('click', async () => {
+  if (!(await confirmAction("Install the Quire GitHub App? You'll choose which repos to grant access to on GitHub's side.", { confirmLabel: 'Continue to GitHub' }))) return;
   installBtn.disabled = true;
   const resultEl = document.getElementById('account-result');
   const result = await api('POST', '/account/github/install/start', undefined);
@@ -1447,7 +1501,7 @@ document.getElementById('btn-llm-connect').addEventListener('click', async (e) =
 });
 
 llmDisconnectBtn.addEventListener('click', async () => {
-  if (!confirm('Disconnect the connected LLM API key?')) return;
+  if (!(await confirmAction('Disconnect the connected LLM API key?'))) return;
   await api('POST', '/account/llm/disconnect', undefined);
   loadLlmAccount();
 });
@@ -1486,7 +1540,7 @@ async function setMemberRole(login, role) {
 }
 
 async function removeMember(login) {
-  if (!confirm(`Remove ${login} from this team?`)) return;
+  if (!(await confirmAction(`Remove ${login} from this team?`))) return;
   const result = await api('POST', `/account/team/members/${login}/remove`, undefined);
   if (result.error) {
     showTeamResult('Error: ' + result.error, true);
@@ -1554,7 +1608,7 @@ function renderHeaderTeam(activeName, teams) {
 document.getElementById('header-team-switcher').addEventListener('change', async (e) => {
   const result = await api('POST', '/account/team/switch', { teamId: e.target.value });
   if (result.error) {
-    alert('Error: ' + result.error);
+    showError('Error: ' + result.error);
     return;
   }
   await refreshAfterTeamChange();
@@ -1603,18 +1657,20 @@ document.getElementById('btn-team-invite').addEventListener('click', async () =>
 });
 
 document.getElementById('btn-team-create').addEventListener('click', async () => {
-  const name = prompt("Name your new team:");
+  const input = document.getElementById('team-create-input');
+  const name = input.value.trim();
   if (!name) return;
   const result = await api('POST', '/account/team/create', { name });
   if (result.error) {
     showTeamResult('Error: ' + result.error, true);
     return;
   }
+  input.value = '';
   await refreshAfterTeamChange();
 });
 
 document.getElementById('btn-team-leave').addEventListener('click', async () => {
-  if (!loadedTeamId || !confirm('Leave this team?')) return;
+  if (!loadedTeamId || !(await confirmAction('Leave this team?'))) return;
   const result = await api('POST', '/account/team/leave', { teamId: loadedTeamId });
   if (result.error) {
     showTeamResult('Error: ' + result.error, true);
@@ -1633,8 +1689,9 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
   const signedIn = await checkSignedIn();
   if (!signedIn) return;
   const result = await api('POST', '/account/team/join', { token });
-  document.querySelector('.tab[data-tab="account"]').click();
+  openSettingsModal();
   await loadTeam();
+  document.getElementById('team-status').scrollIntoView({ block: 'start' });
   showTeamResult(result.error ? 'Could not join team: ' + result.error : `Joined ${result.name}.`, Boolean(result.error));
 })();
 
