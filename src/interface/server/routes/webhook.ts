@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
+import { notifyStateChanged } from "../changeEvents.js";
 
 // The slice of a TenantContext (see tenant.ts) a webhook delivery needs once resolved by
 // installation id. Kept as a narrow structural type here rather than importing
@@ -72,11 +73,13 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 
 	router.post("/", (req, res) => {
 		const event = req.get("x-github-event");
+		const deliveryId = req.get("x-github-delivery") ?? "unknown";
 		if (event === "ping") {
 			res.status(200).json({ pong: true });
 			return;
 		}
 		if (event !== "pull_request") {
+			console.log(`Webhook: ignoring ${event ?? "unknown"} event (delivery ${deliveryId})`);
 			res.status(200).json({ ignored: true });
 			return;
 		}
@@ -90,13 +93,30 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 		}
 
 		const parsed = parsePullRequestEvent(payload);
-		const tenant = parsed?.installationId !== undefined ? findTenant(parsed.installationId) : undefined;
+		if (parsed === undefined) {
+			console.warn(`Webhook: could not parse pull_request payload (delivery ${deliveryId})`);
+			res.status(200).json({ ignored: true });
+			return;
+		}
+		const tenant = parsed.installationId !== undefined ? findTenant(parsed.installationId) : undefined;
 		const refreshDeps = tenant?.refreshDeps;
-		const watchedRepo =
-			parsed !== undefined
-				? refreshDeps?.accountState.current.repos.find((r) => r.owner === parsed.repoOwner && r.name === parsed.repoName)
-				: undefined;
-		if (parsed === undefined || refreshDeps === undefined || watchedRepo === undefined || !TRIGGER_ACTIONS.has(parsed.action)) {
+		if (refreshDeps === undefined) {
+			console.warn(
+				`Webhook: no tenant bound to installation ${parsed.installationId ?? "missing"} (${parsed.repoOwner}/${parsed.repoName}#${parsed.pullRequestId}, delivery ${deliveryId})`,
+			);
+			res.status(200).json({ ignored: true });
+			return;
+		}
+		const watchedRepo = refreshDeps.accountState.current.repos.find((r) => r.owner === parsed.repoOwner && r.name === parsed.repoName);
+		if (watchedRepo === undefined) {
+			console.warn(
+				`Webhook: ${parsed.repoOwner}/${parsed.repoName} is not a watched repo for installation ${parsed.installationId} (delivery ${deliveryId}) — ignoring ${parsed.action}`,
+			);
+			res.status(200).json({ ignored: true });
+			return;
+		}
+		if (!TRIGGER_ACTIONS.has(parsed.action)) {
+			// High-volume, expected traffic (labeled/review_requested/etc.) — not worth a log line.
 			res.status(200).json({ ignored: true });
 			return;
 		}
@@ -118,8 +138,11 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 				// only auto-merge if the account opted into it, otherwise just clear the
 				// conflict and leave landing to a "Process" click.
 				const reattempted = await refreshDeps.queue.reattemptForPr(parsed.pullRequestId);
-				if (reattempted !== undefined && watchedRepo.autoMergeOnAccept === true) {
-					await refreshDeps.queue.dequeueNext();
+				if (reattempted !== undefined) {
+					notifyStateChanged();
+					if (watchedRepo.autoMergeOnAccept === true) {
+						await refreshDeps.queue.dequeueNext();
+					}
 				}
 			}
 			if (parsed.action === "closed" && parsed.merged) {
@@ -128,8 +151,14 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 				// instead of waiting for the next Process click to notice via
 				// ensureMergeable()'s alreadyMerged check.
 				const updated = await refreshDeps.queue.recordExternalMerge(parsed.pullRequestId);
-				if (updated !== undefined && watchedRepo.autoMergeOnAccept === true) {
-					await refreshDeps.queue.dequeueNext();
+				if (updated !== undefined) {
+					// Push the corrected merge status to the browser right away — don't wait on
+					// the enqueueRefresh below, which fetches *new* PRs and can fail/be slow
+					// independently of whether this merge-status update itself succeeded.
+					notifyStateChanged();
+					if (watchedRepo.autoMergeOnAccept === true) {
+						await refreshDeps.queue.dequeueNext();
+					}
 				}
 			}
 			await enqueueRefresh(parsed.repoOwner, parsed.repoName, refreshDeps);

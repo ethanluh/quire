@@ -22,6 +22,9 @@ export function verifyGithubSignature(secret: string) {
 		const signature = req.get(SIGNATURE_HEADER);
 		const body = req.body;
 		if (signature === undefined || !Buffer.isBuffer(body) || !isValidSignature(secret, body, signature)) {
+			console.warn(
+				`Webhook signature verification failed (delivery ${req.get("x-github-delivery") ?? "unknown"}, event ${req.get("x-github-event") ?? "unknown"})`,
+			);
 			res.status(401).json({ error: "Invalid webhook signature" });
 			return;
 		}

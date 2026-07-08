@@ -92,6 +92,10 @@ export interface TenantSharedConfig {
 	// current roster and revoke GitHub collaborator access for every member on the repo
 	// being unbound, not just whoever happens to leave/rejoin afterward.
 	teamStore: TeamStore;
+	// Whether index.ts actually mounted the webhook receiver (QUIRE_PUBLIC_URL and
+	// GITHUB_APP_WEBHOOK_SECRET both set) — surfaced to the client via /repos/select's
+	// response so a team with webhooks off knows updates rely on polling instead.
+	webhooksEnabled: boolean;
 }
 
 // Everything that used to be a single process-wide singleton (accountState, the GitHub
@@ -268,6 +272,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 			buildOctokit: (installationId) => buildInstallationOctokit(shared.appConfig, installationId),
 			listTeamMemberLogins: async (forTeamId) => (await shared.teamStore.listMembers(forTeamId)).map((member) => member.login),
 			teamId,
+			webhooksEnabled: shared.webhooksEnabled,
 		}),
 	);
 	router.use(

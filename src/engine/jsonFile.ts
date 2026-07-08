@@ -12,13 +12,22 @@ import { createKeyedLock } from "./util/keyedLock.js";
 
 export async function readJsonFile<T>(path: string, isValid: (value: unknown) => value is T): Promise<T | undefined> {
 	if (!existsSync(path)) return undefined;
+	let raw: string;
 	try {
-		const raw = await readFile(path, "utf8");
-		const parsed: unknown = JSON.parse(raw);
-		if (isValid(parsed)) return parsed;
-	} catch {
-		// corrupted file — treat as absent
+		raw = await readFile(path, "utf8");
+	} catch (err) {
+		console.warn(`readJsonFile: failed to read ${path}, treating as absent:`, err);
+		return undefined;
 	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (err) {
+		console.warn(`readJsonFile: ${path} contains invalid JSON, treating as absent:`, err);
+		return undefined;
+	}
+	if (isValid(parsed)) return parsed;
+	console.warn(`readJsonFile: ${path} failed its schema guard, treating as absent`);
 	return undefined;
 }
 
