@@ -677,13 +677,26 @@ function prDriftBadges(prId, drift) {
   return badges.join('');
 }
 
+// Why a PR can't merge, mapped to a badge tier + label. `mergeStatus.conflict.kind` is
+// absent on entries persisted before this discriminant existed — fall back to the
+// mergeConflict entry so old data keeps reading as it always has.
+const CONFLICT_KIND_BADGE = {
+  mergeConflict: { cls: 'badge-critical', label: 'Conflict' },
+  blocked: { cls: 'badge-flagged', label: 'Blocked' },
+  unstable: { cls: 'badge-flagged', label: 'Checks failing' },
+  timedOut: { cls: 'badge-neutral', label: 'Pending GitHub' },
+  unresolvable: { cls: 'badge-flagged', label: "Can't merge" },
+};
+
 function prMergeStatusBadge(pr, mergeStatus) {
   if (!mergeStatus) return '';
-  let status = 'pending';
-  if (mergeStatus.revertedPrIds.includes(pr.id)) status = 'reverted';
-  else if (mergeStatus.mergedPrIds.includes(pr.id)) status = 'merged';
-  else if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) status = 'conflict';
-  return `<span class="badge pr-status-${status}">Merge: ${escapeHtml(status)}</span>`;
+  if (mergeStatus.revertedPrIds.includes(pr.id)) return '<span class="badge pr-status-reverted">Merge: reverted</span>';
+  if (mergeStatus.mergedPrIds.includes(pr.id)) return '<span class="badge pr-status-merged">Merge: merged</span>';
+  if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) {
+    const { cls, label } = CONFLICT_KIND_BADGE[mergeStatus.conflict.kind] || CONFLICT_KIND_BADGE.mergeConflict;
+    return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
+  }
+  return '<span class="badge pr-status-pending">Merge: pending</span>';
 }
 
 function prMemberListHtml(members, drift, mergeStatus) {
@@ -750,6 +763,30 @@ detailModalBody.addEventListener('click', async (event) => {
   });
 });
 
+// Headline/guidance per conflict kind for the detail-modal residual banner — the full
+// `reason` string is always shown too (INV-6), this only varies the framing around it.
+const CONFLICT_KIND_COPY = {
+  mergeConflict: { headline: 'Merge conflict detected', guidance: "Automated resolution did not apply — see the conflicting PR's GitHub link below for details, or retry." },
+  blocked: { headline: 'Blocked, not a merge conflict', guidance: 'Resolve the required review or branch-protection rule on GitHub, then retry.' },
+  unstable: { headline: 'Checks failing or pending, not a merge conflict', guidance: 'Wait for CI or fix the failing check, then retry.' },
+  timedOut: { headline: 'Mergeability still unknown', guidance: "GitHub hasn't finished computing this yet — this usually clears on its own; retry in a moment." },
+  unresolvable: { headline: "Can't merge", guidance: 'See the PR on GitHub for details, or retry.' },
+};
+
+function conflictResidualHtml(conflict) {
+  const { headline, guidance } = CONFLICT_KIND_COPY[conflict.kind] || CONFLICT_KIND_COPY.mergeConflict;
+  return `<div class="residual">${escapeHtml(headline)} ${escapeHtml(conflict.detectedAt)} — ${escapeHtml(conflict.reason)}. ${escapeHtml(guidance)}</div>`;
+}
+
+// The queue-entry-level pill means "queue stuck here, needs a human" (still status-conflict,
+// still the reject tier) — only the displayed text differentiates by cause when known.
+function queueStatusLabel(e) {
+  if (e.status === 'conflict' && e.conflict && e.conflict.kind) {
+    return (CONFLICT_KIND_BADGE[e.conflict.kind] || {}).label || e.status;
+  }
+  return e.status;
+}
+
 function detailBodyHtml(detail, opts) {
   opts = opts || {};
   return `
@@ -763,10 +800,10 @@ function detailBodyHtml(detail, opts) {
     ${detail.drift ? renderSignals(detail.drift, detail.members) : ''}
     ${detail.residualDisclosure ? `<div class="residual">${escapeHtml(detail.residualDisclosure)}</div>` : ''}
     ${opts.queueMeta ? `<div class="card-meta">
-      <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(opts.queueMeta.status)}</span>
+      <span class="status-badge status-${escapeHtml(opts.queueMeta.status)}">${escapeHtml(queueStatusLabel(opts.queueMeta))}</span>
       <span class="entry-id">enqueued ${escapeHtml(opts.queueMeta.enqueuedAt)}</span>
     </div>` : ''}
-    ${opts.mergeStatus && opts.mergeStatus.conflict ? `<div class="residual">Merge conflict detected ${escapeHtml(opts.mergeStatus.conflict.detectedAt)}. Automated resolution did not apply — see the conflicting PR's GitHub link below for details, or retry.</div>` : ''}
+    ${opts.mergeStatus && opts.mergeStatus.conflict ? conflictResidualHtml(opts.mergeStatus.conflict) : ''}
     ${investigationsHtml(opts.bundleId, opts.investigations)}
     <h4>Member PRs</h4>
     ${prMemberListHtml(detail.members || [], detail.drift, opts.mergeStatus)}
@@ -997,7 +1034,7 @@ function queueEntryHtml(e) {
       <div class="entry-id">${escapeHtml(entryRepoLabel(e))} &middot; ${escapeHtml(e.bundleId)}</div>
     </div>
     <div class="queue-entry-actions">
-      <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(e.status)}</span>
+      <span class="status-badge status-${escapeHtml(e.status)}">${escapeHtml(queueStatusLabel(e))}</span>
       <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
       ${actionButtons ? `<span class="btn-group">${actionButtons}</span>` : ''}
     </div>

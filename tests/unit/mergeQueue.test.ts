@@ -358,6 +358,7 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 
 		expect(blocked?.status).toBe("conflict");
 		expect(blocked?.conflict?.reason).toContain("could not confidently resolve 1 conflicting hunk");
+		expect(blocked?.conflict?.kind).toBe("mergeConflict");
 		expect(github.mergedPrs).toEqual([]);
 		expect(github.commitResolvedFilesCalls).toHaveLength(0);
 	});
@@ -412,6 +413,7 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 
 		expect(blocked?.status).toBe("conflict");
 		expect(blocked?.conflict?.reason).toContain("branch protection");
+		expect(blocked?.conflict?.kind).toBe("blocked");
 		expect(github.mergedPrs).toEqual([]);
 	});
 
@@ -425,6 +427,7 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 
 		expect(blocked?.status).toBe("conflict");
 		expect(blocked?.conflict?.reason).toContain("status checks");
+		expect(blocked?.conflict?.kind).toBe("unstable");
 	});
 
 	it("bails to conflict without attempting a write when the PR head lives in a fork", async () => {
@@ -437,7 +440,49 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 
 		expect(blocked?.status).toBe("conflict");
 		expect(blocked?.conflict?.reason).toContain("fork");
+		expect(blocked?.conflict?.kind).toBe("unresolvable");
 		expect(github.updateBranchCalls).toEqual([]);
+	});
+
+	it("bails to conflict when a branch update leaves the PR in an unexpected, non-dirty state", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "behind" }));
+		// Simulates updateBranch() succeeding but mergeable_state not settling to clean or
+		// dirty afterward — leave the stub's post-update auto-clean behavior off so the poll
+		// re-reads the same "behind" fixture, which is neither a mergeable state nor "dirty".
+		github.autoMarkMergeableAfterSuccess = false;
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		const blocked = await queue.dequeueNext();
+
+		expect(blocked?.status).toBe("conflict");
+		expect(blocked?.conflict?.reason).toContain("unexpected state: behind");
+		expect(blocked?.conflict?.kind).toBe("unresolvable");
+	});
+
+	it("bails to conflict when the base branch has moved again after a successful resolution", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		const base = "line1\nline2\nline3\nline4\nline5";
+		const ours = "line1-ours\nline2\nline3\nline4\nline5";
+		const theirs = "line1\nline2\nline3\nline4\nline5-theirs";
+		github.setBlobContent("base-sha", base);
+		github.setBlobContent("ours-sha", ours);
+		github.setBlobContent("theirs-sha", theirs);
+		github.setConflictTrees(pr.repoOwner, pr.repoName, pr.number, makeConflictTrees("src/auth.ts", "base-sha", "ours-sha", "theirs-sha"));
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "dirty" }));
+		// commitResolvedFiles() succeeds (diff3 resolves cleanly), but leave the stub's
+		// post-success auto-clean off so the re-poll still reports "dirty" — simulating the
+		// base branch moving again during resolution.
+		github.autoMarkMergeableAfterSuccess = false;
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		const blocked = await queue.dequeueNext();
+
+		expect(blocked?.status).toBe("conflict");
+		expect(blocked?.conflict?.reason).toContain("base branch likely moved again");
+		expect(blocked?.conflict?.kind).toBe("unresolvable");
 	});
 
 	it("lands a PR GitHub already reports as merged, without calling mergePullRequest again", async () => {
@@ -472,6 +517,7 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 
 		expect(blocked?.status).toBe("conflict");
 		expect(blocked?.conflict?.reason).toContain("did not finish computing");
+		expect(blocked?.conflict?.kind).toBe("timedOut");
 	});
 });
 
