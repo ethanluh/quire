@@ -136,6 +136,49 @@ describe("clusterPRs — embedding-capable providers (supportsEmbeddings: true) 
 		}
 	});
 
+	it("merges a chain of PRs into one cluster via transitivity, even when the endpoints alone don't clear the threshold", async () => {
+		// A~B and B~C both clear the threshold, but A~C alone does not — the same shape as
+		// six PRs pursuing distinct technical sub-approaches (texture baking, FBM octaves,
+		// raymarching step skipping, ...) toward one shared product direction: each is close
+		// to its neighbors' effect text but not to every other member's. A single-anchor/
+		// centroid comparison would only ever test new arrivals against the founding PR and
+		// would split this into two clusters; connected components over the full pairwise
+		// graph must merge all three into one.
+		const prA = makePR("pr-a");
+		const prB = makePR("pr-b");
+		const prC = makePR("pr-c");
+
+		const effectsByPr = new Map([
+			["pr-a", ["a"]],
+			["pr-b", ["b"]],
+			["pr-c", ["c"]],
+		]);
+
+		// Unit vectors 30° apart in sequence (a→b→c spans 60°): adjacent pairs have cosine
+		// similarity cos(30°) ≈ 0.866 (clears 0.75), while the endpoints a and c are 60°
+		// apart with cosine similarity cos(60°) = 0.5 (does not clear 0.75).
+		const vectors: Record<string, ReadonlyArray<number>> = {
+			a: [1, 0],
+			b: [0.866, 0.5],
+			c: [0.5, 0.866],
+		};
+		const provider = makeProvider({
+			supportsEmbeddings: true,
+			embed: async (text) => vectors[text] ?? [0, 0],
+		});
+
+		const { clusters, failures } = await clusterPRs(
+			[prA, prB, prC],
+			effectsByPr,
+			provider,
+			{ threshold: 0.75 },
+		);
+
+		expect(failures).toEqual([]);
+		expect(clusters).toHaveLength(1);
+		expect(clusters[0]?.map((pr) => pr.id).sort()).toEqual(["pr-a", "pr-b", "pr-c"]);
+	});
+
 	it("isolates a clustering failure to the affected PR (mirrors extractionFailures)", async () => {
 		const prA = makePR("pr-a");
 		const prB = makePR("pr-b"); // will fail comparing against pr-a's centroid
@@ -213,7 +256,7 @@ describe("clusterPRs — embedding-capable providers (supportsEmbeddings: true) 
 			effectsByPr,
 			provider,
 			{ threshold: 0.75 },
-			[{ centroidText: "adds OTP login", members: [prA] }],
+			[{ members: [prA] }],
 		);
 		const unseeded = await clusterPRs(
 			[prA, prB, prC],
@@ -228,7 +271,8 @@ describe("clusterPRs — embedding-capable providers (supportsEmbeddings: true) 
 		expect(seeded.failures).toEqual([]);
 	});
 
-	it("never re-embeds a seed's centroid text when every comparison for it is served from the embedding cache", async () => {
+	it("never re-embeds a seed member's text when it's already served from the embedding cache", async () => {
+		const prA = makePR("pr-a");
 		const prB = makePR("pr-b");
 		const calls: string[] = [];
 		const provider = makeProvider({
@@ -248,16 +292,19 @@ describe("clusterPRs — embedding-capable providers (supportsEmbeddings: true) 
 
 		await clusterPRs(
 			[prB],
-			new Map([["pr-b", ["adds OTP login"]]]),
+			new Map([
+				["pr-a", ["adds OTP login"]],
+				["pr-b", ["adds OTP login"]],
+			]),
 			provider,
 			{ threshold: 0.75 },
-			[{ centroidText: "adds OTP login", members: [] }],
+			[{ members: [prA] }],
 			cache,
 			"stub",
 		);
 
-		// pr-b's own text and the seed centroid text are identical here, so a cache hit on
-		// the centroid means embed() is never called for either side of the comparison.
+		// pr-a's (the seed member's) effect text and pr-b's are identical here, so a cache
+		// hit on that text means embed() is never called for either side of the comparison.
 		expect(calls).toEqual([]);
 	});
 });
