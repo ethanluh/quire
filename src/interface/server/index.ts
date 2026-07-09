@@ -29,10 +29,6 @@ import { webhookRouter } from "./routes/webhook.js";
 import { verifyGithubSignature } from "./middleware/webhookSignature.js";
 import { errorHandler } from "./middleware/errors.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
-import { loadConstitution } from "../../engine/judge/constitution.js";
-import type { JudgeConstitution, JudgeMode } from "../../engine/types/judge.js";
-import { sweepExpiredVerifications } from "../../engine/judge/actionPipeline.js";
-import { resolveSlackNotifier } from "../notify/slack.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Not derived from __dirname: the compiled dist/ output nests one level deeper than the
@@ -47,13 +43,6 @@ const RECONCILE_INTERVAL_MS =
 	parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "20", 10) * 60 * 1000;
 const QUEUE_REFRESH_INTERVAL_MS =
 	parseInt(process.env["QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES"] ?? "5", 10) * 60 * 1000;
-// How long the judge's VERIFY step waits for a post-merge check_suite before giving up and
-// escalating as inconclusive (never as a failure — see docs/judge-integration-map.md §7).
-const JUDGE_VERIFY_TIMEOUT_MS =
-	parseInt(process.env["QUIRE_JUDGE_VERIFY_TIMEOUT_MINUTES"] ?? "30", 10) * 60 * 1000;
-// Reuses the same cadence as the queue-branch refresh/investigation-poll timers below rather
-// than introducing a fourth interval knob.
-const JUDGE_VERIFICATION_SWEEP_INTERVAL_MS = QUEUE_REFRESH_INTERVAL_MS;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -65,20 +54,6 @@ const pipelineConfig: PipelineConfig = {
 	},
 	bundle: { similarityThreshold: 0.75 },
 };
-
-const JUDGE_MODES: ReadonlySet<string> = new Set(["off", "shadow", "assist", "auto"]);
-
-// Defaults to "shadow" — the mission's own constraint text ("everything new defaults to
-// shadow/off") and docs/judge-integration-map.md §7's resolution of that ambiguity: "off" is
-// a true kill switch distinct from "shadow" (which still runs and logs, just never acts). An
-// unrecognized value degrades to "shadow" with a warning rather than crashing startup over a
-// typo'd env var.
-function resolveJudgeMode(raw: string | undefined): JudgeMode {
-	if (raw === undefined || raw === "") return "shadow";
-	if (JUDGE_MODES.has(raw)) return raw as JudgeMode;
-	console.warn(`Unrecognized QUIRE_JUDGE_MODE "${raw}" — defaulting to "shadow" (expected one of: off, shadow, assist, auto)`);
-	return "shadow";
-}
 
 function requireEnv(name: string): string {
 	const value = process.env[name];
@@ -159,45 +134,6 @@ async function main(): Promise<void> {
 	const { description: defaultLlmDescription } = resolveLlmProvider(process.env);
 	console.log(`Default LLM provider (used by a tenant until they connect their own): ${defaultLlmDescription}`);
 
-	const judgeMode = resolveJudgeMode(process.env["QUIRE_JUDGE_MODE"]);
-	// A malformed/missing constitution disables the judge process-wide, logged loudly, but
-	// must never stop the server from starting — the judge is an add-on to the pipeline, not
-	// a prerequisite for it (constraint: existing behavior with the judge disabled/absent must
-	// be byte-for-byte unchanged). Loaded once here (a single repo-level doc, not per-team
-	// data), not per tenant — see tenant.ts's TenantSharedConfig.judgeConstitution.
-	const judgeConstitutionPath = join(process.cwd(), "docs/judge-constitution.md");
-	let judgeConstitution: JudgeConstitution | undefined;
-	if (judgeMode === "off") {
-		console.log("Bundle judge: QUIRE_JUDGE_MODE=off — disabled");
-	} else {
-		try {
-			judgeConstitution = await loadConstitution(judgeConstitutionPath);
-			console.log(`Bundle judge constitution loaded from ${judgeConstitutionPath} (mode: ${judgeMode})`);
-		} catch (err) {
-			console.error(`Bundle judge disabled: failed to load ${judgeConstitutionPath}:`, err);
-		}
-	}
-
-	// Both no-op cleanly when unset (see slack.ts's resolveSlackNotifier) — neither is a
-	// required secret for any existing flow, matching every other new integration here.
-	const slack = resolveSlackNotifier(process.env["QUIRE_SLACK_WEBHOOK_URL"]);
-	const rawHealthCheckUrl = process.env["QUIRE_JUDGE_HEALTHCHECK_URL"];
-	const judgeHealthCheckUrl = rawHealthCheckUrl !== undefined && rawHealthCheckUrl !== "" ? rawHealthCheckUrl : undefined;
-	// 0..1, default 0.1 (mission §I) — a gate-allowed "auto" verdict sampled at this rate is
-	// routed to a human instead of auto-acted on, purely to measure judge-vs-human agreement
-	// on a live sample rather than only on whatever a human happens to review after the fact.
-	const rawAuditSampleRate = process.env["QUIRE_JUDGE_AUDIT_SAMPLE_RATE"];
-	const parsedAuditSampleRate = rawAuditSampleRate !== undefined && rawAuditSampleRate !== "" ? Number(rawAuditSampleRate) : undefined;
-	const judgeAuditSampleRate = parsedAuditSampleRate !== undefined && Number.isFinite(parsedAuditSampleRate) ? parsedAuditSampleRate : 0.1;
-
-	if (judgeMode === "auto") {
-		console.log(
-			`Bundle judge auto mode: Slack ${process.env["QUIRE_SLACK_WEBHOOK_URL"] ? "configured" : "NOT configured (outcomes/escalations will only be logged to the console)"}` +
-				`, health check ${judgeHealthCheckUrl !== undefined ? `configured (${judgeHealthCheckUrl})` : "not configured (CI result alone will decide VERIFY)"}` +
-				`, audit sample rate ${judgeAuditSampleRate}.`,
-		);
-	}
-
 	// Keyed by login, not team: starred/pinned enrichment needs the signed-in user's own
 	// GitHub token, which has nothing to do with which team they're currently on — shared
 	// across every tenant's router the same way appConfig/appSlug are (see
@@ -231,12 +167,6 @@ async function main(): Promise<void> {
 		oauth: oauthDeps,
 		teamStore,
 		webhooksEnabled: webhookConfig !== undefined,
-		judgeConstitution,
-		judgeMode,
-		slack,
-		judgeHealthCheckUrl,
-		judgeVerifyTimeoutMs: JUDGE_VERIFY_TIMEOUT_MS,
-		judgeAuditSampleRate,
 	};
 
 	// Every team gets its own isolated GitHub App installation, repo selection, PR queue,
@@ -263,11 +193,7 @@ async function main(): Promise<void> {
 			verifyGithubSignature(webhookConfig.secret),
 			webhookRouter((installationId) => {
 				const tenant = registry.findByInstallationId(installationId);
-				if (tenant === undefined) return undefined;
-				return {
-					refreshDeps: tenant.refreshDeps,
-					...(tenant.judgeActionDeps !== undefined ? { judgeActionDeps: tenant.judgeActionDeps } : {}),
-				};
+				return tenant !== undefined ? { refreshDeps: tenant.refreshDeps } : undefined;
 			}),
 		);
 		console.log("GitHub webhook receiver: enabled at /webhooks/github");
@@ -386,21 +312,6 @@ async function main(): Promise<void> {
 		}
 	}, QUEUE_REFRESH_INTERVAL_MS);
 	investigationPollTimer.unref();
-
-	// Backstop for the judge's VERIFY step: a bundle whose check_suite webhook never arrives
-	// (missed delivery, or webhooks not configured at all) must not wait forever — see
-	// actionPipeline.ts's sweepExpiredVerifications, which only ever escalates as
-	// inconclusive, never declares success or triggers a revert from a mere timeout. A no-op
-	// for any tenant whose judge isn't running in "auto" mode.
-	const judgeVerificationSweepTimer = setInterval(() => {
-		for (const tenant of registry.all()) {
-			if (tenant.judgeActionDeps === undefined) continue;
-			sweepExpiredVerifications(tenant.judgeActionDeps).catch((err: unknown) => {
-				console.error(`Judge verification sweep failed for ${tenant.teamId}:`, err);
-			});
-		}
-	}, JUDGE_VERIFICATION_SWEEP_INTERVAL_MS);
-	judgeVerificationSweepTimer.unref();
 
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);

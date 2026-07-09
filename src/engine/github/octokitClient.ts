@@ -218,14 +218,13 @@ export class OctokitGitHubClient implements GitHubClient {
 		return { payloads, skipped };
 	}
 
-	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<{ sha: string }> {
-		return withPermissionHint("merge a pull request", async () => {
+	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+		await withPermissionHint("merge a pull request", async () => {
 			const { data: pr } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
 			if (pr.draft === true) {
 				await this.octokit.graphql(MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION, { pullRequestId: pr.node_id });
 			}
-			const { data: merged } = await this.octokit.rest.pulls.merge({ owner, repo, pull_number: prNumber });
-			return { sha: merged.sha };
+			await this.octokit.rest.pulls.merge({ owner, repo, pull_number: prNumber });
 		});
 	}
 

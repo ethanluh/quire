@@ -55,11 +55,7 @@ export interface FoundOrCreatedPullRequest {
 export interface GitHubClient {
 	getPullRequest(owner: string, repo: string, prNumber: number): Promise<RawPRPayload>;
 	listOpenPullRequests(owner: string, repo: string): Promise<ListOpenPullRequestsResult>;
-	// Returns the merge commit's SHA — the judge's post-merge VERIFY step (Phase 4) matches
-	// an incoming check_suite webhook by (owner, repo, head_sha) against this, since the
-	// PR itself is already closed by the time CI runs against the base branch and its own
-	// pull_requests[] webhook field is typically empty at that point.
-	mergePullRequest(owner: string, repo: string, prNumber: number): Promise<{ sha: string }>;
+	mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void>;
 	closePullRequest(owner: string, repo: string, prNumber: number): Promise<void>;
 	revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string>;
 	postReviewCardComment(

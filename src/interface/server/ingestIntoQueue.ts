@@ -7,8 +7,6 @@ import type { StaticAnalyzer } from "../../engine/drift/footprint/analyzer.js";
 import type { AuditStore } from "../../engine/gate/auditStore.js";
 import type { InstrumentationSink } from "../../engine/types/instrumentation.js";
 import type { PrEffectCache } from "../../engine/cache/prCache.js";
-import { runJudgeForBundle } from "../../engine/judge/orchestrate.js";
-import type { JudgeRunDeps } from "../../engine/judge/orchestrate.js";
 import type { ServerState } from "./state.js";
 
 export interface PipelineDeps {
@@ -18,11 +16,6 @@ export interface PipelineDeps {
 	auditStore: AuditStore;
 	prCache: PrEffectCache;
 	instrumentationSink?: InstrumentationSink;
-	// Optional and additive: omitted (as every existing caller/test does) reproduces
-	// ingestIntoQueue's pre-judge behavior byte-for-byte — the block below is skipped
-	// entirely, not run-and-ignored. See docs/judge-integration-map.md §1 for why this is the
-	// one lifecycle point every ingestion path funnels through.
-	judgeDeps?: JudgeRunDeps;
 }
 
 export interface IngestSummary {
@@ -71,18 +64,6 @@ export async function ingestIntoQueue(
 	}
 	for (const card of result.cards) {
 		state.cards.set(card.bundleId, card);
-	}
-
-	// The one lifecycle point every ingestion path (webhook, reconcile poll, manual ingest)
-	// funnels through — see docs/judge-integration-map.md §1. runJudgeForBundle re-checks
-	// drift/specConformance itself (defense in depth) and never throws, so a judge failure of
-	// any kind can't turn ingestion itself into a failure.
-	if (deps.judgeDeps !== undefined) {
-		for (const bundle of result.bundles) {
-			const card = state.cards.get(bundle.id);
-			if (card === undefined) continue;
-			await runJudgeForBundle(bundle, card, deps.judgeDeps);
-		}
 	}
 
 	return {

@@ -47,13 +47,6 @@ export interface MergeQueueEntry {
 	// dequeueNext() can resume a bundle that crashed partway through merging instead of
 	// leaving it stuck in "landing" forever.
 	mergedPrIds: ReadonlyArray<string>;
-	// Merge-commit SHA per member actually merged by Quire's own mergePullRequest() call —
-	// absent for a member that landed via the "alreadyMerged" path (merged out of band, or by
-	// a prior attempt that crashed before recording it) since there's no fresh SHA to capture
-	// in that case. Read by the judge's action pipeline (Phase 4) to match an incoming
-	// check_suite webhook to the exact commit it needs to verify; absent entirely for entries
-	// persisted before this field existed.
-	mergedShas?: ReadonlyArray<{ prId: string; sha: string }>;
 	// Set when status is "conflict": a member PR couldn't be landed and automated
 	// resolution either didn't apply (branch protection, failing checks) or failed (a text
 	// conflict Quire's own hunk resolver couldn't confidently resolve). Surfaces the reason
