@@ -133,7 +133,16 @@ export class StubGitHubClient implements GitHubClient {
 		return { payloads, skipped: [] };
 	}
 
-	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+	// Keyed like every other per-(owner,repo,prNumber) fixture map on this stub — lets a test
+	// assert the judge's VERIFY step matched the exact SHA a merge actually produced, rather
+	// than a fixed placeholder every merge would otherwise share.
+	private readonly mergeCommitShaFixtures: Map<string, string> = new Map();
+
+	setMergeCommitSha(owner: string, repo: string, prNumber: number, sha: string): void {
+		this.mergeCommitShaFixtures.set(`${owner}/${repo}/${prNumber}`, sha);
+	}
+
+	async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<{ sha: string }> {
 		if (this.mergePullRequestError !== undefined) {
 			const err = this.mergePullRequestError;
 			this.mergePullRequestError = undefined;
@@ -153,6 +162,8 @@ export class StubGitHubClient implements GitHubClient {
 			throw err;
 		}
 		this.mergedPrs.push(`${owner}/${repo}/${prNumber}`);
+		const sha = this.mergeCommitShaFixtures.get(`${owner}/${repo}/${prNumber}`) ?? `merge-sha-${owner}-${repo}-${prNumber}`;
+		return { sha };
 	}
 
 	async closePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {

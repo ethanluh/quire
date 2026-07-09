@@ -1,5 +1,5 @@
 import type { GestureAction } from "../types/core.js";
-import type { DecidedPrState } from "../types/decided.js";
+import type { DecidedPrEntry, DecidedPrState } from "../types/decided.js";
 import { loadState, saveState } from "./decidedPrPersistence.js";
 
 // Tracks PRs that already received a human gesture (accept/reject/defer). GitHub keeps
@@ -30,6 +30,14 @@ export class DecidedPrStore {
 
 	isDecided(prId: string): boolean {
 		return this.state.entries.some((e) => e.prId === prId);
+	}
+
+	// Read-only snapshot of every decided PR — used by precedent.ts to confirm a queue/shelf
+	// entry actually reflects a genuine human gesture before treating it as judge precedent
+	// (see retrievePrecedent's confirmedHumanGesture), rather than inferring one from a
+	// queue-entry status alone.
+	list(): ReadonlyArray<DecidedPrEntry> {
+		return this.state.entries;
 	}
 
 	async clearDecided(prId: string): Promise<void> {

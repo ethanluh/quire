@@ -1,0 +1,203 @@
+// Shared types for the Bundle Judge (docs/judge-integration-map.md). Kept in its own file,
+// mirroring types/gate.ts and types/queue.ts, rather than folded into types/core.ts — the
+// judge is an optional, additive subsystem layered on top of the core pipeline types, not a
+// core data-model concept itself.
+
+// Distinct from GateMode (types/gate.ts): "off" is a true kill switch (the judge never runs,
+// never logs) — "shadow" still runs and logs, it just never acts. See
+// docs/judge-integration-map.md §7 for why this is a 4-value superset of the mission's
+// 3-value (shadow | assist | auto) description.
+export type JudgeMode = "off" | "shadow" | "assist" | "auto";
+
+export type JudgeGesture = "accept" | "defer" | "reject";
+
+// The five rubric criteria a JudgeVerdict is scored against — fixed by the constitution's
+// contract with JudgeVerdict (bundleJudge.ts, Phase 2), not configurable per deployment.
+export type RubricCriterionKey = "direction" | "drift" | "blastRadius" | "reversibility" | "precedent";
+
+// One human-readable guidance band for a rubric criterion, e.g. "0.8-1.0: the bundle is a
+// clean, on-direction extension of an already-accepted precedent." Bands are read by the
+// judge prompt builder (bundleJudge.ts) verbatim — the written guidance IS the calibration
+// signal, not just documentation.
+export interface RubricScoreBand {
+	minScore: number;
+	maxScore: number;
+	description: string;
+}
+
+export interface RubricCriterion {
+	key: RubricCriterionKey;
+	label: string;
+	bands: ReadonlyArray<RubricScoreBand>;
+}
+
+// One entry in the risk taxonomy — "what counts as high-risk / could do hard damage /
+// irreversible." A match on any entry means ESCALATE, never auto-act, full stop (see
+// judge-constitution.md's "Risk taxonomy" section and gate.ts, Phase 3). filePatterns are
+// regex source strings (JSON can't hold a RegExp literal) compiled once at load time by
+// constitution.ts — a single bad pattern in the doc fails the whole load loudly, not silently.
+export interface RiskTaxonomyEntry {
+	id: string;
+	label: string;
+	description: string;
+	filePatterns: ReadonlyArray<string>;
+}
+
+// A taxonomy entry with its patterns pre-compiled — what riskTaxonomy.ts actually matches
+// against, kept separate from RiskTaxonomyEntry (the plain-data, JSON-serializable shape)
+// so a compiled RegExp never has to round-trip through JSON.stringify.
+export interface CompiledRiskTaxonomyEntry {
+	id: string;
+	label: string;
+	description: string;
+	filePatterns: ReadonlyArray<RegExp>;
+}
+
+// Auto-act gating thresholds — see gate.ts (Phase 3) for the AND rule that combines these
+// with blast radius, reversibility, and a risk-taxonomy match. Doc-provided defaults; a
+// deployment may override via env vars (QUIRE_JUDGE_AUTOACCEPT_CONFIDENCE etc., Phase 3) —
+// the env var, when set, wins, mirroring how a UI-connected LLM account takes priority over
+// resolveLlmProvider's env-based defaults elsewhere in this codebase.
+export interface JudgeThresholds {
+	autoAcceptConfidence: number;
+	// Higher than autoAcceptConfidence by construction (a wrong auto-reject triggers a swarm
+	// regen loop, which is more expensive to undo than a wrong auto-accept sitting reversibly
+	// in the merge queue) — constitution.ts validates this ordering at load time.
+	autoRejectConfidence: number;
+	maxBlastRadiusAuto: number;
+}
+
+export interface JudgeConstitution {
+	version: number;
+	rubric: ReadonlyArray<RubricCriterion>;
+	riskTaxonomy: ReadonlyArray<CompiledRiskTaxonomyEntry>;
+	thresholds: JudgeThresholds;
+}
+
+// A bundle's score against each rubric criterion — every key is mandatory (see
+// bundleJudge.ts's schema): a verdict missing one is malformed, exactly like a
+// semanticHunkResolver.ts attempt missing a hunk.
+export interface JudgeCriteriaScores {
+	direction: number;
+	drift: number;
+	blastRadius: number;
+	reversibility: number;
+	precedent: number;
+}
+
+// The judge's structured output for one bundle. Never trusted directly (INV-1) — gate.ts
+// (Phase 3) is what actually decides whether this verdict is allowed to drive an autonomous
+// action; the verdict itself is only ever a declaration, same status as declaredDirection.
+export interface JudgeVerdict {
+	gesture: "accept" | "defer" | "reject";
+	confidence: number;
+	criteria: JudgeCriteriaScores;
+	// Union of the deterministic riskTaxonomy.ts matches and whatever the model itself
+	// names — docs/judge-constitution.md: "a match from either source is treated
+	// identically." Always taxonomy `id`s, never free-form text, so gate.ts can compare
+	// against the constitution's own taxonomy list.
+	riskFlags: ReadonlyArray<string>;
+	rationale: string;
+	// bundleId of each PrecedentExample (precedent.ts) the model actually weighed —
+	// lets a human (or the audit-sampling check, Phase 5) verify the citation is real
+	// rather than trusting the model's own claim that it consulted precedent.
+	precedentIds: ReadonlyArray<string>;
+	// provider.modelKey (e.g. "anthropic:claude-opus-4-8") — which model produced this,
+	// so a later audit can tell whether bias mitigation (a distinct judge model, see
+	// resolveJudgeProvider.ts) was actually active for this specific verdict.
+	modelId: string;
+}
+
+// One past bundle a human already decided on, retrieved as few-shot grounding for the
+// current candidate (precedent.ts). Never includes a bundle the judge itself decided —
+// precedent must be a human's own directional call, not the judge's, or "precedent match"
+// would silently become the judge grading itself against its own prior outputs.
+export interface PrecedentExample {
+	bundleId: string;
+	direction: string;
+	effectSummary: string;
+	gesture: "accept" | "reject" | "defer";
+	// Word-overlap similarity to the candidate bundle's effectSummary, 0..1 — informational
+	// (used for ranking/testing), not itself sent to the model as a score.
+	similarity: number;
+}
+
+// The result of applying docs/judge-constitution.md's auto-act rule (gate.ts) to a verdict.
+// Computed and persisted regardless of JudgeMode — shadow mode logs what auto mode *would*
+// have done, which is the calibration signal Phase 5's audit sampling and judge-vs-human
+// agreement metric need.
+export type JudgeGateOutcome = { allowed: true; gesture: "accept" | "reject" } | { allowed: false; reasons: ReadonlyArray<string> };
+
+// One bundle's judge run, persisted per team next to the bundle it concerns (see
+// judgeVerdictStore.ts). Exactly one record per (bundleId, inputsHash) pair — a later commit
+// on the same bundle gets its own record with a new inputsHash, superseding this one for
+// idempotency-check purposes, but this one is never deleted (append-only history; see
+// docs/instrumentation.md's judge-decisions.ndjson for the parallel append-only audit trail).
+export interface JudgeVerdictRecord {
+	bundleId: string;
+	inputsHash: string;
+	mode: JudgeMode;
+	computedAt: string;
+	status: "ok" | "abstained";
+	// Present iff status === "ok".
+	verdict?: JudgeVerdict;
+	gate?: JudgeGateOutcome;
+	// Present iff status === "abstained".
+	abstainReason?: string;
+}
+
+export interface JudgeVerdictState {
+	entries: ReadonlyArray<JudgeVerdictRecord>;
+}
+
+export type JudgeActionStatus =
+	| "merging" // accept: enqueue + drain-to-completion in flight
+	| "awaitingVerification" // accept: landed, waiting on check_suite / health-check signals
+	| "verified" // terminal: landed and verification passed
+	| "reverted" // terminal: verification failed or was unhealthy; reverted per member (INV-4)
+	| "rejecting" // reject: closing member PRs in flight
+	| "rejected" // terminal: auto-reject completed
+	// Terminal, reached from several places: the merge never landed (conflict/blocked/
+	// unstable), verification never resolved within the timeout (inconclusive — never
+	// treated as success, never triggers a revert), or the drain-to-completion bound was
+	// exhausted before reaching this bundle.
+	| "escalated";
+
+// One member PR's post-merge commit, tracked for VERIFY. `outcome` is set only once a
+// check_suite webhook (or the timeout sweep, as "inconclusive") resolves it — see
+// actionPipeline.ts's finalizeVerification.
+export interface PendingMemberVerification {
+	prId: string;
+	repoOwner: string;
+	repoName: string;
+	number: number;
+	sha: string;
+	outcome?: "success" | "failure";
+}
+
+// One bundle's autonomous action, persisted per team next to judge-verdicts.json (see
+// judgeActionStore.ts) — the record autoAct idempotency and re-entrancy guards key off.
+// Carries its own copy of directionSummary/rationale (denormalized from the bundle/verdict
+// at the moment the action was attempted) rather than looking them up from the queue/verdict
+// stores at finalize time — finalize() only ever needs this one record to produce a complete
+// Slack message, so there is nothing else that could have been pruned or changed underneath it.
+export interface JudgeActionRecord {
+	bundleId: string;
+	inputsHash: string;
+	gesture: "accept" | "reject";
+	status: JudgeActionStatus;
+	directionSummary: string;
+	rationale: string;
+	startedAt: string;
+	updatedAt: string;
+	// Present only while status is "awaitingVerification".
+	members?: ReadonlyArray<PendingMemberVerification>;
+	verifyDeadline?: string;
+	// Present on every terminal status except "verified"/"rejected" (which are
+	// self-explanatory) — the specific reason surfaced to Slack and the audit trail.
+	terminalReason?: string;
+}
+
+export interface JudgeActionState {
+	entries: ReadonlyArray<JudgeActionRecord>;
+}

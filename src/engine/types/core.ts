@@ -147,6 +147,25 @@ export interface ReviewCard {
 	// HIGH_RISK_FLAGS in review/flags.ts). Gates the fast accept gesture: UI must require an
 	// explicit confirmation, and the gesture route must reject an unconfirmed accept.
 	requiresAcceptConfirmation: boolean;
+	// Present only when the Bundle Judge is running in "assist" mode (see
+	// docs/judge-integration-map.md) and produced a verdict — a recommendation for a human to
+	// weigh, never a substitute for their own gesture (INV-1: a judge verdict is a
+	// declaration, not a verdict on itself). Absent in every other mode, and absent when the
+	// judge abstained.
+	judgeRecommendation?: JudgeRecommendation;
+}
+
+// A narrow projection of JudgeVerdict (types/judge.ts), not the type itself — core.ts stays
+// free of a dependency on the judge subsystem, which is layered on top of it, not the other
+// way around.
+export interface JudgeRecommendation {
+	gesture: "accept" | "defer" | "reject";
+	confidence: number;
+	rationale: string;
+	// Whether docs/judge-constitution.md's auto-act rule would allow acting on this verdict —
+	// lets the UI distinguish "the judge is confident and this would auto-land in auto mode"
+	// from "the judge has an opinion but the constitution itself would still escalate this."
+	wouldAutoAct: boolean;
 }
 
 export type GestureAction = "accept" | "defer" | "reject";

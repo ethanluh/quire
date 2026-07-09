@@ -37,7 +37,7 @@ export class GitHubClientHolder implements GitHubClient {
 		return this.current.listOpenPullRequests(owner, repo);
 	}
 
-	mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+	mergePullRequest(owner: string, repo: string, prNumber: number): Promise<{ sha: string }> {
 		return this.current.mergePullRequest(owner, repo, prNumber);
 	}
 

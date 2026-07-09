@@ -1,4 +1,5 @@
 import type { GateMode } from "./gate.js";
+import type { JudgeMode } from "./judge.js";
 
 export interface DeferLog {
 	bundleId: string;
@@ -55,6 +56,23 @@ export interface SpecConformanceCheckLog {
 	recordedAt: string;
 }
 
+// One row per bundle the judge actually ran against (never for a bundle skipped because
+// drift/specConformance were flagged, or because mode was "off" — see orchestrate.ts). Feeds
+// Phase 5's judge-vs-human agreement metric, joined against decided-prs.json on bundleId.
+export interface JudgeVerdictLog {
+	bundleId: string;
+	mode: JudgeMode;
+	status: "ok" | "abstained";
+	// Present iff status === "ok".
+	gesture?: "accept" | "defer" | "reject";
+	confidence?: number;
+	// Whether docs/judge-constitution.md's auto-act rule would have allowed acting on this
+	// verdict — computed and logged in every mode, including shadow, so shadow-mode logs
+	// double as "what would auto mode have done" calibration data without ever acting.
+	gateAllowed?: boolean;
+	recordedAt: string;
+}
+
 // Optional sink for pipeline-stage instrumentation. Every method is optional so
 // logging never becomes a hard dependency for the pipeline to run — passing no
 // sink (or a sink missing a method) is a silent no-op at each call site. Methods
@@ -65,4 +83,5 @@ export interface InstrumentationSink {
 	logGateDecision?(entry: GateDecisionLog): Promise<void> | void;
 	logDriftScreen?(entry: DriftScreenLog): Promise<void> | void;
 	logSpecConformanceCheck?(entry: SpecConformanceCheckLog): Promise<void> | void;
+	logJudgeVerdict?(entry: JudgeVerdictLog): Promise<void> | void;
 }
