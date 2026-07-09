@@ -35,9 +35,12 @@ import type { InstrumentationSink } from "../../engine/types/instrumentation.js"
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
 import { resolveJudgeThresholds } from "../../engine/judge/gate.js";
 import { loadJudgeVerdictStore } from "../../engine/judge/judgeVerdictStore.js";
+import { loadJudgeActionStore } from "../../engine/judge/judgeActionStore.js";
+import type { ActionPipelineDeps } from "../../engine/judge/actionPipeline.js";
 import type { JudgeRunDeps } from "../../engine/judge/orchestrate.js";
 import type { JudgeConstitution, JudgeMode } from "../../engine/types/judge.js";
 import type { ShelfState } from "../../engine/types/shelf.js";
+import type { SlackNotifier } from "../notify/slack.js";
 import { resolveJudgeProvider } from "./resolveJudgeProvider.js";
 import { createAccountState, installationForRepo, repoBinding } from "./accountState.js";
 import type { AccountState } from "./accountState.js";
@@ -114,6 +117,12 @@ export interface TenantSharedConfig {
 	// three-mode description). A deployment-wide setting, not per-team, matching how it's a
 	// single env var rather than a per-repo UI toggle like autoMergeOnAccept.
 	judgeMode: JudgeMode;
+	// Deployment-wide, matching judgeMode/judgeConstitution above — a single Slack
+	// destination and read-only health-check URL for every team's judge, not a per-team UI
+	// setting. resolveSlackNotifier already degrades to a no-op when unconfigured.
+	slack: SlackNotifier;
+	judgeHealthCheckUrl: string | undefined;
+	judgeVerifyTimeoutMs: number;
 }
 
 // Everything that used to be a single process-wide singleton (accountState, the GitHub
@@ -139,6 +148,12 @@ export interface TenantContext {
 	// Exposed so index.ts's per-tenant timers and webhookRouter can log to the right
 	// team's instrumentation file instead of a single global one.
 	conflictLogPath: string;
+	// undefined whenever this tenant's judge isn't running in "auto" mode — exposed
+	// separately from judgeDeps (embedded in pipelineDeps) so both the webhook route (see
+	// webhook.ts's WebhookTenant) and index.ts's verification-timeout sweep can reach the
+	// exact same ActionPipelineDeps instance the ingest-triggered path uses, rather than a
+	// second, divergent copy.
+	judgeActionDeps?: ActionPipelineDeps;
 	// Every route mounted behind a session, composed once per tenant from the exact same
 	// router factories index.ts used to call once at startup — building N independent
 	// instances (one per tenant) instead of one shared instance is what gives each tenant
@@ -165,10 +180,12 @@ function shelfStateFromMap(shelf: ReadonlyMap<string, ShelvedBundle>): ShelfStat
 async function buildJudgeRunDeps(
 	shared: TenantSharedConfig,
 	judgeVerdictsPath: string,
+	judgeActionsPath: string,
 	queue: MergeQueue,
 	decidedStore: DecidedPrStore,
 	state: ServerState,
 	llmProviderHolder: LlmProviderHolder,
+	github: GitHubClientHolder,
 	sink: InstrumentationSink,
 ): Promise<JudgeRunDeps | undefined> {
 	if (shared.judgeConstitution === undefined || shared.judgeMode === "off") return undefined;
@@ -189,6 +206,22 @@ async function buildJudgeRunDeps(
 
 	const verdictStore = await loadJudgeVerdictStore(judgeVerdictsPath);
 
+	let actionDeps: ActionPipelineDeps | undefined;
+	if (shared.judgeMode === "auto") {
+		const actionStore = await loadJudgeActionStore(judgeActionsPath);
+		actionDeps = {
+			queue,
+			actionStore,
+			slack: shared.slack,
+			github,
+			decidedStore,
+			bundles: state.bundles,
+			cards: state.cards,
+			verifyTimeoutMs: shared.judgeVerifyTimeoutMs,
+			...(shared.judgeHealthCheckUrl !== undefined ? { healthCheckUrl: shared.judgeHealthCheckUrl } : {}),
+		};
+	}
+
 	return {
 		mode: shared.judgeMode,
 		constitution: shared.judgeConstitution,
@@ -199,6 +232,7 @@ async function buildJudgeRunDeps(
 		getDecidedEntries: () => decidedStore.list(),
 		verdictStore,
 		sink,
+		...(actionDeps !== undefined ? { actionDeps } : {}),
 	};
 }
 
@@ -217,6 +251,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	const auditLogPath = join(dir, "instrumentation/audit.ndjson");
 	const judgeDecisionLogPath = join(dir, "instrumentation/judge-decisions.ndjson");
 	const judgeVerdictsPath = join(dir, "judge-verdicts.json");
+	const judgeActionsPath = join(dir, "judge-actions.json");
 
 	const decidedStore = new DecidedPrStore(decidedPrsPath);
 	const prCache = new PrEffectCache(prCachePath);
@@ -293,12 +328,15 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	const judgeDeps = await buildJudgeRunDeps(
 		shared,
 		judgeVerdictsPath,
+		judgeActionsPath,
 		queue,
 		decidedStore,
 		state,
 		llmProviderHolder,
+		clientHolder,
 		instrumentationSink,
 	);
+	const judgeActionDeps = judgeDeps?.actionDeps;
 	const pipelineDeps: PipelineDeps = {
 		config: shared.pipelineConfig,
 		provider: llmProviderHolder,
@@ -383,6 +421,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		refreshDeps,
 		conflictLogPath,
 		router,
+		...(judgeActionDeps !== undefined ? { judgeActionDeps } : {}),
 	};
 }
 

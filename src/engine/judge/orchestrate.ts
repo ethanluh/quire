@@ -10,6 +10,8 @@ import { retrievePrecedent } from "./precedent.js";
 import { runBundleJudge } from "./bundleJudge.js";
 import { applyConstitutionGate } from "./gate.js";
 import type { JudgeVerdictStore } from "./judgeVerdictStore.js";
+import { attemptAutoAction } from "./actionPipeline.js";
+import type { ActionPipelineDeps } from "./actionPipeline.js";
 import { errorMessage } from "../util/error.js";
 
 export interface JudgeRunDeps {
@@ -25,6 +27,11 @@ export interface JudgeRunDeps {
 	getDecidedEntries: () => ReadonlyArray<DecidedPrEntry>;
 	verdictStore: JudgeVerdictStore;
 	sink?: InstrumentationSink;
+	// Present only when this tenant's judge is fully wired for autonomous action (Slack,
+	// action store, GitHub write access). Only ever acted on when mode === "auto" AND the
+	// gate allowed the verdict — shadow/assist modes compute and log the same gate decision
+	// without ever reaching attemptAutoAction, regardless of whether this is set.
+	actionDeps?: ActionPipelineDeps;
 }
 
 // Instrumentation is an add-on, never a hard dependency — a sink call that throws must not
@@ -99,6 +106,29 @@ export async function runJudgeForBundle(bundle: Bundle, card: ReviewCard, deps: 
 				recordedAt: computedAt,
 			}),
 		);
+
+		// Only "auto" mode ever acts — "shadow" and "assist" log the identical gate decision
+		// above (that's the calibration signal) but stop there, exactly as if the judge did
+		// not exist beyond logging.
+		if (deps.mode === "auto" && deps.actionDeps !== undefined) {
+			if (gate.allowed) {
+				await attemptAutoAction(bundle, card, result.verdict, deps.actionDeps);
+			} else {
+				// The bundle itself is left exactly where it already is (still in the review
+				// queue — nothing above removed it), which is the correct "escalate to a
+				// human" behavior on its own; the Slack notification is what turns that into
+				// an actual signal a human sees, per the mission's GATE step.
+				await logSafely(() =>
+					deps.actionDeps?.slack.notifyEscalation({
+						bundleId: bundle.id,
+						directionSummary: bundle.direction,
+						reason: gate.reasons.join("; "),
+						rationale: result.verdict.rationale,
+						links: [],
+					}),
+				);
+			}
+		}
 	} catch (err) {
 		// The judge is an add-on, never a hard dependency of ingestion — same "never let this
 		// break the hot path" discipline pipeline.ts's own instrumentation handling applies.

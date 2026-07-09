@@ -149,3 +149,55 @@ export interface JudgeVerdictRecord {
 export interface JudgeVerdictState {
 	entries: ReadonlyArray<JudgeVerdictRecord>;
 }
+
+export type JudgeActionStatus =
+	| "merging" // accept: enqueue + drain-to-completion in flight
+	| "awaitingVerification" // accept: landed, waiting on check_suite / health-check signals
+	| "verified" // terminal: landed and verification passed
+	| "reverted" // terminal: verification failed or was unhealthy; reverted per member (INV-4)
+	| "rejecting" // reject: closing member PRs in flight
+	| "rejected" // terminal: auto-reject completed
+	// Terminal, reached from several places: the merge never landed (conflict/blocked/
+	// unstable), verification never resolved within the timeout (inconclusive — never
+	// treated as success, never triggers a revert), or the drain-to-completion bound was
+	// exhausted before reaching this bundle.
+	| "escalated";
+
+// One member PR's post-merge commit, tracked for VERIFY. `outcome` is set only once a
+// check_suite webhook (or the timeout sweep, as "inconclusive") resolves it — see
+// actionPipeline.ts's finalizeVerification.
+export interface PendingMemberVerification {
+	prId: string;
+	repoOwner: string;
+	repoName: string;
+	number: number;
+	sha: string;
+	outcome?: "success" | "failure";
+}
+
+// One bundle's autonomous action, persisted per team next to judge-verdicts.json (see
+// judgeActionStore.ts) — the record autoAct idempotency and re-entrancy guards key off.
+// Carries its own copy of directionSummary/rationale (denormalized from the bundle/verdict
+// at the moment the action was attempted) rather than looking them up from the queue/verdict
+// stores at finalize time — finalize() only ever needs this one record to produce a complete
+// Slack message, so there is nothing else that could have been pruned or changed underneath it.
+export interface JudgeActionRecord {
+	bundleId: string;
+	inputsHash: string;
+	gesture: "accept" | "reject";
+	status: JudgeActionStatus;
+	directionSummary: string;
+	rationale: string;
+	startedAt: string;
+	updatedAt: string;
+	// Present only while status is "awaitingVerification".
+	members?: ReadonlyArray<PendingMemberVerification>;
+	verifyDeadline?: string;
+	// Present on every terminal status except "verified"/"rejected" (which are
+	// self-explanatory) — the specific reason surfaced to Slack and the audit trail.
+	terminalReason?: string;
+}
+
+export interface JudgeActionState {
+	entries: ReadonlyArray<JudgeActionRecord>;
+}

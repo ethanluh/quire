@@ -31,6 +31,8 @@ import { errorHandler } from "./middleware/errors.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
 import { loadConstitution } from "../../engine/judge/constitution.js";
 import type { JudgeConstitution, JudgeMode } from "../../engine/types/judge.js";
+import { sweepExpiredVerifications } from "../../engine/judge/actionPipeline.js";
+import { resolveSlackNotifier } from "../notify/slack.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Not derived from __dirname: the compiled dist/ output nests one level deeper than the
@@ -45,6 +47,13 @@ const RECONCILE_INTERVAL_MS =
 	parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "20", 10) * 60 * 1000;
 const QUEUE_REFRESH_INTERVAL_MS =
 	parseInt(process.env["QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES"] ?? "5", 10) * 60 * 1000;
+// How long the judge's VERIFY step waits for a post-merge check_suite before giving up and
+// escalating as inconclusive (never as a failure — see docs/judge-integration-map.md §7).
+const JUDGE_VERIFY_TIMEOUT_MS =
+	parseInt(process.env["QUIRE_JUDGE_VERIFY_TIMEOUT_MINUTES"] ?? "30", 10) * 60 * 1000;
+// Reuses the same cadence as the queue-branch refresh/investigation-poll timers below rather
+// than introducing a fourth interval knob.
+const JUDGE_VERIFICATION_SWEEP_INTERVAL_MS = QUEUE_REFRESH_INTERVAL_MS;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -169,6 +178,18 @@ async function main(): Promise<void> {
 		}
 	}
 
+	// Both no-op cleanly when unset (see slack.ts's resolveSlackNotifier) — neither is a
+	// required secret for any existing flow, matching every other new integration here.
+	const slack = resolveSlackNotifier(process.env["QUIRE_SLACK_WEBHOOK_URL"]);
+	const rawHealthCheckUrl = process.env["QUIRE_JUDGE_HEALTHCHECK_URL"];
+	const judgeHealthCheckUrl = rawHealthCheckUrl !== undefined && rawHealthCheckUrl !== "" ? rawHealthCheckUrl : undefined;
+	if (judgeMode === "auto") {
+		console.log(
+			`Bundle judge auto mode: Slack ${process.env["QUIRE_SLACK_WEBHOOK_URL"] ? "configured" : "NOT configured (outcomes/escalations will only be logged to the console)"}` +
+				`, health check ${judgeHealthCheckUrl !== undefined ? `configured (${judgeHealthCheckUrl})` : "not configured (CI result alone will decide VERIFY)"}.`,
+		);
+	}
+
 	// Keyed by login, not team: starred/pinned enrichment needs the signed-in user's own
 	// GitHub token, which has nothing to do with which team they're currently on — shared
 	// across every tenant's router the same way appConfig/appSlug are (see
@@ -204,6 +225,9 @@ async function main(): Promise<void> {
 		webhooksEnabled: webhookConfig !== undefined,
 		judgeConstitution,
 		judgeMode,
+		slack,
+		judgeHealthCheckUrl,
+		judgeVerifyTimeoutMs: JUDGE_VERIFY_TIMEOUT_MS,
 	};
 
 	// Every team gets its own isolated GitHub App installation, repo selection, PR queue,
@@ -230,7 +254,11 @@ async function main(): Promise<void> {
 			verifyGithubSignature(webhookConfig.secret),
 			webhookRouter((installationId) => {
 				const tenant = registry.findByInstallationId(installationId);
-				return tenant !== undefined ? { refreshDeps: tenant.refreshDeps } : undefined;
+				if (tenant === undefined) return undefined;
+				return {
+					refreshDeps: tenant.refreshDeps,
+					...(tenant.judgeActionDeps !== undefined ? { judgeActionDeps: tenant.judgeActionDeps } : {}),
+				};
 			}),
 		);
 		console.log("GitHub webhook receiver: enabled at /webhooks/github");
@@ -349,6 +377,21 @@ async function main(): Promise<void> {
 		}
 	}, QUEUE_REFRESH_INTERVAL_MS);
 	investigationPollTimer.unref();
+
+	// Backstop for the judge's VERIFY step: a bundle whose check_suite webhook never arrives
+	// (missed delivery, or webhooks not configured at all) must not wait forever — see
+	// actionPipeline.ts's sweepExpiredVerifications, which only ever escalates as
+	// inconclusive, never declares success or triggers a revert from a mere timeout. A no-op
+	// for any tenant whose judge isn't running in "auto" mode.
+	const judgeVerificationSweepTimer = setInterval(() => {
+		for (const tenant of registry.all()) {
+			if (tenant.judgeActionDeps === undefined) continue;
+			sweepExpiredVerifications(tenant.judgeActionDeps).catch((err: unknown) => {
+				console.error(`Judge verification sweep failed for ${tenant.teamId}:`, err);
+			});
+		}
+	}, JUDGE_VERIFICATION_SWEEP_INTERVAL_MS);
+	judgeVerificationSweepTimer.unref();
 
 	app.listen(PORT, () => {
 		console.log(`Quire running on http://localhost:${PORT}`);

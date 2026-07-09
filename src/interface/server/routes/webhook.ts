@@ -3,12 +3,18 @@ import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { enqueueRefresh, AccountChangedError } from "../refreshRepoQueue.js";
 import { bundleAutoMergeEnabled } from "../accountState.js";
 import type { MergeQueueEntry } from "../../../engine/types/queue.js";
+import { handleCheckSuiteForVerification } from "../../../engine/judge/actionPipeline.js";
+import type { ActionPipelineDeps } from "../../../engine/judge/actionPipeline.js";
 
 // The slice of a TenantContext (see tenant.ts) a webhook delivery needs once resolved by
 // installation id. Kept as a narrow structural type here rather than importing
 // TenantContext directly so this route stays agnostic of how a tenant is actually built.
 export interface WebhookTenant {
 	refreshDeps: RefreshDeps;
+	// undefined whenever this tenant's judge isn't running in "auto" mode (or isn't
+	// configured at all) — the check_suite handler below is a no-op for judge verification in
+	// that case, same "unconfigured degrades cleanly" contract as everywhere else.
+	judgeActionDeps?: ActionPipelineDeps;
 }
 
 export interface WebhookConfig {
@@ -72,6 +78,12 @@ interface CheckSuiteEvent {
 	// this payload field, not something Quire controls) — fork PRs simply won't self-heal via
 	// this path and still need a synchronize push or a manual retry, same as today.
 	pullRequestIds: ReadonlyArray<string>;
+	// The commit this suite ran against — present on every check_suite delivery regardless of
+	// whether any open PR is associated with it (unlike pullRequestIds above, which is
+	// typically empty once a PR has already been merged and closed). The judge's VERIFY step
+	// (Phase 4) matches by (repoOwner, repoName, headSha) for exactly this reason — see
+	// handleCheckSuiteForVerification below.
+	headSha: string | undefined;
 }
 
 function parseCheckSuiteEvent(body: unknown): CheckSuiteEvent | undefined {
@@ -98,6 +110,7 @@ function parseCheckSuiteEvent(body: unknown): CheckSuiteEvent | undefined {
 
 	const suiteRecord = checkSuite as Record<string, unknown>;
 	const conclusion = typeof suiteRecord["conclusion"] === "string" ? (suiteRecord["conclusion"] as string) : undefined;
+	const headSha = typeof suiteRecord["head_sha"] === "string" ? (suiteRecord["head_sha"] as string) : undefined;
 	const pullRequestsRaw = suiteRecord["pull_requests"];
 	const pullRequestIds = Array.isArray(pullRequestsRaw)
 		? pullRequestsRaw
@@ -106,7 +119,7 @@ function parseCheckSuiteEvent(body: unknown): CheckSuiteEvent | undefined {
 				.map(String)
 		: [];
 
-	return { action, repoOwner: ownerLogin, repoName, installationId, conclusion, pullRequestIds };
+	return { action, repoOwner: ownerLogin, repoName, installationId, conclusion, pullRequestIds, headSha };
 }
 
 interface PullRequestReviewEvent {
@@ -208,31 +221,53 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 				res.status(200).json({ ignored: true });
 				return;
 			}
+			const judgeActionDeps = suiteTenant?.judgeActionDeps;
 			const suiteWatchedRepo = suiteRefreshDeps.accountState.current.repos.find(
 				(r) => r.owner === parsedSuite.repoOwner && r.name === parsedSuite.repoName,
 			);
-			// Checks turning green is only worth acting on once every check in the suite has
-			// finished and none failed — a suite still "in_progress", or one that failed/was
-			// cancelled, leaves the entry exactly where it was for a human (or a later green
-			// check_suite) to deal with.
-			if (suiteWatchedRepo === undefined || parsedSuite.action !== "completed" || parsedSuite.conclusion !== "success") {
+			if (suiteWatchedRepo === undefined || parsedSuite.action !== "completed") {
+				res.status(200).json({ ignored: true });
+				return;
+			}
+
+			// Checks turning green is only worth acting on for self-heal once every check in
+			// the suite has finished and none failed — a suite that failed/was cancelled
+			// leaves a "conflict"/"unstable" entry exactly where it was for a human (or a
+			// later green check_suite) to deal with. The judge's VERIFY step needs the
+			// opposite: it must see a FAILURE conclusion too (to trigger a revert), so it is
+			// deliberately not gated by isSuccessConclusion below — only by whether this
+			// tenant's judge is even running in "auto" mode.
+			const isSuccessConclusion = parsedSuite.conclusion === "success";
+			const judgeMightCare = judgeActionDeps !== undefined && parsedSuite.headSha !== undefined;
+			if (!isSuccessConclusion && !judgeMightCare) {
 				res.status(200).json({ ignored: true });
 				return;
 			}
 
 			res.status(202).json({ accepted: true });
 			(async () => {
-				for (const prId of parsedSuite.pullRequestIds) {
-					// Same reattemptForPr as a synchronize push: only picks up a bundle actually
-					// blocked "conflict" on this exact PR (e.g. kind "unstable" from failing/
-					// pending checks) — an unrelated PR whose checks happen to finish is a no-op.
-					const reattempted = await suiteRefreshDeps.queue.reattemptForPr(prId);
-					if (reattempted !== undefined) {
-						await triggerAutoMergeIfEnabled(reattempted, suiteRefreshDeps);
+				if (isSuccessConclusion) {
+					for (const prId of parsedSuite.pullRequestIds) {
+						// Same reattemptForPr as a synchronize push: only picks up a bundle actually
+						// blocked "conflict" on this exact PR (e.g. kind "unstable" from failing/
+						// pending checks) — an unrelated PR whose checks happen to finish is a no-op.
+						const reattempted = await suiteRefreshDeps.queue.reattemptForPr(prId);
+						if (reattempted !== undefined) {
+							await triggerAutoMergeIfEnabled(reattempted, suiteRefreshDeps);
+						}
 					}
 				}
+				if (judgeActionDeps !== undefined && parsedSuite.headSha !== undefined) {
+					await handleCheckSuiteForVerification(
+						parsedSuite.repoOwner,
+						parsedSuite.repoName,
+						parsedSuite.headSha,
+						parsedSuite.conclusion,
+						judgeActionDeps,
+					);
+				}
 			})().catch((err: unknown) => {
-				console.error(`Webhook-triggered check_suite reattempt failed for ${parsedSuite.repoOwner}/${parsedSuite.repoName}:`, err);
+				console.error(`Webhook-triggered check_suite handling failed for ${parsedSuite.repoOwner}/${parsedSuite.repoName}:`, err);
 			});
 			return;
 		}

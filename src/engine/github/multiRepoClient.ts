@@ -46,7 +46,7 @@ export class MultiRepoGitHubClient implements GitHubClient {
 		return this.clientFor(owner, repo).listOpenPullRequests(owner, repo);
 	}
 
-	mergePullRequest(owner: string, repo: string, prNumber: number): Promise<void> {
+	mergePullRequest(owner: string, repo: string, prNumber: number): Promise<{ sha: string }> {
 		return this.clientFor(owner, repo).mergePullRequest(owner, repo, prNumber);
 	}
 

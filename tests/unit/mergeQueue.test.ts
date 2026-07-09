@@ -410,6 +410,30 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		expect(github.mergedPrs).toEqual(["org/repo/1"]);
 	});
 
+	it("records the merge-commit SHA per member so the judge's VERIFY step (Phase 4) can match a check_suite webhook to it", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeCommitSha(pr.repoOwner, pr.repoName, pr.number, "abc123merge");
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		const landed = await queue.dequeueNext();
+
+		expect(landed?.mergedShas).toEqual([{ prId: pr.id, sha: "abc123merge" }]);
+	});
+
+	it("does not record a mergedShas entry when a member landed via the alreadyMerged path (no fresh SHA to capture)", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ merged: true }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		const landed = await queue.dequeueNext();
+
+		expect(landed?.status).toBe("landed");
+		expect(landed?.mergedShas ?? []).toEqual([]);
+		expect(github.mergedPrs).toEqual([]);
+	});
+
 	it("updates the branch and lands when behind", async () => {
 		const { github, queue } = await setup();
 		const pr = makePr();

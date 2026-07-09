@@ -190,20 +190,29 @@ export class MergeQueue {
 			// alreadyMerged means GitHub reports this PR merged (out of band, or a prior
 			// attempt that merged it but crashed before recording mergedPrIds) — calling
 			// mergePullRequest again would just 405 against an already-closed PR.
+			let mergedSha: string | undefined;
 			if (check.alreadyMerged !== true) {
 				try {
-					await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+					const result = await this.github.mergePullRequest(pr.repoOwner, pr.repoName, pr.number);
+					mergedSha = result.sha;
 				} catch (err) {
 					// A network/response failure here doesn't say whether GitHub actually
 					// committed the merge before erroring — re-check live rather than assume
 					// failure, so a merge that in fact succeeded doesn't surface as an error to
 					// the caller (a Process click, or background auto-merge) while under-
-					// reporting reality in queue.json until some later pass notices.
+					// reporting reality in queue.json until some later pass notices. No SHA is
+					// captured on this recovery path — the judge's VERIFY step (Phase 4)
+					// degrades to "inconclusive" for a member with no recorded SHA, never to a
+					// false "verified".
 					const after = await this.github.getMergeability(pr.repoOwner, pr.repoName, pr.number);
 					if (!after.merged) throw err;
 				}
 			}
-			entry = { ...entry, mergedPrIds: [...entry.mergedPrIds, pr.id] };
+			entry = {
+				...entry,
+				mergedPrIds: [...entry.mergedPrIds, pr.id],
+				...(mergedSha !== undefined ? { mergedShas: [...(entry.mergedShas ?? []), { prId: pr.id, sha: mergedSha }] } : {}),
+			};
 			await this.setEntry(entry.bundleId, entry);
 		}
 

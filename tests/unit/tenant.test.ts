@@ -8,6 +8,7 @@ import type { TenantSharedConfig } from "../../src/interface/server/tenant.js";
 import { TeamStore } from "../../src/engine/team/teamStore.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
+import { NoopSlackNotifier } from "../../src/interface/notify/slack.js";
 import { createUserTokenCache } from "../../src/engine/github/userTokenCache.js";
 import type { OAuthDeps } from "../../src/engine/github/oauth.js";
 import { OAuthExchangeError } from "../../src/engine/github/oauth.js";
@@ -75,6 +76,9 @@ describe("TenantRegistry", () => {
 			// — most tenant tests have no opinion on the judge, so it stays fully inert here.
 			judgeConstitution: undefined,
 			judgeMode: "off",
+			slack: new NoopSlackNotifier(),
+			judgeHealthCheckUrl: undefined,
+			judgeVerifyTimeoutMs: 30 * 60 * 1000,
 			...overrides,
 		};
 		return new TenantRegistry(shared);
