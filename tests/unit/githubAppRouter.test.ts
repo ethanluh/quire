@@ -1757,7 +1757,18 @@ describe("githubAppRouter", () => {
 				expect(installationId).toBe(555);
 				return { accountLogin: "acme-corp", accountType: "Organization" };
 			};
-			const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, getInstallationAccount);
+			const { accountPath, userTokenCache } = setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				undefined,
+				getInstallationAccount,
+				"owner",
+				"octocat",
+				undefined,
+				async () => [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization" }],
+			);
+			userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
 			await new Promise((resolve) => server.once("listening", resolve));
 
 			const { status, body } = await call(server, "POST", "/account/github/connect", { installationId: 555 });
@@ -1776,9 +1787,20 @@ describe("githubAppRouter", () => {
 			const revokedError = new RequestError("Not Found", 404, {
 				request: { method: "GET", url: "https://api.github.com/app/installations/555", headers: {}, body: undefined },
 			});
-			const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, async () => {
-				throw revokedError;
-			});
+			const { accountPath, userTokenCache } = setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				undefined,
+				async () => {
+					throw revokedError;
+				},
+				"owner",
+				"octocat",
+				undefined,
+				async () => [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization" }],
+			);
+			userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
 			await new Promise((resolve) => server.once("listening", resolve));
 
 			const { status, body } = await call(server, "POST", "/account/github/connect", { installationId: 555 });
@@ -1796,6 +1818,54 @@ describe("githubAppRouter", () => {
 			const { status } = await call(server, "POST", "/account/github/connect", { installationId: "not-a-number" });
 
 			expect(status).toBe(400);
+		});
+
+		it("refuses to bind an installation the signed-in user has no access to (IDOR guard)", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			let getInstallationAccountCalled = false;
+			const { accountPath, userTokenCache } = setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				undefined,
+				async () => {
+					getInstallationAccountCalled = true;
+					return { accountLogin: "victim-org", accountType: "Organization" };
+				},
+				"owner",
+				"octocat",
+				undefined,
+				// The user can see installation 111 — but they're asking to bind 555, which they can't.
+				async () => [{ installationId: 111, accountLogin: "octocat", accountType: "User" }],
+			);
+			userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/connect", { installationId: 555 });
+
+			expect(status).toBe(403);
+			expect(body["error"]).toBe("You don't have access to that GitHub installation.");
+			// Must fail before ever touching the installation or persisting anything.
+			expect(getInstallationAccountCalled).toBe(false);
+			await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+		});
+
+		it("rejects a plain member with 403 — connecting an installation is an owner/admin action", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const { accountPath } = setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				undefined,
+				undefined,
+				"member",
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(server, "POST", "/account/github/connect", { installationId: 555 });
+
+			expect(status).toBe(403);
+			await expect(readFile(accountPath, "utf8")).rejects.toThrow();
 		});
 	});
 });

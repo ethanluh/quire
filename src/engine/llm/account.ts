@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
+import { readJsonFile, writeSecretFileAtomic } from "../jsonFile.js";
 
 export interface ConnectedLlmAccount {
 	provider: "anthropic" | "gemini";
@@ -24,7 +24,8 @@ export async function loadAccount(path: string): Promise<ConnectedLlmAccount | u
 }
 
 export async function saveAccount(path: string, account: ConnectedLlmAccount): Promise<void> {
-	await writeJsonFileAtomic(path, account);
+	// account.apiKey is a live provider credential — write it 0600, not the default 0644.
+	await writeSecretFileAtomic(path, account);
 }
 
 export async function clearAccount(path: string): Promise<void> {

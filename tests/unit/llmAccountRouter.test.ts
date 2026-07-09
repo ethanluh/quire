@@ -99,6 +99,11 @@ describe("llmAccountRouter", () => {
 		const state = createLlmAccountState(initialAccount);
 		const app = express();
 		app.use(express.json());
+		// connect/disconnect are owner/admin-gated; resolveMembership supplies this in prod.
+		app.use((_req, res, next) => {
+			res.locals.membership = { teamId: "test-team", role: "owner" };
+			next();
+		});
 		app.use(
 			"/account/llm",
 			llmAccountRouter({
@@ -173,7 +178,10 @@ describe("llmAccountRouter", () => {
 		);
 
 		expect(status).toBe(400);
-		expect(body["error"]).toContain("invalid x-api-key");
+		// The raw provider-SDK error must NOT be reflected to the client (recon leak) — a fixed
+		// message is returned and the detail is logged server-side instead.
+		expect(body["error"]).toBe("That API key could not be verified with the provider.");
+		expect(body["error"]).not.toContain("invalid x-api-key");
 		expect(setProviderSpy).not.toHaveBeenCalled();
 		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
 	});
@@ -192,6 +200,11 @@ describe("llmAccountRouter", () => {
 		const state = createLlmAccountState(undefined);
 		const app = express();
 		app.use(express.json());
+		// connect/disconnect are owner/admin-gated; resolveMembership supplies this in prod.
+		app.use((_req, res, next) => {
+			res.locals.membership = { teamId: "test-team", role: "owner" };
+			next();
+		});
 		app.use(
 			"/account/llm",
 			llmAccountRouter({
@@ -237,7 +250,10 @@ describe("llmAccountRouter", () => {
 		);
 
 		expect(status).toBe(400);
-		expect(body["error"]).toContain("embedContent not permitted");
+		// Generic message only — the provider's raw "embedContent not permitted" detail is logged
+		// server-side, never reflected to the caller.
+		expect(body["error"]).toBe("That API key could not be verified with the provider.");
+		expect(body["error"]).not.toContain("embedContent not permitted");
 		expect(setProviderSpy).not.toHaveBeenCalled();
 		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
 	});
@@ -301,6 +317,11 @@ describe("llmAccountRouter", () => {
 
 		const app = express();
 		app.use(express.json());
+		// connect/disconnect are owner/admin-gated; resolveMembership supplies this in prod.
+		app.use((_req, res, next) => {
+			res.locals.membership = { teamId: "test-team", role: "owner" };
+			next();
+		});
 		app.use(
 			"/account/llm",
 			llmAccountRouter({

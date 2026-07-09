@@ -54,3 +54,18 @@ export async function writeJsonFileAtomic(path: string, data: unknown): Promise<
 		await rename(tmp, path);
 	});
 }
+
+// Same atomic-write guarantee as writeJsonFileAtomic, but for files holding a secret at rest
+// (the session-signing key, LLM API keys, GitHub OAuth refresh tokens). The temp file is
+// created 0600 up front — never a wider-then-narrowed window — so the plaintext is never
+// group/other-readable, on hosts where other local users or sidecar processes could otherwise
+// `cat` it out of the data dir or a backup. writeFile's `mode` only applies when it creates
+// the file, which the unique temp path guarantees it does.
+export async function writeSecretFileAtomic(path: string, data: unknown): Promise<void> {
+	await writeLock(path, async () => {
+		await ensureDir(path);
+		const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+		await writeFile(tmp, JSON.stringify(data, null, 2), { encoding: "utf8", mode: 0o600 });
+		await rename(tmp, path);
+	});
+}

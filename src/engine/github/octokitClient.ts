@@ -16,7 +16,11 @@ import { settleWithConcurrency } from "../util/concurrency.js";
 
 // Convention assumed for Open Decision #10 (engineering-handoff.md §10): the swarm
 // declares direction in an HTML comment so it renders invisibly in the PR body.
-const DECLARED_DIRECTION_MARKER = /<!--\s*declared-direction:\s*([\s\S]*?)\s*-->/i;
+// The capture is length-bounded (not open `[\s\S]*?`): an unbounded lazy group followed by
+// `\s*-->` backtracks quadratically over whitespace when the closing `-->` is absent, so a
+// PR body of `<!-- declared-direction:` + tens of KB of spaces would burn event-loop CPU on
+// the ingest path. Callers additionally skip the regex entirely when no `-->` is present.
+const DECLARED_DIRECTION_MARKER = /<!--\s*declared-direction:\s*([\s\S]{0,10000}?)\s*-->/i;
 
 // GitHub's own closing-keyword set (case-insensitive), same-repo `#<n>` only — matches the
 // linking convention documented in this repo's CLAUDE.md ("Closes #<number>").
@@ -153,7 +157,9 @@ function synthesizeDirectionFromDetails(title: string, body: string | null): str
 }
 
 function extractDeclaredDirection(body: string | null, title: string): { direction: string; inferred: boolean } {
-	const match = body !== null ? DECLARED_DIRECTION_MARKER.exec(body) : null;
+	// The `includes` pre-check makes the no-closing-`-->` case (the backtracking-prone one)
+	// short-circuit before the regex runs at all.
+	const match = body !== null && body.includes("-->") ? DECLARED_DIRECTION_MARKER.exec(body) : null;
 	const declared = match?.[1]?.trim();
 	if (declared !== undefined && declared.length > 0) {
 		return { direction: declared, inferred: false };

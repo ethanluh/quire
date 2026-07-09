@@ -333,9 +333,38 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 	// /available-installations above) without sending them through GitHub's install
 	// redirect at all — re-verified here via getInstallationAccount rather than trusted
 	// from the client, since the browser only ever supplied an installationId.
-	router.post("/connect", validateBody(ConnectInstallationSchema), async (req, res, next) => {
+	router.post("/connect", requireRole("owner", "admin"), validateBody(ConnectInstallationSchema), async (req, res, next) => {
 		try {
 			const { installationId } = req.body as z.infer<typeof ConnectInstallationSchema>;
+
+			// getInstallationAccount only proves the installation exists *for the App* — it says
+			// nothing about whether THIS user may bind it. Installation ids are small enumerable
+			// integers, so without an access check any signed-in user could bind another org's
+			// installation to their own team and then drive its write token. Gate it on the same
+			// list the picker (/available-installations) is built from: the installations this
+			// user can actually see on GitHub. Fails closed when no user token is available.
+			const login = res.locals.login;
+			if (login !== undefined && userTokenCache.get(login) === undefined) {
+				await refreshUserTokenFromDisk(login, userTokenPath(dataDir, login), oauth, userTokenCache);
+			}
+			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
+			if (userToken === undefined) {
+				res.status(403).json({ error: "Reconnect your GitHub sign-in to connect an installation." });
+				return;
+			}
+			const accessible = await listInstallationsForUser(userToken);
+			if (!accessible.some((i) => i.installationId === installationId)) {
+				res.status(403).json({ error: "You don't have access to that GitHub installation." });
+				return;
+			}
+
+			// Same guard the install/callback path applies: never let two teams bind one
+			// installation, or webhook deliveries for it route to whichever team loaded first.
+			if (isInstallationBoundToAnotherTeam?.(installationId) === true) {
+				res.status(409).json({ error: "This GitHub installation is already connected to a different Quire team." });
+				return;
+			}
+
 			let account: InstallationAccount;
 			try {
 				account = await getInstallationAccount(installationId);
@@ -500,7 +529,7 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 		}
 	});
 
-	router.post("/repos/setup", validateBody(RepoIdentifierSchema), async (req, res, next) => {
+	router.post("/repos/setup", requireRole("owner", "admin"), validateBody(RepoIdentifierSchema), async (req, res, next) => {
 		try {
 			if (accountState.current.installations.length === 0) {
 				res.status(400).json({ error: "Install the GitHub App first" });
@@ -516,7 +545,7 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 
 	// Read-only counterpart to /repos/setup — lets the client check whether the setup PR is
 	// needed before asking the user to confirm opening one.
-	router.post("/repos/setup-status", validateBody(RepoIdentifierSchema), async (req, res, next) => {
+	router.post("/repos/setup-status", requireRole("owner", "admin"), validateBody(RepoIdentifierSchema), async (req, res, next) => {
 		try {
 			if (accountState.current.installations.length === 0) {
 				res.status(400).json({ error: "Install the GitHub App first" });
@@ -573,7 +602,7 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 	// from here). A disconnect can orphan several watched repos at once now (every repo bound
 	// through this installation, not just a single "active" one) — each is torn down the same
 	// way /repos/:owner/:name DELETE tears down one.
-	router.post("/disconnect/:installationId", async (req, res, next) => {
+	router.post("/disconnect/:installationId", requireRole("owner", "admin"), async (req, res, next) => {
 		try {
 			const installationId = Number(req.params["installationId"]);
 			if (!Number.isInteger(installationId) || installationId <= 0) {
@@ -617,7 +646,7 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 
 	// The "start over" nuke — wipes every bound installation, every watched repo, and the
 	// persisted file itself, distinct from unbinding one installation at a time above.
-	router.post("/disconnect-all", async (_req, res, next) => {
+	router.post("/disconnect-all", requireRole("owner", "admin"), async (_req, res, next) => {
 		try {
 			// Locked per-team against team.ts's collaborator-sync reads — see the DELETE
 			// /repos/:owner/:name handler above for why the revoke call itself runs after the

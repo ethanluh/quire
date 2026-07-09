@@ -1,7 +1,7 @@
 import { parse } from "cookie";
 import type { Request, Response, NextFunction } from "express";
 import type { Allowlist } from "../allowlist.js";
-import { SESSION_COOKIE_NAME, SESSION_TTL_MS, renewSession, verifySession } from "../session.js";
+import { SESSION_ABSOLUTE_MAX_MS, SESSION_COOKIE_NAME, SESSION_TTL_MS, renewSession, verifySession } from "../session.js";
 import { cookieOptions } from "../stateCookie.js";
 
 declare global {
@@ -30,13 +30,19 @@ export function requireSession(sessionSecret: string, allowlist: Allowlist, secu
 			res.status(401).json({ error: "Sign in required" });
 			return;
 		}
+		// Absolute lifetime, measured from the original grant — sliding renewal can't extend a
+		// session past this, so a leaked cookie can't be kept alive forever by re-use.
+		if (Date.now() - payload.issuedAt >= SESSION_ABSOLUTE_MAX_MS) {
+			res.status(401).json({ error: "Session expired — sign in again" });
+			return;
+		}
 		if (!allowlist.isAllowed(payload.login)) {
 			res.status(401).json({ error: "This GitHub account is no longer authorized to use this Quire instance" });
 			return;
 		}
 
 		res.locals.login = payload.login;
-		res.cookie(SESSION_COOKIE_NAME, renewSession(payload.login, sessionSecret), cookieOptions(secureCookies, SESSION_TTL_MS));
+		res.cookie(SESSION_COOKIE_NAME, renewSession(payload, sessionSecret), cookieOptions(secureCookies, SESSION_TTL_MS));
 		next();
 	};
 }
