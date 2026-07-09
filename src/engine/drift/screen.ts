@@ -44,3 +44,14 @@ export async function runCheapScreen(
 	}
 	return { status: "flagged", signals };
 }
+
+// The one place a signal is added to an already-built DriftVerdict (as opposed to a fresh
+// verdict built from a signals array above) — used by callers that learn about a signal
+// after the fact, e.g. a bundle-wide check that only has results once every member's own
+// screen has already run (see orchestratePipeline's symbol-coherence pass).
+export function appendDriftSignal(verdict: DriftVerdict, signal: DriftSignal): DriftVerdict {
+	if (verdict.status === "flagged") {
+		return { status: "flagged", signals: [...verdict.signals, signal] };
+	}
+	return { status: "flagged", signals: [signal] };
+}

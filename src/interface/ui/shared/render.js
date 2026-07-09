@@ -98,6 +98,7 @@ function prDriftBadges(prId, drift) {
   const footprintCount = signals.filter(s => s.kind === 'footprintAnomaly').length;
   const behavioralCount = signals.filter(s => s.kind === 'behavioralDelta').length;
   const effectCount = signals.filter(s => s.kind === 'effectList').length;
+  const inconsistencyCount = signals.filter(s => s.kind === 'symbolInconsistency').length;
   const badges = [];
   // footprintAnomaly/behavioralDelta are grounded in static analysis or confirmed
   // behavior, not an LLM judgment call — treated as the more severe tier (red).
@@ -106,6 +107,10 @@ function prDriftBadges(prId, drift) {
   if (footprintCount > 0) badges.push(`<span class="badge badge-critical">Footprint: ${footprintCount}</span>`);
   if (behavioralCount > 0) badges.push(`<span class="badge badge-critical">Behavioral: ${behavioralCount}</span>`);
   if (effectCount > 0) badges.push(`<span class="badge badge-flagged">Effects: ${effectCount}</span>`);
+  // symbolInconsistency is a heuristic name-based match (no rename/scope resolution in v1) —
+  // lower-confidence than footprintAnomaly's file-set check, so it sits in the amber tier
+  // alongside effectList rather than the red tier.
+  if (inconsistencyCount > 0) badges.push(`<span class="badge badge-flagged">Symbol conflict: ${inconsistencyCount}</span>`);
   return badges.join('');
 }
 
@@ -174,13 +179,30 @@ function renderHeaderTeam(activeName, teams) {
   }
 }
 
+function dedupeSymbolInconsistencySignals(signals) {
+  // findSymbolInconsistencies emits one signal per implicated PR (so each PR's own badge,
+  // via prDriftBadges above, reflects the conflict) — but that means the same bundle-wide
+  // conflict appears once per implicated PR in this flat list. Collapse to one line per
+  // distinct conflict for this list view only; per-PR badge counts are unaffected since
+  // they read the un-deduped `drift.signals` directly.
+  const seen = new Set();
+  return signals.filter(s => {
+    if (s.kind !== 'symbolInconsistency') return true;
+    const key = s.symbol.name + ':' + s.touchedBy.map(t => t.prId + ':' + t.operation).sort().join(',');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function renderSignals(drift, members) {
   if (drift.status !== 'flagged') return '';
-  const items = drift.signals.map(s => {
+  const items = dedupeSymbolInconsistencySignals(drift.signals).map(s => {
     const pr = members && members.find(m => m.id === s.prId);
     const prefix = pr ? `[${escapeHtml(pr.repoOwner)}/${escapeHtml(pr.repoName)}#${pr.number}] ` : '';
     if (s.kind === 'effectList') return `${prefix}Orphan effects: ${escapeHtml(s.orphanClauses.join(', '))}`;
     if (s.kind === 'footprintAnomaly') return `${prefix}Surprising symbols: ${escapeHtml(s.surprisingSymbols.map(x => x.name).join(', '))}`;
+    if (s.kind === 'symbolInconsistency') return `${prefix}Symbol conflict: ${escapeHtml(s.description)}`;
     return `${prefix}${escapeHtml(s.description)}`;
   });
   return `<div class="drift-signals"><strong>Drift signals (noted, not an error)</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;

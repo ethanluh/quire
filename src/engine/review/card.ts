@@ -4,7 +4,13 @@ import { computeBlastRadius } from "./blastRadius.js";
 import { detectFlags, isHighRisk } from "./flags.js";
 
 const RESIDUAL_DISCLOSURE =
-	"Behavioral confirm is not yet active. Rare undeclared changes in structurally local, behaviorally silent code may not be caught.";
+	"Behavioral confirm is not yet active. Rare undeclared changes in structurally local, " +
+	"behaviorally silent code may not be caught. Cross-PR symbol-consistency checking is " +
+	"regex-based (no rename detection in v1, and reference-detection may miss non-standard " +
+	"import styles) and matches on bare symbol name only, with no cross-file import " +
+	"resolution — two unrelated PRs that happen to touch a same-named symbol in different " +
+	"files may be flagged as if in conflict. Absence of a symbol-inconsistency flag is not " +
+	"proof the bundle's symbols are consistent.";
 
 // A cheap fingerprint of everything blastRadius/flags/drift/specConformance are computed
 // from: which PRs are in the bundle (bundle.id already hashes the sorted member-id set),
@@ -34,6 +40,11 @@ export function buildReviewCard(
 	if (anchor === undefined) throw new Error("Bundle must have at least one member");
 
 	const memberVerdicts = bundle.members.map((m) => driftVerdicts.get(m.id));
+	// One entry per implicated PR (not deduped) on purpose: prDriftBadges (render.js) derives
+	// each PR's own badge by filtering this same flattened list by prId, so collapsing a
+	// bundle-wide symbolInconsistency signal here would silently drop the badge for whichever
+	// PR's copy got deduped away. The bundle-level "Drift signals" list view (renderSignals)
+	// dedupes for display instead, without touching this per-PR-badge-bearing data.
 	const signals = memberVerdicts.flatMap((v) => (v?.status === "flagged" ? [...v.signals] : []));
 	const drift: DriftVerdict = signals.length > 0 ? { status: "flagged", signals } : { status: "clean" };
 	const flags = detectFlags(bundle);

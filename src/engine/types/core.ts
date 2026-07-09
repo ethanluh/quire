@@ -4,6 +4,19 @@ export interface SymbolRef {
 	kind: "function" | "class" | "variable" | "type" | "export";
 }
 
+export type SymbolOperation = "add" | "rename" | "remove" | "reference";
+
+// One member's touch of a symbol name, tagged with what happened to it — unlike SymbolRef
+// (a bare declaration/import site), this captures the operation so cross-member coherence
+// checking (src/engine/drift/symbolCoherence/check.ts) can tell "PR-A added this" apart from
+// "PR-B still expects this to exist."
+export interface SymbolTouch {
+	name: string;
+	filePath: string;
+	kind: SymbolRef["kind"];
+	operation: SymbolOperation;
+}
+
 export interface DiffHunk {
 	filePath: string;
 	additions: ReadonlyArray<string>;
@@ -77,7 +90,14 @@ export interface Effect {
 export type DriftSignal =
 	| { kind: "effectList"; prId: string; orphanClauses: ReadonlyArray<string> }
 	| { kind: "footprintAnomaly"; prId: string; surprisingSymbols: ReadonlyArray<SymbolRef> }
-	| { kind: "behavioralDelta"; prId: string; description: string; classified: "intended" | "unintended" };
+	| { kind: "behavioralDelta"; prId: string; description: string; classified: "intended" | "unintended" }
+	| {
+			kind: "symbolInconsistency";
+			prId: string;
+			symbol: SymbolRef;
+			touchedBy: ReadonlyArray<{ prId: string; operation: SymbolOperation }>;
+			description: string;
+	  };
 
 export type DriftVerdict =
 	| { status: "clean" }
