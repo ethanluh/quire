@@ -25,4 +25,15 @@ describe("createAllowlist", () => {
 		expect(allowlist.isAllowed("ALICE")).toBe(true);
 		expect(allowlist.isAllowed("bob")).toBe(true);
 	});
+
+	it("allows any login when explicitly set to the wildcard `*`", () => {
+		const allowlist = createAllowlist("*");
+		expect(allowlist.isAllowed("anyone")).toBe(true);
+		expect(allowlist.isAllowed("someone-else")).toBe(true);
+	});
+
+	it("tolerates surrounding whitespace around the wildcard", () => {
+		const allowlist = createAllowlist(" * ");
+		expect(allowlist.isAllowed("anyone")).toBe(true);
+	});
 });

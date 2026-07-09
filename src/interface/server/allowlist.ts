@@ -6,7 +6,16 @@ export interface Allowlist {
 // existing convention of features being off/permissive when their env var is unset (see
 // the OAuth-optional pattern in routes/account.ts). Documented in .env.example as "you
 // almost certainly want this set once hosted," not a silent trap.
+//
+// `*` is a second, explicit way to reach the same allow-all result. It exists because
+// index.ts now throws at boot in production when this var is unset/empty (closing the
+// silent-open-door footgun) — a host that genuinely wants to stay open to any GitHub
+// account needs a non-empty value that still means "allow all" to satisfy that check.
 export function createAllowlist(raw: string | undefined): Allowlist {
+	if (raw !== undefined && raw.trim() === "*") {
+		return { isAllowed: () => true };
+	}
+
 	const logins = new Set(
 		(raw ?? "")
 			.split(",")
