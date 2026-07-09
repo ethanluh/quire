@@ -73,3 +73,51 @@ export interface JudgeConstitution {
 	riskTaxonomy: ReadonlyArray<CompiledRiskTaxonomyEntry>;
 	thresholds: JudgeThresholds;
 }
+
+// A bundle's score against each rubric criterion — every key is mandatory (see
+// bundleJudge.ts's schema): a verdict missing one is malformed, exactly like a
+// semanticHunkResolver.ts attempt missing a hunk.
+export interface JudgeCriteriaScores {
+	direction: number;
+	drift: number;
+	blastRadius: number;
+	reversibility: number;
+	precedent: number;
+}
+
+// The judge's structured output for one bundle. Never trusted directly (INV-1) — gate.ts
+// (Phase 3) is what actually decides whether this verdict is allowed to drive an autonomous
+// action; the verdict itself is only ever a declaration, same status as declaredDirection.
+export interface JudgeVerdict {
+	gesture: "accept" | "defer" | "reject";
+	confidence: number;
+	criteria: JudgeCriteriaScores;
+	// Union of the deterministic riskTaxonomy.ts matches and whatever the model itself
+	// names — docs/judge-constitution.md: "a match from either source is treated
+	// identically." Always taxonomy `id`s, never free-form text, so gate.ts can compare
+	// against the constitution's own taxonomy list.
+	riskFlags: ReadonlyArray<string>;
+	rationale: string;
+	// bundleId of each PrecedentExample (precedent.ts) the model actually weighed —
+	// lets a human (or the audit-sampling check, Phase 5) verify the citation is real
+	// rather than trusting the model's own claim that it consulted precedent.
+	precedentIds: ReadonlyArray<string>;
+	// provider.modelKey (e.g. "anthropic:claude-opus-4-8") — which model produced this,
+	// so a later audit can tell whether bias mitigation (a distinct judge model, see
+	// resolveJudgeProvider.ts) was actually active for this specific verdict.
+	modelId: string;
+}
+
+// One past bundle a human already decided on, retrieved as few-shot grounding for the
+// current candidate (precedent.ts). Never includes a bundle the judge itself decided —
+// precedent must be a human's own directional call, not the judge's, or "precedent match"
+// would silently become the judge grading itself against its own prior outputs.
+export interface PrecedentExample {
+	bundleId: string;
+	direction: string;
+	effectSummary: string;
+	gesture: "accept" | "reject" | "defer";
+	// Word-overlap similarity to the candidate bundle's effectSummary, 0..1 — informational
+	// (used for ranking/testing), not itself sent to the model as a score.
+	similarity: number;
+}
