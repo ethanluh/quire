@@ -7,6 +7,7 @@ import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
+import { TypeScriptAnalyzer } from "../../src/engine/drift/footprint/typescript.js";
 import type { PullRequest } from "../../src/engine/types/core.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 import type {
@@ -131,6 +132,47 @@ describe("orchestratePipeline — integration", () => {
 		const prs = [makePR("pr-1", "add passwordless auth")];
 		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore });
 		expect(result.cards[0]?.drift.status).toBe("flagged");
+	});
+
+	it("attaches a symbolInconsistency signal to the implicated PRs within a bundle", async () => {
+		// pr-1 adds "helper", pr-2 removes it, pr-3 still imports it — no pair looks wrong in
+		// isolation, only the merged triple does. Uses the real TypeScriptAnalyzer (not the
+		// stub) since StubStaticAnalyzer returns one shared result regardless of which
+		// member's diff is passed in, and this needs three different per-member results.
+		const pr1 = makePR("pr-1", "add passwordless auth", {
+			filesTouched: ["src/helper.ts"],
+			diff: { raw: "", hunks: [{ filePath: "src/helper.ts", additions: ["+export function helper() {}"], deletions: [] }] },
+		});
+		const pr2 = makePR("pr-2", "add passwordless auth", {
+			filesTouched: ["src/helper.ts"],
+			diff: { raw: "", hunks: [{ filePath: "src/helper.ts", additions: [], deletions: ["-export function helper() {}"] }] },
+		});
+		const pr3 = makePR("pr-3", "add passwordless auth", {
+			filesTouched: ["src/consumer.ts"],
+			diff: { raw: "", hunks: [{ filePath: "src/consumer.ts", additions: ["+import { helper } from './helper';"], deletions: [] }] },
+		});
+
+		stub.queueCompletion('["adds OTP login"]'); // pr-1 extractor
+		stub.queueCompletion('["adds OTP login"]'); // pr-2 extractor
+		stub.queueCompletion('["adds OTP login"]'); // pr-3 extractor
+		stub.queueCompletion("1"); // classify: pr-2 joins pr-1's bundle
+		stub.queueCompletion("1"); // classify: pr-3 joins pr-1's bundle
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }])); // pr-1 matcher
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }])); // pr-2 matcher
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }])); // pr-3 matcher
+
+		const result = await orchestratePipeline(
+			[pr1, pr2, pr3], DEFAULT_CONFIG, { provider: stub, analyzer: new TypeScriptAnalyzer(), auditStore },
+		);
+
+		expect(result.bundles).toHaveLength(1);
+		expect(result.cards).toHaveLength(1);
+		const drift = result.cards[0]?.drift;
+		expect(drift?.status).toBe("flagged");
+		if (drift?.status === "flagged") {
+			const signals = drift.signals.filter((s) => s.kind === "symbolInconsistency");
+			expect(new Set(signals.map((s) => s.prId))).toEqual(new Set(["pr-2", "pr-3"]));
+		}
 	});
 
 	it("extractor never receives declaredDirection in any LLM call (INV-2)", async () => {

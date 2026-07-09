@@ -1,4 +1,4 @@
-import type { Bundle, DriftVerdict, PullRequest, ReviewCard } from "../types/core.js";
+import type { Bundle, DriftVerdict, PullRequest, ReviewCard, SymbolTouch } from "../types/core.js";
 import type { GateConfig } from "../types/gate.js";
 import type { InstrumentationSink } from "../types/instrumentation.js";
 import type { LlmProvider } from "../drift/effectList/provider.js";
@@ -8,7 +8,8 @@ import type { GitHubClient } from "../github/client.js";
 import { runGate } from "../gate/gate.js";
 import { buildBundles, type BundleConfig } from "../bundle/bundler.js";
 import { errorMessage } from "../util/error.js";
-import { runCheapScreen } from "../drift/screen.js";
+import { appendDriftSignal, runCheapScreen } from "../drift/screen.js";
+import { findSymbolInconsistencies } from "../drift/symbolCoherence/check.js";
 import { buildReviewCard, computeInputsHash, reuseReviewCard } from "../review/card.js";
 import { PrEffectCache } from "../cache/prCache.js";
 import { checkSpecConformance, type LinkedIssue, type SpecConformanceResult } from "../specConformance/check.js";
@@ -151,10 +152,51 @@ export async function orchestratePipeline(
 
 			const driftVerdicts = new Map<string, DriftVerdict>();
 			const specResultsByPr = new Map<string, SpecConformanceResult>();
-			for (const member of bundle.members) {
+			const touchesByPr = new Map<string, ReadonlyArray<SymbolTouch>>();
+
+			// Pass 1: per-member cheap screen + symbol-touch extraction, run concurrently
+			// (members are independent — matches runCheapScreen's own internal Promise.all).
+			// Touch extraction is skipped for a singleton bundle: findSymbolInconsistencies
+			// can never emit a signal with fewer than 2 members, so there's nothing for it
+			// to find and the extra diff scan would be pure waste.
+			//
+			// Note: moving logDriftScreen (pass 2, below) after this pass means a bundle
+			// whose Pass 1 throws partway through loses the instrumentation log entry for
+			// any member that had already screened cleanly earlier in this same bundle —
+			// unlike the old single-loop version, which logged each member immediately.
+			// Accepted trade-off: pass 2 needs every member's touches merged first so
+			// logDriftScreen reports the post-coherence-check signal count, not a stale
+			// pre-merge one; a mid-bundle analyzer/provider throw already aborts the whole
+			// pipeline run (see the outer catch below), so the lost log entries are a
+			// narrower symptom of a failure mode the caller already has to handle.
+			const checkCoherence = bundle.members.length > 1;
+			await Promise.all(bundle.members.map(async (member) => {
 				const rawClauses = effectsByPr.get(member.id) ?? [];
-				const verdict = await runCheapScreen(member, bundle, rawClauses, provider, analyzer);
+				if (!checkCoherence) {
+					driftVerdicts.set(member.id, await runCheapScreen(member, bundle, rawClauses, provider, analyzer));
+					return;
+				}
+				const [verdict, touches] = await Promise.all([
+					runCheapScreen(member, bundle, rawClauses, provider, analyzer),
+					analyzer.analyzeSymbolTouches(member.diff),
+				]);
 				driftVerdicts.set(member.id, verdict);
+				touchesByPr.set(member.id, touches);
+			}));
+
+			// Pass 1.5: bundle-wide coherence check — needs every member's touches at once to
+			// see interactions no single member's diff shows on its own. Runs between pass 1
+			// and pass 2 so logDriftScreen below sees the final, merged verdict.
+			if (checkCoherence) {
+				for (const signal of findSymbolInconsistencies(bundle, touchesByPr)) {
+					const existing = driftVerdicts.get(signal.prId) ?? { status: "clean" as const };
+					driftVerdicts.set(signal.prId, appendDriftSignal(existing, signal));
+				}
+			}
+
+			// Pass 2: logging + spec conformance, against the now-final verdict.
+			for (const member of bundle.members) {
+				const verdict = driftVerdicts.get(member.id) ?? { status: "clean" as const };
 				await logSafely(() =>
 					sink?.logDriftScreen?.({
 						bundleId: bundle.id,
