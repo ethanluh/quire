@@ -4,7 +4,7 @@ import { classifyBestMatch } from "../drift/effectList/clusterClassifier.js";
 import { settleWithConcurrency } from "../util/concurrency.js";
 import { errorMessage } from "../util/error.js";
 
-const CENTROID_COMPARISON_CONCURRENCY = 4;
+const TEXT_COMPARISON_CONCURRENCY = 4;
 
 function cosineSimilarity(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
 	let dot = 0, normA = 0, normB = 0;
@@ -62,10 +62,12 @@ export interface ClusterResult {
 }
 
 // One pre-existing cluster carried over from a prior clusterPRs() call, so its members
-// don't need to be re-compared against every centroid again (see buildBundles()'s caller
-// for how this is derived from the prior run's Bundle.effectSummary/members).
+// don't need to be re-compared against each other again (see buildBundles()'s caller for
+// how this is derived from the prior run's Bundle.members). No collapsed centroid text —
+// each member's own effect text is looked up from `effectsByPr` (which already covers every
+// current PR, seed members included) so it can stand as its own node in the similarity
+// graph below instead of being reduced to a single frozen summary.
 export interface ClusterSeed {
-	centroidText: string;
 	members: ReadonlyArray<PullRequest>;
 }
 
@@ -82,10 +84,21 @@ export interface EmbeddingCache {
 // declared-direction prior. effectsByPr is expected to come from extraction that ran
 // blind to declaredDirection (INV-2).
 //
+// Graph framing: each PR (new or already seeded) is a node; an edge exists between two
+// nodes when their effect-text similarity clears `config.threshold`. A "cluster" is a
+// connected component of that graph, not a single anchor's neighborhood — so A–B–C joins
+// into one component even when A and C alone don't clear the threshold, as long as B
+// bridges them (transitivity that a single-anchor/centroid comparison would miss: A vs. C
+// directly can fail while both A vs. B and B vs. C succeed). Components are built
+// incrementally as PRs are processed (order = `prs`' order for new arrivals, after
+// `seeds`), using union-by-merge on plain arrays rather than a textbook disjoint-set
+// structure, since clusters here are small and rarely merge more than a handful of times
+// per run.
+//
 // `prs` should contain only PRs not already carried over via `seeds` — every PR passed
-// here is compared against every seed centroid plus any centroid created earlier in this
-// same call, exactly as if `seeds` didn't exist, just without re-doing the comparisons
-// `seeds`' own members already settled in a prior call.
+// here is compared against every individual member text of every existing component
+// (seeded or created earlier in this same call), exactly as if `seeds` didn't exist, just
+// without re-doing the comparisons `seeds`' own members already settled in a prior call.
 export async function clusterPRs(
 	prs: ReadonlyArray<PullRequest>,
 	effectsByPr: ReadonlyMap<string, ReadonlyArray<string>>,
@@ -98,8 +111,16 @@ export async function clusterPRs(
 	// passed, since a stale default would defeat the point of the cache-key check.
 	modelKey = "",
 ): Promise<ClusterResult> {
+	function effectText(pr: PullRequest): string {
+		return (effectsByPr.get(pr.id) ?? []).join(". ");
+	}
+
+	// clusters[i] and memberTexts[i] are always kept in lockstep: memberTexts[i] holds the
+	// individual effect text of every PR in clusters[i], not a single reduced summary — the
+	// per-member granularity is exactly what lets a later arrival match on any member, not
+	// just the founding one.
 	const clusters: PullRequest[][] = seeds.map((s) => [...s.members]);
-	const centroids: string[] = seeds.map((s) => s.centroidText);
+	const memberTexts: string[][] = seeds.map((s) => s.members.map((m) => effectText(m)));
 	const failures: ClusteringFailure[] = [];
 
 	// Resolves one text's embedding: a persisted cache hit short-circuits the network
@@ -114,7 +135,7 @@ export async function clusterPRs(
 
 	// Memoizes the in-flight/resolved promise by text for the life of this call, since a
 	// real network-backed provider.embed() would otherwise re-embed the same unchanged
-	// centroid on every subsequent PR comparison. Caching the promise (not just the
+	// member text on every subsequent PR comparison. Caching the promise (not just the
 	// resolved value) also dedupes concurrent requests for the same text — this is a
 	// separate, shorter-lived layer from `embeddingCache` above (which persists resolved
 	// values across calls/runs; this one only dedupes concurrent callers within this one
@@ -131,60 +152,93 @@ export async function clusterPRs(
 	}
 	const cachingProvider: Pick<LlmProvider, "embed"> = { embed: cachedEmbed };
 
-	// Picks the best-matching existing centroid for one PR, or -1 to start a new cluster.
-	// Two strategies, chosen once per provider rather than inferred per call (see
-	// LlmProvider.supportsEmbeddings): cosine similarity over real embed() vectors when the
-	// provider has them, otherwise a single LLM classification call against every centroid
-	// at once (clusterClassifier.ts) — cheaper than one LLM call per centroid, and avoids
-	// falling back to a weak word-overlap heuristic for providers with no embeddings
-	// endpoint (e.g. Anthropic).
-	async function bestMatch(prEffectText: string): Promise<number> {
-		if (!provider.supportsEmbeddings) return classifyBestMatch(prEffectText, centroids, provider);
+	// Returns the indices of every existing cluster this PR has an edge to (ascending, no
+	// duplicates), or [] to start a new cluster. Two strategies, chosen once per provider
+	// rather than inferred per call (see LlmProvider.supportsEmbeddings):
+	//
+	// - Embeddings: compare against every individual member text of every cluster (flattened),
+	//   collecting every cluster whose best-matching member clears the threshold. A PR that
+	//   bridges two previously separate clusters returns both indices, so the caller can
+	//   merge them into one component instead of picking a single "best" match — the
+	//   multi-match merge is what makes this a true connected-components computation rather
+	//   than nearest-neighbor assignment.
+	// - No embeddings: a single LLM classification call against every individual member text
+	//   at once (clusterClassifier.ts) — cheaper than one LLM call per candidate, but the
+	//   protocol only ever names one match, so this path cannot merge two clusters in one
+	//   step the way the embeddings path can (documented limitation, not a bug: it still
+	//   fixes the frozen-anchor problem by comparing against every member, not just the
+	//   founder, since a matching non-founder member now surfaces its cluster correctly).
+	async function matchingClusters(prEffectText: string): Promise<number[]> {
+		if (prEffectText.trim() === "") return [];
 
-		// Comparisons against every existing centroid are independent of each other for
+		const flatTexts: string[] = [];
+		const flatClusterIdx: number[] = [];
+		memberTexts.forEach((texts, clusterIdx) => {
+			for (const text of texts) {
+				flatTexts.push(text);
+				flatClusterIdx.push(clusterIdx);
+			}
+		});
+		if (flatTexts.length === 0) return [];
+
+		if (!provider.supportsEmbeddings) {
+			const matchIdx = await classifyBestMatch(prEffectText, flatTexts, provider);
+			return matchIdx >= 0 ? [flatClusterIdx[matchIdx]!] : [];
+		}
+
+		// Comparisons against every existing member text are independent of each other for
 		// this PR, so they run concurrently (capped) instead of one round-trip at a time.
 		const settled = await settleWithConcurrency(
-			centroids,
-			CENTROID_COMPARISON_CONCURRENCY,
-			(centroid) => textSimilarity(prEffectText, centroid, cachingProvider),
+			flatTexts,
+			TEXT_COMPARISON_CONCURRENCY,
+			(text) => textSimilarity(prEffectText, text, cachingProvider),
 		);
 		const firstFailure = settled.find((r) => r.status === "rejected");
 		if (firstFailure !== undefined && firstFailure.status === "rejected") {
 			throw firstFailure.reason;
 		}
 
-		let bestIdx = -1;
-		let bestScore = -1;
+		const matched = new Set<number>();
 		for (let i = 0; i < settled.length; i++) {
 			const result = settled[i];
 			const score = result?.status === "fulfilled" ? result.value : -1;
-			if (score > bestScore) {
-				bestScore = score;
-				bestIdx = i;
-			}
+			if (score >= config.threshold) matched.add(flatClusterIdx[i]!);
 		}
-		return bestScore >= config.threshold ? bestIdx : -1;
+		return [...matched].sort((a, b) => a - b);
 	}
 
 	for (const pr of prs) {
-		const prEffectText = (effectsByPr.get(pr.id) ?? []).join(". ");
+		const prEffectText = effectText(pr);
 		// A failure here must not discard clustering progress made for every other PR —
 		// skip this PR for this round instead, the same way extraction failures are
 		// isolated per-PR in buildBundles().
-		let bestIdx: number;
+		let matchedClusterIdxs: number[];
 		try {
-			bestIdx = await bestMatch(prEffectText);
+			matchedClusterIdxs = await matchingClusters(prEffectText);
 		} catch (err) {
 			failures.push({ pr, error: errorMessage(err) });
 			continue;
 		}
 
-		if (bestIdx >= 0) {
-			clusters[bestIdx]!.push(pr);
-		} else {
+		if (matchedClusterIdxs.length === 0) {
 			clusters.push([pr]);
-			centroids.push(prEffectText);
+			memberTexts.push([prEffectText]);
+			continue;
 		}
+
+		// Merge every matched cluster into the lowest-indexed one, then add this PR to it.
+		// `target` (the smallest matched index) never shifts as later, larger indices are
+		// spliced out — descending order guarantees each splice only ever removes an index
+		// greater than every index still left to process.
+		const [target, ...rest] = matchedClusterIdxs;
+		for (const idx of [...rest].sort((a, b) => b - a)) {
+			clusters[target!]!.push(...clusters[idx]!);
+			memberTexts[target!]!.push(...memberTexts[idx]!);
+			clusters.splice(idx, 1);
+			memberTexts.splice(idx, 1);
+		}
+		clusters[target!]!.push(pr);
+		memberTexts[target!]!.push(prEffectText);
 	}
 
 	return { clusters, failures };

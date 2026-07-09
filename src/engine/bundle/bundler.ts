@@ -128,9 +128,9 @@ export async function buildBundles(
 		// PR body edit or CI status change with no new commit must still surface here even
 		// though the seed itself (its effects/clustering) is otherwise untouched. `?? m`
 		// is unreachable given the `currentIds.has(m.id)` check above, kept only as a
-		// type-safety fallback.
+		// type-safety fallback. No centroidText here — clusterPRs derives each member's own
+		// effect text from `effectsByPr`, which already covers every current PR.
 		seeds.push({
-			centroidText: bundle.effectSummary,
 			members: bundle.members.map((m) => currentById.get(m.id) ?? m),
 		});
 		for (const m of bundle.members) seededIds.add(m.id);
