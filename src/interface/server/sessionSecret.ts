@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { readJsonFile, writeJsonFileAtomic } from "../../engine/jsonFile.js";
+import { readJsonFile, writeSecretFileAtomic } from "../../engine/jsonFile.js";
 
 const SECRET_FILE_NAME = "session-secret.json";
 
@@ -27,7 +27,9 @@ export async function resolveSessionSecret(dataDir: string): Promise<string> {
 	if (persisted !== undefined) return persisted.secret;
 
 	const secret = randomBytes(32).toString("hex");
-	await writeJsonFileAtomic(path, { secret });
+	// This key signs both session cookies and invite tokens — anyone who can read it can forge
+	// a session for any login or an admin invite for any team, so write it 0600, not 0644.
+	await writeSecretFileAtomic(path, { secret });
 	console.warn(
 		"QUIRE_SESSION_SECRET not set — generated one and saved it to " +
 			`${path} so sessions and invite links survive a restart. Set the env var explicitly ` +

@@ -6,6 +6,7 @@ import type { LlmProviderHolder } from "../../../engine/drift/effectList/provide
 import type { ResolvedLlmProvider } from "../resolveLlmProvider.js";
 import type { LlmAccountState } from "../llmAccountState.js";
 import { validateBody } from "../middleware/validation.js";
+import { requireRole } from "../middleware/requireRole.js";
 
 const ConnectSchema = z.object({
 	provider: z.enum(["anthropic", "gemini"]),
@@ -56,7 +57,7 @@ export function llmAccountRouter(options: LlmAccountRouterOptions): Router {
 		res.json({ connected: true, provider: account.provider, connectedAt: account.connectedAt });
 	});
 
-	router.post("/connect", validateBody(ConnectSchema), async (req, res, next) => {
+	router.post("/connect", requireRole("owner", "admin"), validateBody(ConnectSchema), async (req, res, next) => {
 		const previous = connectInFlight;
 		let release!: () => void;
 		connectInFlight = new Promise((resolve) => {
@@ -71,7 +72,10 @@ export function llmAccountRouter(options: LlmAccountRouterOptions): Router {
 			try {
 				await verifyProviderWorks(candidate);
 			} catch (err) {
-				res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+				// Don't reflect the raw provider-SDK error (it can carry request URLs/headers used
+				// for reconnaissance) — log it server-side, return a fixed message to the client.
+				console.warn("LLM provider key verification failed:", err);
+				res.status(400).json({ error: "That API key could not be verified with the provider." });
 				return;
 			}
 
@@ -91,7 +95,7 @@ export function llmAccountRouter(options: LlmAccountRouterOptions): Router {
 		}
 	});
 
-	router.post("/disconnect", async (_req, res, next) => {
+	router.post("/disconnect", requireRole("owner", "admin"), async (_req, res, next) => {
 		try {
 			// Resolve the fallback before mutating any state: if it throws (e.g. a stale
 			// LLM_PROVIDER env var with no matching key set), nothing has changed yet, so

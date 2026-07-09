@@ -4,7 +4,10 @@ import { EventEmitter } from "node:events";
 // connections) already re-fetch and diff the actual data themselves, so this only needs to
 // wake them up, not carry what changed.
 const emitter = new EventEmitter();
-emitter.setMaxListeners(0); // one listener per open SSE connection, unbounded by design
+// One listener per open SSE connection. Bounded a little above the SSE connection cap
+// (MAX_SSE_CONNECTIONS in routes/events.ts) rather than 0/unlimited, so a genuine listener
+// leak still trips Node's warning instead of being silently masked.
+emitter.setMaxListeners(600);
 
 export function notifyStateChanged(): void {
 	emitter.emit("changed");

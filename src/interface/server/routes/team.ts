@@ -347,6 +347,16 @@ export function teamRouter(
 				res.status(400).json({ error: "This invite has been revoked" });
 				return;
 			}
+			// Single-use: an invite link is a 7-day bearer capability (and can grant admin), so a
+			// leaked/forwarded URL must not stay joinable after the intended invitee redeems it.
+			// A redeemer who is already a member of this team is the one exception — a second
+			// browser or a re-click by the same accepted user shouldn't 400 (the membership add
+			// below is idempotent, and the role never escalates: syncCollaboratorAdd uses their
+			// existing role, not payload.role).
+			if (inviteRecord?.redeemedAt !== undefined && inviteRecord.redeemedBy !== login) {
+				res.status(400).json({ error: "This invite has already been used" });
+				return;
+			}
 
 			const existingMembership = await teamStore.getMembership(payload.teamId, login);
 			if (existingMembership === undefined) {
@@ -365,10 +375,10 @@ export function teamRouter(
 			await teamStore.markInviteRedeemed(payload.teamId, payload.id, login);
 
 			// Best-effort, never awaited into the response — see syncCollaboratorAdd. Uses the
-			// login's actual current role, not payload.role: invites are reusable (nothing
-			// checks redeemedAt on redemption, only revokedAt), so a still-valid higher-role
-			// invite re-redeemed by an existing lower-role member must not grant them a GitHub
-			// permission above what Quire itself records for them.
+			// login's actual current role, not payload.role: invites are single-use except for a
+			// re-click by the already-joined redeemer (see the redeemedAt guard above), so a
+			// still-valid higher-role invite re-redeemed by that existing member must not grant
+			// them a GitHub permission above what Quire itself records for them.
 			syncCollaboratorAdd(payload.teamId, login, existingMembership?.role ?? payload.role);
 
 			res.json({ teamId: payload.teamId, name: team.name });

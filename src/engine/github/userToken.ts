@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
+import { readJsonFile, writeSecretFileAtomic } from "../jsonFile.js";
+import { sanitizeIdentifier } from "../util/identifier.js";
 import { OAuthExchangeError } from "./oauth.js";
 import type { OAuthDeps } from "./oauth.js";
 import type { UserTokenCache } from "./userTokenCache.js";
@@ -33,7 +34,11 @@ function isStoredUserToken(value: unknown): value is StoredUserToken {
 // OAuth exchange that first writes it) and routes/githubApp.ts (which refreshes it), so both
 // agree on the layout by construction instead of hand-rolling the same join twice.
 export function userTokenPath(dataDir: string, login: string): string {
-	return join(dataDir, "users", login, "github-user-token.json");
+	// `login` is HMAC-verified from a GitHub identity (charset [A-Za-z0-9-]) before it reaches
+	// here, so this can't traverse today — but TeamStore already routes the same login through
+	// sanitizeIdentifier for its own paths, and this is the one per-login path that didn't.
+	// Sanitize here too so the guarantee doesn't hinge on every caller's upstream validation.
+	return join(dataDir, "users", sanitizeIdentifier(login, { scope: "user data", label: "login" }), "github-user-token.json");
 }
 
 export async function loadUserToken(path: string): Promise<StoredUserToken | undefined> {
@@ -41,7 +46,8 @@ export async function loadUserToken(path: string): Promise<StoredUserToken | und
 }
 
 export async function saveUserToken(path: string, token: StoredUserToken): Promise<void> {
-	await writeJsonFileAtomic(path, token);
+	// A GitHub OAuth refresh token — write it 0600, not the default 0644.
+	await writeSecretFileAtomic(path, token);
 }
 
 export async function clearUserToken(path: string): Promise<void> {

@@ -69,18 +69,46 @@ function requireEnv(name: string): string {
 async function main(): Promise<void> {
 	const app = express();
 
+	// Baseline security headers on every response. Not a full CSP (the current UI leans on
+	// inline event handlers, which a strict script-src would break) — but nosniff, a deny
+	// frame policy, and a tight referrer policy are free defense-in-depth: they blunt MIME
+	// confusion, clickjacking, and referrer-based token/path leakage regardless of the CSP gap.
+	app.use((_req, res, next) => {
+		res.setHeader("X-Content-Type-Options", "nosniff");
+		res.setHeader("X-Frame-Options", "DENY");
+		res.setHeader("Referrer-Policy", "no-referrer");
+		next();
+	});
+
 	// `KEY=` (present but empty) in a .env file sets process.env.KEY to "", not undefined —
 	// normalize that to undefined here so every fallback below (`??`) actually triggers.
 	const rawPublicUrl = process.env["QUIRE_PUBLIC_URL"];
 	const publicUrl = rawPublicUrl !== undefined && rawPublicUrl !== "" ? rawPublicUrl : undefined;
 	const isProduction = publicUrl !== undefined && publicUrl.startsWith("https://");
 
+	// On a real (HTTPS) host these two footguns must fail closed, not just warn — an empty
+	// allowlist admits every GitHub account on the internet, and a missing signing secret means
+	// the session/invite HMAC key is auto-generated onto the data volume where a backup or
+	// volume read can lift it. Both are fine to default permissively for local/dogfood use only.
+	const rawSessionSecret = process.env["QUIRE_SESSION_SECRET"];
+	if (isProduction && (rawSessionSecret === undefined || rawSessionSecret === "")) {
+		throw new Error(
+			"QUIRE_SESSION_SECRET must be set when hosting (QUIRE_PUBLIC_URL is https). " +
+				"Generate one with `openssl rand -hex 32` and set it in the environment.",
+		);
+	}
 	const sessionSecret = await resolveSessionSecret(DATA_DIR);
 	const allowedLogins = process.env["QUIRE_ALLOWED_GITHUB_LOGINS"];
-	const allowlist = createAllowlist(allowedLogins);
 	if (allowedLogins === undefined || allowedLogins === "") {
+		if (isProduction) {
+			throw new Error(
+				"QUIRE_ALLOWED_GITHUB_LOGINS must be set when hosting (QUIRE_PUBLIC_URL is https) — " +
+					"an empty allowlist would let any GitHub account sign in. Set a comma-separated login list.",
+			);
+		}
 		console.warn("QUIRE_ALLOWED_GITHUB_LOGINS not set — any GitHub account can sign in. Set this before hosting.");
 	}
+	const allowlist = createAllowlist(allowedLogins);
 
 	const appConfig: GitHubAppConfig = {
 		appId: requireEnv("GITHUB_APP_ID"),
@@ -161,7 +189,7 @@ async function main(): Promise<void> {
 	if (webhookConfig !== undefined) {
 		app.use(
 			"/webhooks/github",
-			express.raw({ type: "application/json" }),
+			express.raw({ type: "application/json", limit: "1mb" }),
 			verifyGithubSignature(webhookConfig.secret),
 			webhookRouter((installationId) => {
 				const tenant = registry.findByInstallationId(installationId);
@@ -176,7 +204,10 @@ async function main(): Promise<void> {
 		);
 	}
 
-	app.use(express.json());
+	// Explicit cap rather than the inherited 100kb default, so the bound is intentional. The
+	// PR-ingest batch is the largest legitimate body; 1mb covers it without inviting a large
+	// synchronous parse/validate loop as a DoS lever.
+	app.use(express.json({ limit: "1mb" }));
 
 	// Serve static UI — public; the login gate is enforced by the API, not page delivery,
 	// so the frontend can always load and show an appropriate signed-in/signed-out state.

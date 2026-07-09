@@ -53,17 +53,19 @@ describe("createSession / renewSession", () => {
 		expect(payload?.expiresAt).toBeGreaterThan(Date.now());
 	});
 
-	it("renewSession issues a fresh token with a later expiry, not the same one", () => {
+	it("renewSession issues a fresh token with a later expiry but preserves the original issuedAt", () => {
 		let now = Date.now();
 		jest.spyOn(Date, "now").mockImplementation(() => now);
 
 		const first = createSession("octocat", SECRET);
+		const firstPayload = verifySession(first, SECRET);
 		now += 1000;
-		const renewed = renewSession("octocat", SECRET);
+		const renewed = renewSession(firstPayload!, SECRET);
 
 		expect(renewed).not.toBe(first);
-		const firstPayload = verifySession(first, SECRET);
 		const renewedPayload = verifySession(renewed, SECRET);
 		expect(renewedPayload?.expiresAt).toBeGreaterThan(firstPayload?.expiresAt as number);
+		// Sliding expiry must NOT reset issuedAt — that's what bounds a renewed stolen cookie.
+		expect(renewedPayload?.issuedAt).toBe(firstPayload?.issuedAt);
 	});
 });

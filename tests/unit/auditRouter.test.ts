@@ -34,6 +34,12 @@ describe("auditRouter", () => {
 		const auditStore = new AuditStore();
 		const app = express();
 		app.use(express.json());
+		// Real requests run behind resolveMembership, which always sets res.locals.membership;
+		// the audit routes are owner/admin-gated, so stand in an owner here.
+		app.use((_req, res, next) => {
+			res.locals.membership = { teamId: "test-team", role: "owner" };
+			next();
+		});
 		app.use("/audit", auditRouter(auditStore));
 		server = app.listen(0);
 		return { auditStore };

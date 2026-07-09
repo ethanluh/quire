@@ -21,6 +21,14 @@ function sanitizeLogin(login: string): string {
 	return sanitizeIdentifier(login, { scope: "team data", label: "login" });
 }
 
+// teamId reaches these paths from request bodies (/leave) and signed invite payloads (/join),
+// guarded today only by membership-index inclusion / HMAC. tenant.ts already sanitizes teamId
+// before its own `data/teams/<id>` joins; do the same here so the traversal guarantee doesn't
+// depend on every current and future caller remembering to pre-validate.
+function sanitizeTeamId(teamId: string): string {
+	return sanitizeIdentifier(teamId, { scope: "team data", label: "team id" });
+}
+
 // Thrown by removeMember/setMemberRole when the change would leave a team that still has
 // other members with zero owners. Enforced here rather than in a route handler so every
 // caller — /leave's self-removal, an owner/admin removing someone else, any future
@@ -39,11 +47,11 @@ export class TeamStore {
 	constructor(private readonly dataDir: string) {}
 
 	private teamPath(teamId: string): string {
-		return join(this.dataDir, "teams", teamId, "team.json");
+		return join(this.dataDir, "teams", sanitizeTeamId(teamId), "team.json");
 	}
 
 	private membersPath(teamId: string): string {
-		return join(this.dataDir, "teams", teamId, "members.json");
+		return join(this.dataDir, "teams", sanitizeTeamId(teamId), "members.json");
 	}
 
 	private membershipIndexPath(login: string): string {
@@ -51,7 +59,7 @@ export class TeamStore {
 	}
 
 	private invitesPath(teamId: string): string {
-		return join(this.dataDir, "teams", teamId, "invites.json");
+		return join(this.dataDir, "teams", sanitizeTeamId(teamId), "invites.json");
 	}
 
 	async loadTeam(teamId: string): Promise<Team | undefined> {
