@@ -79,6 +79,7 @@ describe("TenantRegistry", () => {
 			slack: new NoopSlackNotifier(),
 			judgeHealthCheckUrl: undefined,
 			judgeVerifyTimeoutMs: 30 * 60 * 1000,
+			judgeAuditSampleRate: 0,
 			...overrides,
 		};
 		return new TenantRegistry(shared);

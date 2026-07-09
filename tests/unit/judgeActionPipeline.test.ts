@@ -17,7 +17,7 @@ import type { ActionPipelineDeps } from "../../src/engine/judge/actionPipeline.j
 import type { Bundle, PullRequest, ReviewCard } from "../../src/engine/types/core.js";
 import type { JudgeVerdict } from "../../src/engine/types/judge.js";
 import type { MergeabilityResult } from "../../src/engine/types/mergeability.js";
-import type { SlackEscalationMessage, SlackNotifier, SlackOutcomeMessage } from "../../src/interface/notify/slack.js";
+import type { SlackEscalationMessage, SlackNotifier, SlackOutcomeMessage, SlackShadowPredictionMessage } from "../../src/interface/notify/slack.js";
 
 function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
 	return {
@@ -83,6 +83,7 @@ function makeVerdict(overrides: Partial<JudgeVerdict> = {}): JudgeVerdict {
 class RecordingSlack implements SlackNotifier {
 	readonly outcomes: SlackOutcomeMessage[] = [];
 	readonly escalations: SlackEscalationMessage[] = [];
+	readonly shadowPredictions: SlackShadowPredictionMessage[] = [];
 
 	async notifyOutcome(message: SlackOutcomeMessage): Promise<void> {
 		this.outcomes.push(message);
@@ -90,6 +91,10 @@ class RecordingSlack implements SlackNotifier {
 
 	async notifyEscalation(message: SlackEscalationMessage): Promise<void> {
 		this.escalations.push(message);
+	}
+
+	async notifyShadowPrediction(message: SlackShadowPredictionMessage): Promise<void> {
+		this.shadowPredictions.push(message);
 	}
 }
 

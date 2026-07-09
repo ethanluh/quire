@@ -62,6 +62,7 @@ import { auditRouter } from "./routes/audit.js";
 import { adminRouter } from "./routes/admin.js";
 import { githubAppRouter } from "./routes/githubApp.js";
 import { llmAccountRouter } from "./routes/llmAccount.js";
+import { judgeRouter } from "./routes/judge.js";
 
 // A teamId is always one this process minted itself (see teamStore.ts's randomBytes hex
 // id), but it's joined straight into a filesystem path below, so it's validated
@@ -123,6 +124,10 @@ export interface TenantSharedConfig {
 	slack: SlackNotifier;
 	judgeHealthCheckUrl: string | undefined;
 	judgeVerifyTimeoutMs: number;
+	// Fraction (0..1) of gate-allowed "auto" mode verdicts routed to a human instead of
+	// auto-acted on, purely for judge-vs-human agreement calibration (mission §I). 0 samples
+	// nothing.
+	judgeAuditSampleRate: number;
 }
 
 // Everything that used to be a single process-wide singleton (accountState, the GitHub
@@ -232,6 +237,9 @@ async function buildJudgeRunDeps(
 		getDecidedEntries: () => decidedStore.list(),
 		verdictStore,
 		sink,
+		slack: shared.slack,
+		cardsMap: state.cards,
+		auditSampleRate: shared.judgeAuditSampleRate,
 		...(actionDeps !== undefined ? { actionDeps } : {}),
 	};
 }
@@ -369,6 +377,14 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	router.use("/queue", queueRouter(queue, state, decidedStore, accountState));
 	router.use("/shelf", shelfRouter(state, decidedStore, shelfPath));
 	router.use("/audit", auditRouter(auditStore));
+	router.use(
+		"/judge",
+		judgeRouter({
+			...(judgeDeps?.verdictStore !== undefined ? { verdictStore: judgeDeps.verdictStore } : {}),
+			...(judgeDeps?.actionDeps?.actionStore !== undefined ? { actionStore: judgeDeps.actionDeps.actionStore } : {}),
+			decidedStore,
+		}),
+	);
 	router.use(
 		"/admin",
 		adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath, conflictLogPath], decidedStore, shelfPath),

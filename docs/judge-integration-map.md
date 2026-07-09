@@ -43,7 +43,7 @@ as a hard boundary on when the judge *runs*, not a filter on what it's allowed t
 | 2 | `src/engine/judge/bundleJudge.ts`, `src/engine/judge/precedent.ts`, `src/interface/server/resolveJudgeProvider.ts` | `src/engine/types/judge.ts` (add `JudgeVerdict`), `.env.example` (`QUIRE_JUDGE_MODEL`) |
 | 3 | `src/engine/judge/gate.ts`, `src/engine/judge/verdictPersistence.ts` | `src/interface/server/ingestIntoQueue.ts` (the hook call), `src/interface/server/tenant.ts` (construct+wire judge deps), `src/engine/types/instrumentation.ts` (optional `logJudgeVerdict`), `src/engine/instrumentation/logger.ts` (NDJSON sink impl), `docs/instrumentation.md` |
 | 4 | `src/engine/judge/actionPipeline.ts`, `src/engine/judge/actionStatePersistence.ts`, `src/engine/judge/verify.ts`, `src/interface/notify/slack.ts` | `src/engine/types/instrumentation.ts` (`logJudgeAction`), `src/interface/server/routes/webhook.ts` (additive branch for verify-in-flight bundles — see §7 open question), `.env.example` (Slack/verify/CI-fix vars) |
-| 5 | — | `src/engine/judge/gate.ts` (mode dispatch), `src/interface/server/tenant.ts` (audit sampling wiring), `docs/engineering-handoff.md` (new §13) |
+| 5 | — | `src/engine/judge/gate.ts` (mode dispatch), `src/interface/server/tenant.ts` (audit sampling wiring), `docs/engineering-handoff.md` (new §14) |
 
 No existing file's exported signatures change in a breaking way at any phase. Every edit to an
 existing file is either (a) a new optional field/method on an already-optional interface

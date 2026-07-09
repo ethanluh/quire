@@ -183,10 +183,18 @@ async function main(): Promise<void> {
 	const slack = resolveSlackNotifier(process.env["QUIRE_SLACK_WEBHOOK_URL"]);
 	const rawHealthCheckUrl = process.env["QUIRE_JUDGE_HEALTHCHECK_URL"];
 	const judgeHealthCheckUrl = rawHealthCheckUrl !== undefined && rawHealthCheckUrl !== "" ? rawHealthCheckUrl : undefined;
+	// 0..1, default 0.1 (mission §I) — a gate-allowed "auto" verdict sampled at this rate is
+	// routed to a human instead of auto-acted on, purely to measure judge-vs-human agreement
+	// on a live sample rather than only on whatever a human happens to review after the fact.
+	const rawAuditSampleRate = process.env["QUIRE_JUDGE_AUDIT_SAMPLE_RATE"];
+	const parsedAuditSampleRate = rawAuditSampleRate !== undefined && rawAuditSampleRate !== "" ? Number(rawAuditSampleRate) : undefined;
+	const judgeAuditSampleRate = parsedAuditSampleRate !== undefined && Number.isFinite(parsedAuditSampleRate) ? parsedAuditSampleRate : 0.1;
+
 	if (judgeMode === "auto") {
 		console.log(
 			`Bundle judge auto mode: Slack ${process.env["QUIRE_SLACK_WEBHOOK_URL"] ? "configured" : "NOT configured (outcomes/escalations will only be logged to the console)"}` +
-				`, health check ${judgeHealthCheckUrl !== undefined ? `configured (${judgeHealthCheckUrl})` : "not configured (CI result alone will decide VERIFY)"}.`,
+				`, health check ${judgeHealthCheckUrl !== undefined ? `configured (${judgeHealthCheckUrl})` : "not configured (CI result alone will decide VERIFY)"}` +
+				`, audit sample rate ${judgeAuditSampleRate}.`,
 		);
 	}
 
@@ -228,6 +236,7 @@ async function main(): Promise<void> {
 		slack,
 		judgeHealthCheckUrl,
 		judgeVerifyTimeoutMs: JUDGE_VERIFY_TIMEOUT_MS,
+		judgeAuditSampleRate,
 	};
 
 	// Every team gets its own isolated GitHub App installation, repo selection, PR queue,

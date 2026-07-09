@@ -4,6 +4,7 @@ import type { PipelineDeps } from "../../src/interface/server/ingestIntoQueue.js
 import type { JudgeRunDeps } from "../../src/engine/judge/orchestrate.js";
 import { createServerState } from "../../src/interface/server/state.js";
 import { JudgeVerdictStore } from "../../src/engine/judge/judgeVerdictStore.js";
+import { NoopSlackNotifier } from "../../src/interface/notify/slack.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { PrEffectCache } from "../../src/engine/cache/prCache.js";
@@ -112,6 +113,7 @@ function makeJudgeDeps(overrides: Partial<JudgeRunDeps> = {}): JudgeRunDeps {
 		getShelfState: () => ({ entries: [] }),
 		getDecidedEntries: () => [],
 		verdictStore: new JudgeVerdictStore(),
+		slack: new NoopSlackNotifier(),
 		...overrides,
 	};
 }

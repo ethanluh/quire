@@ -1,11 +1,68 @@
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect, jest, afterEach } from "@jest/globals";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runJudgeForBundle } from "../../src/engine/judge/orchestrate.js";
 import type { JudgeRunDeps } from "../../src/engine/judge/orchestrate.js";
 import { JudgeVerdictStore } from "../../src/engine/judge/judgeVerdictStore.js";
+import { JudgeActionStore } from "../../src/engine/judge/judgeActionStore.js";
+import type { ActionPipelineDeps } from "../../src/engine/judge/actionPipeline.js";
+import { NoopSlackNotifier } from "../../src/interface/notify/slack.js";
+import type { SlackEscalationMessage, SlackNotifier, SlackOutcomeMessage, SlackShadowPredictionMessage } from "../../src/interface/notify/slack.js";
+import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
+import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
+import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
+import { StubLlmProvider as DriftStubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.js";
+import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import type { Bundle, PullRequest, ReviewCard } from "../../src/engine/types/core.js";
 import type { JudgeConstitution } from "../../src/engine/types/judge.js";
 import type { InstrumentationSink, JudgeVerdictLog } from "../../src/engine/types/instrumentation.js";
 import type { LlmCall, LlmCallOptions, LlmMessage, LlmProvider } from "../../src/engine/drift/effectList/provider.js";
+
+class RecordingSlack implements SlackNotifier {
+	readonly outcomes: SlackOutcomeMessage[] = [];
+	readonly escalations: SlackEscalationMessage[] = [];
+	readonly shadowPredictions: SlackShadowPredictionMessage[] = [];
+	async notifyOutcome(message: SlackOutcomeMessage): Promise<void> {
+		this.outcomes.push(message);
+	}
+	async notifyEscalation(message: SlackEscalationMessage): Promise<void> {
+		this.escalations.push(message);
+	}
+	async notifyShadowPrediction(message: SlackShadowPredictionMessage): Promise<void> {
+		this.shadowPredictions.push(message);
+	}
+}
+
+let actionDepsDir: string;
+
+afterEach(async () => {
+	if (actionDepsDir) await rm(actionDepsDir, { recursive: true, force: true });
+});
+
+// A minimal but fully real ActionPipelineDeps (StubGitHubClient defaults to "clean"
+// mergeability, so attemptAutoAction actually lands) — these tests are about proving
+// orchestrate.ts routes to (or withholds from) attemptAutoAction correctly per mode/sampling,
+// not about re-testing attemptAutoAction's own mechanics (judgeActionPipeline.test.ts already
+// does that exhaustively).
+async function makeFakeActionDeps(slack: SlackNotifier): Promise<ActionPipelineDeps> {
+	actionDepsDir = await mkdtemp(join(tmpdir(), "quire-judge-orchestrate-"));
+	const github = new StubGitHubClient();
+	const queue = new MergeQueue(join(actionDepsDir, "queue.json"), github, new LlmProviderHolder(new DriftStubLlmProvider()), join(actionDepsDir, "conflict.ndjson"));
+	await queue.load();
+	const decidedStore = new DecidedPrStore(join(actionDepsDir, "decided.json"));
+	await decidedStore.load();
+	return {
+		queue,
+		actionStore: new JudgeActionStore(),
+		slack,
+		github,
+		decidedStore,
+		bundles: new Map(),
+		cards: new Map(),
+		verifyTimeoutMs: 30 * 60 * 1000,
+	};
+}
 
 class FakeLlmProvider implements LlmProvider {
 	private readonly queue: string[] = [];
@@ -126,6 +183,7 @@ function makeDeps(overrides: Partial<JudgeRunDeps> = {}): JudgeRunDeps {
 		getShelfState: () => ({ entries: [] }),
 		getDecidedEntries: () => [],
 		verdictStore: new JudgeVerdictStore(),
+		slack: new NoopSlackNotifier(),
 		...overrides,
 	};
 }
@@ -256,5 +314,107 @@ describe("runJudgeForBundle", () => {
 			throw new Error("disk full");
 		};
 		await expect(runJudgeForBundle(makeBundle(), makeCard(), makeDeps({ provider, verdictStore }))).resolves.toBeUndefined();
+	});
+
+	describe("mode dispatch", () => {
+		it("shadow mode sends a Slack shadow-prediction, never an outcome or escalation, and never touches actionDeps", async () => {
+			const provider = new FakeLlmProvider();
+			provider.queueResponse(VALID_VERDICT_JSON);
+			const slack = new RecordingSlack();
+			await runJudgeForBundle(makeBundle(), makeCard(), makeDeps({ mode: "shadow", provider, slack }));
+
+			expect(slack.shadowPredictions).toHaveLength(1);
+			expect(slack.shadowPredictions[0]).toMatchObject({ bundleId: "bundle-1", wouldGesture: "accept", wouldAutoAct: true });
+			expect(slack.outcomes).toHaveLength(0);
+			expect(slack.escalations).toHaveLength(0);
+		});
+
+		it("shadow mode's shadow-prediction reflects a gate-disallowed verdict as wouldAutoAct: false", async () => {
+			const provider = new FakeLlmProvider();
+			provider.queueResponse(
+				JSON.stringify({
+					gesture: "accept",
+					confidence: 0.1,
+					criteria: { direction: 0.5, drift: 0.5, blastRadius: 0.5, reversibility: 0.5, precedent: 0.5 },
+					riskFlags: [],
+					rationale: "low confidence",
+					precedentIds: [],
+				}),
+			);
+			const slack = new RecordingSlack();
+			await runJudgeForBundle(makeBundle(), makeCard(), makeDeps({ mode: "shadow", provider, slack }));
+
+			expect(slack.shadowPredictions[0]?.wouldAutoAct).toBe(false);
+		});
+
+		it("assist mode annotates the card in cardsMap with the judge's recommendation, without touching Slack", async () => {
+			const provider = new FakeLlmProvider();
+			provider.queueResponse(VALID_VERDICT_JSON);
+			const slack = new RecordingSlack();
+			const cardsMap = new Map([["bundle-1", makeCard()]]);
+			await runJudgeForBundle(makeBundle(), makeCard(), makeDeps({ mode: "assist", provider, slack, cardsMap }));
+
+			const annotated = cardsMap.get("bundle-1");
+			expect(annotated?.judgeRecommendation).toMatchObject({ gesture: "accept", confidence: 0.95, wouldAutoAct: true });
+			expect(slack.outcomes).toHaveLength(0);
+			expect(slack.escalations).toHaveLength(0);
+			expect(slack.shadowPredictions).toHaveLength(0);
+		});
+
+		it("assist mode never calls attemptAutoAction even when actionDeps happens to be set", async () => {
+			const provider = new FakeLlmProvider();
+			provider.queueResponse(VALID_VERDICT_JSON);
+			const slack = new RecordingSlack();
+			const actionDeps = await makeFakeActionDeps(slack);
+			await runJudgeForBundle(
+				makeBundle(),
+				makeCard(),
+				makeDeps({ mode: "assist", provider, slack, cardsMap: new Map([["bundle-1", makeCard()]]), actionDeps }),
+			);
+
+			expect(actionDeps.actionStore.list()).toHaveLength(0);
+		});
+
+		it("auto mode samples a gate-allowed verdict for human audit instead of acting, per QUIRE_JUDGE_AUDIT_SAMPLE_RATE", async () => {
+			const provider = new FakeLlmProvider();
+			provider.queueResponse(VALID_VERDICT_JSON);
+			const slack = new RecordingSlack();
+			const actionDeps = await makeFakeActionDeps(slack);
+			const randomSpy = jest.spyOn(Math, "random").mockReturnValue(0.05);
+
+			await runJudgeForBundle(makeBundle(), makeCard(), makeDeps({ mode: "auto", provider, slack, auditSampleRate: 0.1, actionDeps }));
+
+			expect(actionDeps.actionStore.list()).toHaveLength(0);
+			expect(slack.escalations).toHaveLength(1);
+			expect(slack.escalations[0]?.reason).toMatch(/sampled for human audit/);
+			randomSpy.mockRestore();
+		});
+
+		it("auto mode acts normally when the random draw falls outside the sample rate", async () => {
+			const provider = new FakeLlmProvider();
+			provider.queueResponse(VALID_VERDICT_JSON);
+			const slack = new RecordingSlack();
+			const actionDeps = await makeFakeActionDeps(slack);
+			const randomSpy = jest.spyOn(Math, "random").mockReturnValue(0.5);
+
+			await runJudgeForBundle(makeBundle(), makeCard(), makeDeps({ mode: "auto", provider, slack, auditSampleRate: 0.1, actionDeps }));
+
+			expect(actionDeps.actionStore.list()).toHaveLength(1);
+			expect(slack.escalations).toHaveLength(0);
+			randomSpy.mockRestore();
+		});
+
+		it("auto mode never samples when auditSampleRate is unset", async () => {
+			const provider = new FakeLlmProvider();
+			provider.queueResponse(VALID_VERDICT_JSON);
+			const slack = new RecordingSlack();
+			const actionDeps = await makeFakeActionDeps(slack);
+			const randomSpy = jest.spyOn(Math, "random").mockReturnValue(0);
+
+			await runJudgeForBundle(makeBundle(), makeCard(), makeDeps({ mode: "auto", provider, slack, actionDeps }));
+
+			expect(actionDeps.actionStore.list()).toHaveLength(1);
+			randomSpy.mockRestore();
+		});
 	});
 });

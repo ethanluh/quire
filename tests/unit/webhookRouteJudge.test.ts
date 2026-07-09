@@ -24,7 +24,7 @@ import { attemptAutoAction } from "../../src/engine/judge/actionPipeline.js";
 import type { ActionPipelineDeps } from "../../src/engine/judge/actionPipeline.js";
 import type { Bundle, PullRequest, ReviewCard } from "../../src/engine/types/core.js";
 import type { JudgeVerdict } from "../../src/engine/types/judge.js";
-import type { SlackEscalationMessage, SlackNotifier, SlackOutcomeMessage } from "../../src/interface/notify/slack.js";
+import type { SlackEscalationMessage, SlackNotifier, SlackOutcomeMessage, SlackShadowPredictionMessage } from "../../src/interface/notify/slack.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [] },
@@ -46,6 +46,9 @@ class RecordingSlack implements SlackNotifier {
 	}
 	async notifyEscalation(message: SlackEscalationMessage): Promise<void> {
 		this.escalations.push(message);
+	}
+	async notifyShadowPrediction(_message: SlackShadowPredictionMessage): Promise<void> {
+		// Not exercised by these tests.
 	}
 }
 

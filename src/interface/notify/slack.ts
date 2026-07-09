@@ -19,14 +19,27 @@ export interface SlackEscalationMessage {
 	links: ReadonlyArray<SlackLink>;
 }
 
-// Two event kinds per the mission spec: terminal outcomes (auto-merged+verified,
-// auto-rejected, reverted) and human escalations (anything the gate or verification
-// disallowed/couldn't resolve). Kept as an interface — like LlmProvider — so it's
-// swappable/testable without a real webhook, and so a future bot-token-based
+// Shadow mode's "Slack (optional)" leg — the judge never acts in shadow mode, but a team
+// running it purely for calibration can still see what it *would* have decided, without
+// waiting for a human to open the audit view. Distinct from SlackOutcomeMessage on purpose:
+// nothing here happened, it's a prediction.
+export interface SlackShadowPredictionMessage {
+	bundleId: string;
+	directionSummary: string;
+	wouldGesture: "accept" | "defer" | "reject";
+	wouldAutoAct: boolean;
+	rationale: string;
+}
+
+// Three event kinds: terminal outcomes (auto-merged+verified, auto-rejected, reverted),
+// human escalations (anything the gate or verification disallowed/couldn't resolve), and
+// shadow-mode predictions (never acted on). Kept as an interface — like LlmProvider — so
+// it's swappable/testable without a real webhook, and so a future bot-token-based
 // implementation can sit behind the exact same call sites.
 export interface SlackNotifier {
 	notifyOutcome(message: SlackOutcomeMessage): Promise<void>;
 	notifyEscalation(message: SlackEscalationMessage): Promise<void>;
+	notifyShadowPrediction(message: SlackShadowPredictionMessage): Promise<void>;
 }
 
 function formatLinks(links: ReadonlyArray<SlackLink>): string {
@@ -60,6 +73,15 @@ function formatEscalationText(message: SlackEscalationMessage): string {
 	const links = formatLinks(message.links);
 	if (links.length > 0) lines.push(links);
 	return lines.join("\n");
+}
+
+function formatShadowPredictionText(message: SlackShadowPredictionMessage): string {
+	return [
+		`:eyes: [shadow mode — not acted on] Bundle Judge would ${message.wouldGesture} *${message.bundleId}*` +
+			(message.wouldAutoAct ? " (and the gate would have allowed auto-acting)" : " (but the gate would have escalated it)"),
+		`Direction: ${message.directionSummary}`,
+		`Rationale: ${message.rationale}`,
+	].join("\n");
 }
 
 // Best-effort, fire-once, no retry — a failed Slack post must never affect the judge's own
@@ -96,6 +118,14 @@ export class WebhookSlackNotifier implements SlackNotifier {
 			console.error(`Slack escalation notification failed for bundle ${message.bundleId} (ignored):`, err);
 		}
 	}
+
+	async notifyShadowPrediction(message: SlackShadowPredictionMessage): Promise<void> {
+		try {
+			await postToWebhook(this.webhookUrl, formatShadowPredictionText(message));
+		} catch (err) {
+			console.error(`Slack shadow-prediction notification failed for bundle ${message.bundleId} (ignored):`, err);
+		}
+	}
 }
 
 // No-op when QUIRE_SLACK_WEBHOOK_URL is unset — logs to the console instead so the outcome
@@ -109,6 +139,10 @@ export class NoopSlackNotifier implements SlackNotifier {
 
 	async notifyEscalation(message: SlackEscalationMessage): Promise<void> {
 		console.log(`[slack disabled] ${formatEscalationText(message)}`);
+	}
+
+	async notifyShadowPrediction(message: SlackShadowPredictionMessage): Promise<void> {
+		console.log(`[slack disabled] ${formatShadowPredictionText(message)}`);
 	}
 }
 
