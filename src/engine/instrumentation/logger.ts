@@ -44,9 +44,10 @@ export async function logConflictResolution(
 export interface NdjsonInstrumentationPaths {
 	gateLogPath: string;
 	driftScreenLogPath: string;
+	judgeDecisionLogPath: string;
 }
 
-// The pluggable sink the pipeline calls into for gate/drift-screen logging (see
+// The pluggable sink the pipeline calls into for gate/drift-screen/judge logging (see
 // types/instrumentation.ts). NDJSON is the same on-disk format as the existing
 // defer log; swap this factory out for a different InstrumentationSink without
 // touching the pipeline.
@@ -56,5 +57,6 @@ export function createNdjsonInstrumentationSink(
 	return {
 		logGateDecision: (entry) => appendNdjson(paths.gateLogPath, entry),
 		logDriftScreen: (entry) => appendNdjson(paths.driftScreenLogPath, entry),
+		logJudgeVerdict: (entry) => appendNdjson(paths.judgeDecisionLogPath, entry),
 	};
 }

@@ -71,6 +71,10 @@ describe("TenantRegistry", () => {
 			}),
 			teamStore: new TeamStore(dir),
 			webhooksEnabled: true,
+			// undefined constitution + "off" mode reproduces pre-judge tenant behavior exactly
+			// — most tenant tests have no opinion on the judge, so it stays fully inert here.
+			judgeConstitution: undefined,
+			judgeMode: "off",
 			...overrides,
 		};
 		return new TenantRegistry(shared);

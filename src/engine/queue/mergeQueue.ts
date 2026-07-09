@@ -65,6 +65,15 @@ export class MergeQueue {
 		this.state = await loadState(this.statePath);
 	}
 
+	// Read-only snapshot of the in-memory queue state — used by precedent.ts (via
+	// orchestrate.ts) to retrieve landed/closed/reverted bundle history as few-shot judge
+	// grounding. Synchronous and un-locked on purpose: it's read-only, so it can't race any
+	// mutation the way a write would, exactly like refreshQueuedBranches()'s own read-mostly
+	// pass over this.state.
+	snapshot(): QueueState {
+		return this.state;
+	}
+
 	private async persist(): Promise<void> {
 		await saveState(this.statePath, this.state);
 		this.onChanged?.();

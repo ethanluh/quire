@@ -31,13 +31,20 @@ import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.
 import type { StaticAnalyzer } from "../../engine/drift/footprint/analyzer.js";
 import { loadAccount as loadLlmAccount } from "../../engine/llm/account.js";
 import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
+import type { InstrumentationSink } from "../../engine/types/instrumentation.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
+import { resolveJudgeThresholds } from "../../engine/judge/gate.js";
+import { loadJudgeVerdictStore } from "../../engine/judge/judgeVerdictStore.js";
+import type { JudgeRunDeps } from "../../engine/judge/orchestrate.js";
+import type { JudgeConstitution, JudgeMode } from "../../engine/types/judge.js";
+import type { ShelfState } from "../../engine/types/shelf.js";
+import { resolveJudgeProvider } from "./resolveJudgeProvider.js";
 import { createAccountState, installationForRepo, repoBinding } from "./accountState.js";
 import type { AccountState } from "./accountState.js";
 import { createLlmAccountState } from "./llmAccountState.js";
 import type { LlmAccountState } from "./llmAccountState.js";
 import { createServerState, hydrateShelf } from "./state.js";
-import type { ServerState } from "./state.js";
+import type { ServerState, ShelvedBundle } from "./state.js";
 import type { PipelineDeps } from "./ingestIntoQueue.js";
 import type { RefreshDeps } from "./refreshRepoQueue.js";
 import { resolveLlmProvider, buildLlmProviderFromAccount } from "./resolveLlmProvider.js";
@@ -97,6 +104,16 @@ export interface TenantSharedConfig {
 	// GITHUB_APP_WEBHOOK_SECRET both set) — surfaced to the client via /repos/select's
 	// response so a team with webhooks off knows updates rely on polling instead.
 	webhooksEnabled: boolean;
+	// undefined when docs/judge-constitution.md failed to load at startup (missing/malformed)
+	// — the judge is disabled process-wide in that case, logged once at startup, never a
+	// crash (see index.ts). The constitution is a single repo-level document, not per-team
+	// data, so it's resolved once here rather than per tenant.
+	judgeConstitution: JudgeConstitution | undefined;
+	// Resolved once from QUIRE_JUDGE_MODE at startup (default "shadow" — see
+	// docs/judge-integration-map.md §7 for why "off" is a superset value beyond the mission's
+	// three-mode description). A deployment-wide setting, not per-team, matching how it's a
+	// single env var rather than a per-repo UI toggle like autoMergeOnAccept.
+	judgeMode: JudgeMode;
 }
 
 // Everything that used to be a single process-wide singleton (accountState, the GitHub
@@ -133,6 +150,58 @@ function sanitizeTeamId(teamId: string): string {
 	return sanitizeIdentifier(teamId, { scope: "tenant data", label: "team id" });
 }
 
+// Same conversion saveShelf (state.ts) does when persisting — duplicated rather than
+// imported from there because saveShelf's shape is tied to its own on-disk ShelfState, and
+// this is a read-only, in-memory view for precedent.ts; keeping them separate means a future
+// change to one's persistence format doesn't have to consider this call site too.
+function shelfStateFromMap(shelf: ReadonlyMap<string, ShelvedBundle>): ShelfState {
+	return { entries: [...shelf.entries()].map(([bundleId, shelved]) => ({ bundleId, ...shelved })) };
+}
+
+// undefined whenever the judge can't safely run for this tenant: no constitution loaded
+// (index.ts already logged why), mode is "off", or the constitution's own thresholds fail to
+// resolve (a bad QUIRE_JUDGE_* override) — every case degrades to "no judge for this tenant,
+// logged, ingestion otherwise unaffected" rather than blocking tenant load.
+async function buildJudgeRunDeps(
+	shared: TenantSharedConfig,
+	judgeVerdictsPath: string,
+	queue: MergeQueue,
+	decidedStore: DecidedPrStore,
+	state: ServerState,
+	llmProviderHolder: LlmProviderHolder,
+	sink: InstrumentationSink,
+): Promise<JudgeRunDeps | undefined> {
+	if (shared.judgeConstitution === undefined || shared.judgeMode === "off") return undefined;
+
+	let thresholds;
+	try {
+		thresholds = resolveJudgeThresholds(process.env, shared.judgeConstitution);
+	} catch (err) {
+		console.error("Bundle judge disabled: failed to resolve thresholds:", err);
+		return undefined;
+	}
+
+	const { provider: judgeProvider, description, biasMitigationActive } = resolveJudgeProvider(process.env, llmProviderHolder);
+	console.log(
+		`Bundle judge (mode: ${shared.judgeMode}) using ${description}` +
+			(biasMitigationActive ? "" : " — set QUIRE_JUDGE_MODEL (or a dedicated judge account) for bias mitigation"),
+	);
+
+	const verdictStore = await loadJudgeVerdictStore(judgeVerdictsPath);
+
+	return {
+		mode: shared.judgeMode,
+		constitution: shared.judgeConstitution,
+		thresholds,
+		provider: judgeProvider,
+		getQueueState: () => queue.snapshot(),
+		getShelfState: () => shelfStateFromMap(state.shelf),
+		getDecidedEntries: () => decidedStore.list(),
+		verdictStore,
+		sink,
+	};
+}
+
 async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: TenantRegistry): Promise<TenantContext> {
 	const dir = join(shared.dataDir, "teams", teamId);
 	const installationPath = join(dir, "installation.json");
@@ -146,6 +215,8 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	const driftScreenLogPath = join(dir, "instrumentation/drift-screen.ndjson");
 	const conflictLogPath = join(dir, "instrumentation/conflict-resolution.ndjson");
 	const auditLogPath = join(dir, "instrumentation/audit.ndjson");
+	const judgeDecisionLogPath = join(dir, "instrumentation/judge-decisions.ndjson");
+	const judgeVerdictsPath = join(dir, "judge-verdicts.json");
 
 	const decidedStore = new DecidedPrStore(decidedPrsPath);
 	const prCache = new PrEffectCache(prCachePath);
@@ -218,7 +289,16 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	);
 	await queue.load();
 
-	const instrumentationSink = createNdjsonInstrumentationSink({ gateLogPath, driftScreenLogPath });
+	const instrumentationSink = createNdjsonInstrumentationSink({ gateLogPath, driftScreenLogPath, judgeDecisionLogPath });
+	const judgeDeps = await buildJudgeRunDeps(
+		shared,
+		judgeVerdictsPath,
+		queue,
+		decidedStore,
+		state,
+		llmProviderHolder,
+		instrumentationSink,
+	);
 	const pipelineDeps: PipelineDeps = {
 		config: shared.pipelineConfig,
 		provider: llmProviderHolder,
@@ -226,6 +306,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		auditStore,
 		prCache,
 		instrumentationSink,
+		...(judgeDeps !== undefined ? { judgeDeps } : {}),
 	};
 
 	// tenantKey scopes enqueueRefresh's per-repo coalescing lock so two tenants who happen

@@ -121,3 +121,31 @@ export interface PrecedentExample {
 	// (used for ranking/testing), not itself sent to the model as a score.
 	similarity: number;
 }
+
+// The result of applying docs/judge-constitution.md's auto-act rule (gate.ts) to a verdict.
+// Computed and persisted regardless of JudgeMode — shadow mode logs what auto mode *would*
+// have done, which is the calibration signal Phase 5's audit sampling and judge-vs-human
+// agreement metric need.
+export type JudgeGateOutcome = { allowed: true; gesture: "accept" | "reject" } | { allowed: false; reasons: ReadonlyArray<string> };
+
+// One bundle's judge run, persisted per team next to the bundle it concerns (see
+// judgeVerdictStore.ts). Exactly one record per (bundleId, inputsHash) pair — a later commit
+// on the same bundle gets its own record with a new inputsHash, superseding this one for
+// idempotency-check purposes, but this one is never deleted (append-only history; see
+// docs/instrumentation.md's judge-decisions.ndjson for the parallel append-only audit trail).
+export interface JudgeVerdictRecord {
+	bundleId: string;
+	inputsHash: string;
+	mode: JudgeMode;
+	computedAt: string;
+	status: "ok" | "abstained";
+	// Present iff status === "ok".
+	verdict?: JudgeVerdict;
+	gate?: JudgeGateOutcome;
+	// Present iff status === "abstained".
+	abstainReason?: string;
+}
+
+export interface JudgeVerdictState {
+	entries: ReadonlyArray<JudgeVerdictRecord>;
+}
