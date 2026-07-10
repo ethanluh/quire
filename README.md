@@ -92,6 +92,8 @@ When a bundled PR has a merge conflict, Quire resolves it in-process rather than
 
 A separate periodic pass (`QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES`, default 5) fast-forwards queued PRs that have merely fallen "behind" main — a free GitHub merge, no LLM involved — before it's their turn to actually land. Without it, a bundle stuck behind several others landing ahead of it only gets checked once `dequeueNext()` finally reaches it, by which point "behind" may have drifted into a real conflict that needs the Action above.
 
+Merge-queue entries also normally flip to merged/closed via the `pull_request` webhook. A further periodic pass, `MergeQueue.reconcileWithGitHub()`, checks every active entry against GitHub directly as a safety net — so a bundle merged or closed manually on GitHub while the webhook is unconfigured (the default for local dev) or a delivery was missed doesn't stay stuck showing "queued" forever.
+
 ## Docs
 
 - [`docs/engineering-handoff.md`](docs/engineering-handoff.md) — full build spec: architecture, design invariants, drift-detection design, data model, phases, prior art, and success metrics.
