@@ -300,6 +300,20 @@ async function main(): Promise<void> {
 	}, QUEUE_REFRESH_INTERVAL_MS);
 	queueRefreshTimer.unref();
 
+	// Catches a merge/close that happened directly on GitHub without Quire's webhook ever
+	// firing (missed delivery, or webhooks not configured at all — see the startup warning
+	// above) — the reconcile timer above only re-ingests the *review* queue's undecided PRs,
+	// it never looks at bundles already accepted into the merge queue. Reuses the same
+	// cadence as the queue-branch refresh rather than introducing a fourth interval knob.
+	const queueGitHubSyncTimer = setInterval(() => {
+		for (const tenant of registry.all()) {
+			tenant.queue.reconcileWithGitHub().catch((err: unknown) => {
+				console.error(`Queue GitHub-state reconcile failed for ${tenant.teamId}:`, err);
+			});
+		}
+	}, QUEUE_REFRESH_INTERVAL_MS);
+	queueGitHubSyncTimer.unref();
+
 	// Checks in on any in-flight Managed Agents deep-investigation sessions (opt-in — see
 	// tenant.ts's DeepInvestigationDeps). A no-op for tenants who never started one:
 	// pollInvestigations() only touches "investigating" entries. Reuses the same cadence as

@@ -24,6 +24,12 @@ export interface MergeabilityResult {
 	// mergeable_state away from "unknown" for a closed/merged PR, so this must be checked
 	// before anything looks at `state`, or a merged PR reads as a stuck "unknownPending".
 	merged: boolean;
+	// True when GitHub's PR state is "closed" and it wasn't merged — i.e. rejected/abandoned
+	// on GitHub directly rather than through Quire. Optional: only the real client populates
+	// it (see octokitClient.ts); callers that don't need it (existing mergeability checks,
+	// test fixtures) can omit it, and it's read only by MergeQueue.reconcileWithGitHub's
+	// webhook-miss safety net.
+	closed?: boolean;
 	headBranch: string;
 	headSha: string;
 	baseBranch: string;

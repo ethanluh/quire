@@ -586,6 +586,35 @@ export class MergeQueue {
 		}
 	}
 
+	// Safety net for a missed/never-configured webhook delivery: recordExternalMerge/
+	// recordExternalClose only ever run off a `pull_request` webhook event, so a bundle
+	// already in the queue whose member gets merged or closed directly on GitHub while that
+	// delivery is lost (or webhooks aren't set up at all — see index.ts's startup warning)
+	// would otherwise sit stale forever, since refreshRepoQueue's reconcile poll only
+	// re-ingests the *review* queue's undecided PRs, not entries already accepted into this
+	// merge queue. Meant to be wired into the same periodic timer as refreshQueuedBranches.
+	// Read-only per member except for the recordExternalMerge/Close calls themselves, each of
+	// which is independently withLock-protected and idempotent, so this doesn't need its own
+	// lock around the whole scan.
+	async reconcileWithGitHub(): Promise<void> {
+		const active = this.state.entries.filter((e) => e.status !== "landed" && e.status !== "closed");
+		for (const entry of active) {
+			for (const pr of entry.bundle.members) {
+				if (entry.mergedPrIds.includes(pr.id)) continue;
+				try {
+					const mergeability = await this.github.getMergeability(pr.repoOwner, pr.repoName, pr.number);
+					if (mergeability.merged) {
+						await this.recordExternalMerge(pr.id);
+					} else if (mergeability.closed === true) {
+						await this.recordExternalClose(pr.id);
+					}
+				} catch (err) {
+					console.error(`Reconcile-with-GitHub failed for ${pr.repoOwner}/${pr.repoName}#${pr.number}:`, err);
+				}
+			}
+		}
+	}
+
 	// Periodic check (meant to be wired into a setInterval, like refreshQueuedBranches) for
 	// bundles with an in-flight investigation session. Goes through withLock, unlike
 	// refreshQueuedBranches, because — unlike that read-only pass — this one mutates
