@@ -378,6 +378,7 @@ export class OctokitGitHubClient implements GitHubClient {
 			state: normalizeMergeableState(pr.draft === true, pr.mergeable_state ?? "unknown"),
 			isFork,
 			merged: pr.merged === true,
+			closed: pr.state === "closed",
 			headBranch: pr.head.ref,
 			headSha: pr.head.sha,
 			baseBranch: pr.base.ref,

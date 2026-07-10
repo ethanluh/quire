@@ -1075,6 +1075,74 @@ describe("MergeQueue.recordExternalClose", () => {
 	});
 });
 
+describe("MergeQueue.reconcileWithGitHub", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	async function setup(): Promise<{ github: StubGitHubClient; queue: MergeQueue }> {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		return { github, queue };
+	}
+
+	// The webhook-miss safety net this method exists for: no `pull_request` webhook ever
+	// fired (missed delivery, or webhooks not configured), so the entry would otherwise sit
+	// "queued" forever even though the PR was closed on GitHub directly.
+	it("closes a queued bundle whose member was closed on GitHub, mirroring recordExternalClose", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ closed: true }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		await queue.reconcileWithGitHub();
+
+		const entry = await queue.getEntry("bundle-1");
+		expect(entry?.status).toBe("closed");
+		expect(entry?.closedAt).toEqual(expect.any(String));
+	});
+
+	it("lands a queued bundle whose member was merged on GitHub", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ merged: true }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		await queue.reconcileWithGitHub();
+
+		const entry = await queue.getEntry("bundle-1");
+		expect(entry?.status).toBe("landed");
+	});
+
+	it("leaves a queued bundle untouched when GitHub still reports it open", async () => {
+		const { queue } = await setup();
+		const pr = makePr();
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		await queue.reconcileWithGitHub();
+
+		const entry = await queue.getEntry("bundle-1");
+		expect(entry?.status).toBe("queued");
+	});
+
+	it("skips already-terminal entries entirely", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.enqueueClosed(makeBundle("bundle-2", [makePr({ id: "pr-2", number: 2 })]));
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ closed: true }));
+
+		await queue.reconcileWithGitHub();
+
+		expect((await queue.getEntry("bundle-1"))?.status).toBe("closed");
+		expect((await queue.getEntry("bundle-2"))?.status).toBe("closed");
+	});
+});
+
 describe("MergeQueue.abort", () => {
 	let dir: string;
 
