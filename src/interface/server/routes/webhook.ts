@@ -191,6 +191,7 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 		try {
 			payload = JSON.parse((req.body as Buffer).toString("utf8"));
 		} catch {
+			console.warn(`Webhook: invalid JSON in ${event} payload (delivery ${deliveryId})`);
 			res.status(400).json({ error: "Invalid JSON payload" });
 			return;
 		}
@@ -205,17 +206,27 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 			const suiteTenant = parsedSuite.installationId !== undefined ? findTenant(parsedSuite.installationId) : undefined;
 			const suiteRefreshDeps = suiteTenant?.refreshDeps;
 			if (suiteRefreshDeps === undefined) {
+				console.warn(
+					`Webhook: no tenant bound to installation ${parsedSuite.installationId ?? "missing"} (check_suite on ${parsedSuite.repoOwner}/${parsedSuite.repoName}, delivery ${deliveryId})`,
+				);
 				res.status(200).json({ ignored: true });
 				return;
 			}
 			const suiteWatchedRepo = suiteRefreshDeps.accountState.current.repos.find(
 				(r) => r.owner === parsedSuite.repoOwner && r.name === parsedSuite.repoName,
 			);
+			if (suiteWatchedRepo === undefined) {
+				console.warn(
+					`Webhook: ${parsedSuite.repoOwner}/${parsedSuite.repoName} is not a watched repo for installation ${parsedSuite.installationId} (delivery ${deliveryId}) — ignoring check_suite`,
+				);
+				res.status(200).json({ ignored: true });
+				return;
+			}
 			// Checks turning green is only worth acting on once every check in the suite has
 			// finished and none failed — a suite still "in_progress", or one that failed/was
 			// cancelled, leaves the entry exactly where it was for a human (or a later green
-			// check_suite) to deal with.
-			if (suiteWatchedRepo === undefined || parsedSuite.action !== "completed" || parsedSuite.conclusion !== "success") {
+			// check_suite) to deal with. High-volume, expected traffic — not worth a log line.
+			if (parsedSuite.action !== "completed" || parsedSuite.conclusion !== "success") {
 				res.status(200).json({ ignored: true });
 				return;
 			}
@@ -247,17 +258,28 @@ export function webhookRouter(findTenant: (installationId: number) => WebhookTen
 			const reviewTenant = parsedReview.installationId !== undefined ? findTenant(parsedReview.installationId) : undefined;
 			const reviewRefreshDeps = reviewTenant?.refreshDeps;
 			if (reviewRefreshDeps === undefined) {
+				console.warn(
+					`Webhook: no tenant bound to installation ${parsedReview.installationId ?? "missing"} (pull_request_review on ${parsedReview.repoOwner}/${parsedReview.repoName}#${parsedReview.pullRequestId}, delivery ${deliveryId})`,
+				);
 				res.status(200).json({ ignored: true });
 				return;
 			}
 			const reviewWatchedRepo = reviewRefreshDeps.accountState.current.repos.find(
 				(r) => r.owner === parsedReview.repoOwner && r.name === parsedReview.repoName,
 			);
+			if (reviewWatchedRepo === undefined) {
+				console.warn(
+					`Webhook: ${parsedReview.repoOwner}/${parsedReview.repoName} is not a watched repo for installation ${parsedReview.installationId} (delivery ${deliveryId}) — ignoring pull_request_review`,
+				);
+				res.status(200).json({ ignored: true });
+				return;
+			}
 			// Only a submitted approval is worth re-checking — a comment, change request, or a
 			// dismissal can only ever make branch protection stricter, never clear a "blocked"
 			// entry, and any queued (not yet "conflict") entry it affects gets re-diagnosed the
-			// normal way on its next dequeueNext() pass anyway.
-			if (reviewWatchedRepo === undefined || parsedReview.action !== "submitted" || parsedReview.reviewState !== "approved") {
+			// normal way on its next dequeueNext() pass anyway. High-volume, expected traffic —
+			// not worth a log line.
+			if (parsedReview.action !== "submitted" || parsedReview.reviewState !== "approved") {
 				res.status(200).json({ ignored: true });
 				return;
 			}
