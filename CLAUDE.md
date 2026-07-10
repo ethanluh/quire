@@ -38,7 +38,7 @@ The pipeline runs top to bottom:
 2. **Auto-reject gate** — per-criterion, three modes each: `enforce` (discard), `shadow` (route to audit view), `off` (pass to human queue). Criteria do not share a confidence level.
 3. **Bundle by direction** — group surviving PRs by directional similarity. A PR joins a bundle on evidence from the drift check, never on topic resemblance alone.
 4. **Drift check** — two stages:
-   - *Cheap screen* (every member): effect-list extraction run **blind** to `declaredDirection` (INV-2), then matched against the bundle direction; plus footprint anomaly via static analysis. Tuned for high recall — over-flags on purpose.
+   - *Cheap screen*: effect-list extraction run **blind** to `declaredDirection` (INV-2), then matched against the bundle direction; plus footprint anomaly via static analysis — both per-member. Plus a bundle-wide symbol-coherence check that groups symbol touches by name across every bundle member and flags a name one member removes/renames while another still references, since that inconsistency only exists across PRs, never within a single one. Tuned for high recall — over-flags on purpose.
    - *Confirm* (flagged tail only): sandboxed behavioral differential testing with intent-classification (Testora approach). Expensive; rationed to the flagged tail.
 5. **Review card** — per bundle: direction summary, blast radius, flags (public API / migration / shared module), drift verdict.
 6. **Gestures** — right = accept (enqueue), left = reject, down = defer.
