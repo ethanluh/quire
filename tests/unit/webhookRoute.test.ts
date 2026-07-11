@@ -148,7 +148,7 @@ describe("webhookRouter", () => {
 		};
 		const app = express();
 		app.use(express.raw({ type: "application/json" }));
-		app.use(webhookRouter((installationId) => (installationId === BINDING.installationId ? { refreshDeps } : undefined), options));
+		app.use(webhookRouter((installationId) => (installationId === BINDING.installationId ? [{ refreshDeps }] : []), options));
 		server = app.listen(0);
 		return { refreshDeps, queue };
 	}
@@ -397,6 +397,71 @@ describe("webhookRouter", () => {
 		expect(status).toBe(202);
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(await queue.listEntries()).toHaveLength(0);
+	});
+
+	it("fans a delivery out to every team that has the same installation bound, not just one", async () => {
+		// One GitHub App installation can now be bound by several Quire teams at once (the
+		// feature this test file was extended for) — a delivery for that installation must
+		// reach every team watching the repo, not just whichever team's tenant happened to be
+		// found first.
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const clientA = new StubGitHubClient();
+		const clientB = new StubGitHubClient();
+		const queueA = new MergeQueue(join(dir, "queue-a.json"), clientA, new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict-a.ndjson"));
+		const queueB = new MergeQueue(join(dir, "queue-b.json"), clientB, new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict-b.ndjson"));
+		await queueA.load();
+		await queueB.load();
+
+		function makeRefreshDeps(client: StubGitHubClient, queue: MergeQueue, suffix: string): RefreshDeps {
+			return {
+				accountState: createAccountState({
+					installations: [BINDING],
+					repos: [
+						{
+							owner: "octocat",
+							name: "hello-world",
+							installationId: BINDING.installationId,
+							addedAt: new Date(0).toISOString(),
+							addedBy: "test-user",
+						},
+					],
+				}),
+				accountPath: join(dir, `installation-${suffix}.json`),
+				clientHolder: new GitHubClientHolder(client),
+				appConfig: { appId: "1", privateKey: "unused" },
+				decidedStore: new DecidedPrStore(join(dir, `decided-prs-${suffix}.json`)),
+				state: createServerState(),
+				pipelineDeps: {
+					config: PIPELINE_CONFIG,
+					provider: new StubLlmProvider(),
+					analyzer: new StubStaticAnalyzer(),
+					auditStore: new AuditStore(),
+					prCache: new PrEffectCache(),
+				},
+				queue,
+			};
+		}
+
+		const refreshDepsA = makeRefreshDeps(clientA, queueA, "a");
+		const refreshDepsB = makeRefreshDeps(clientB, queueB, "b");
+		await refreshDepsA.decidedStore.markDecided(["123"], "reject", { decidedBy: "tester", bundleId: "test-bundle" });
+		await refreshDepsB.decidedStore.markDecided(["123"], "reject", { decidedBy: "tester", bundleId: "test-bundle" });
+
+		const app = express();
+		app.use(express.raw({ type: "application/json" }));
+		app.use(
+			webhookRouter((installationId) =>
+				installationId === BINDING.installationId ? [{ refreshDeps: refreshDepsA }, { refreshDeps: refreshDepsB }] : [],
+			),
+		);
+		server = app.listen(0);
+
+		const { status } = await post(pullRequestEventPayload("octocat", "hello-world", "synchronize", 123), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(refreshDepsA.decidedStore.isDecided("123")).toBe(false);
+		expect(refreshDepsB.decidedStore.isDecided("123")).toBe(false);
 	});
 
 	it("ignores non-pull_request events even when they look like a GitHub payload", async () => {

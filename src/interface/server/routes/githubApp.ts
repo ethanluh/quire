@@ -73,11 +73,6 @@ export interface GithubAppRouterOptions {
 	filterReposForUser: (repos: ReadonlyArray<RepoSummary>, accessToken: string) => Promise<ReadonlyArray<RepoSummary>>;
 	canUserAccessRepo: (owner: string, name: string, accessToken: string) => Promise<boolean>;
 	listInstallationsForUser: (accessToken: string) => Promise<ReadonlyArray<AccessibleInstallation>>;
-	// Multi-tenant only: lets this team's router refuse to bind an installation another
-	// team already has bound, so findByInstallationId's lookup in tenant.ts never has to
-	// pick a winner between two teams claiming the same installation. Undefined in
-	// single-tenant contexts/tests, where there's only ever one team to begin with.
-	isInstallationBoundToAnotherTeam: ((installationId: number) => boolean) | undefined;
 	// A team's router can field requests from any of its member logins, so the persisted
 	// refresh token lives at a per-login path (mirroring routes/account.ts's own
 	// userTokenPath), computed per-request from the signed-in login rather than baked in
@@ -104,7 +99,6 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 		filterReposForUser,
 		canUserAccessRepo,
 		listInstallationsForUser,
-		isInstallationBoundToAnotherTeam,
 		dataDir,
 		oauth,
 		buildOctokit,
@@ -279,11 +273,6 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 
 			const installationId = Number(installationIdRaw);
 
-			if (isInstallationBoundToAnotherTeam?.(installationId) === true) {
-				res.redirect(accountResultRedirectUrl("error", "this GitHub installation is already connected to a different Quire team"));
-				return;
-			}
-
 			let account: InstallationAccount;
 			try {
 				account = await getInstallationAccount(installationId);
@@ -355,13 +344,6 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 			const accessible = await listInstallationsForUser(userToken);
 			if (!accessible.some((i) => i.installationId === installationId)) {
 				res.status(403).json({ error: "You don't have access to that GitHub installation." });
-				return;
-			}
-
-			// Same guard the install/callback path applies: never let two teams bind one
-			// installation, or webhook deliveries for it route to whichever team loaded first.
-			if (isInstallationBoundToAnotherTeam?.(installationId) === true) {
-				res.status(409).json({ error: "This GitHub installation is already connected to a different Quire team." });
 				return;
 			}
 

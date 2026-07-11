@@ -240,11 +240,12 @@ async function triggerAutoMergeIfEnabled(entry: MergeQueueEntry, refreshDeps: Re
 // that middleware's comment) and a raw-body parser (see index.ts wiring). Not registered at
 // all unless a webhook secret is configured.
 //
-// findTenant resolves the tenant that owns the delivery's installation — a single GitHub
-// App receives every tenant's webhook deliveries on this one endpoint, so there is no
-// longer one shared RefreshDeps to fall back on (see TenantRegistry.findByInstallationId).
+// findTenants resolves every tenant that has the delivery's installation bound — a single
+// GitHub App receives every tenant's webhook deliveries on this one endpoint, and since one
+// installation can now be bound by more than one Quire team at once, a delivery may need to
+// fan out to several tenants rather than exactly one (see TenantRegistry.findAllByInstallationId).
 export function webhookRouter(
-	findTenant: (installationId: number) => WebhookTenant | undefined,
+	findTenants: (installationId: number) => ReadonlyArray<WebhookTenant>,
 	options: WebhookRouterOptions = {},
 ): Router {
 	const router = Router();
@@ -305,21 +306,13 @@ export function webhookRouter(
 				res.status(200).json({ ignored: true });
 				return;
 			}
-			const suiteTenant = parsedSuite.installationId !== undefined ? findTenant(parsedSuite.installationId) : undefined;
-			const suiteRefreshDeps = suiteTenant?.refreshDeps;
-			if (suiteRefreshDeps === undefined) {
-				console.warn(
-					`Webhook: no tenant bound to installation ${parsedSuite.installationId ?? "missing"} (check_suite on ${parsedSuite.repoOwner}/${parsedSuite.repoName}, delivery ${deliveryId})`,
-				);
-				res.status(200).json({ ignored: true });
-				return;
-			}
-			const suiteWatchedRepo = suiteRefreshDeps.accountState.current.repos.find(
-				(r) => r.owner === parsedSuite.repoOwner && r.name === parsedSuite.repoName,
+			const suiteTenants = parsedSuite.installationId !== undefined ? findTenants(parsedSuite.installationId) : [];
+			const suiteWatchingTenants = suiteTenants.filter((t) =>
+				t.refreshDeps.accountState.current.repos.some((r) => r.owner === parsedSuite.repoOwner && r.name === parsedSuite.repoName),
 			);
-			if (suiteWatchedRepo === undefined) {
+			if (suiteWatchingTenants.length === 0) {
 				console.warn(
-					`Webhook: ${parsedSuite.repoOwner}/${parsedSuite.repoName} is not a watched repo for installation ${parsedSuite.installationId} (delivery ${deliveryId}) — ignoring check_suite`,
+					`Webhook: no team watching ${parsedSuite.repoOwner}/${parsedSuite.repoName} via installation ${parsedSuite.installationId ?? "missing"} (check_suite, delivery ${deliveryId})`,
 				);
 				res.status(200).json({ ignored: true });
 				return;
@@ -335,12 +328,14 @@ export function webhookRouter(
 
 			recordDelivery(rawDeliveryId);
 			res.status(202).json({ accepted: true });
-			runWithRetries(
-				`Webhook-triggered check_suite reattempt for ${parsedSuite.repoOwner}/${parsedSuite.repoName}`,
-				retryDelaysMs,
-				() => reattemptAndMaybeAutoMerge(parsedSuite.pullRequestIds, suiteRefreshDeps),
-				forgetDelivery(rawDeliveryId),
-			);
+			for (const tenant of suiteWatchingTenants) {
+				runWithRetries(
+					`Webhook-triggered check_suite reattempt for ${parsedSuite.repoOwner}/${parsedSuite.repoName}`,
+					retryDelaysMs,
+					() => reattemptAndMaybeAutoMerge(parsedSuite.pullRequestIds, tenant.refreshDeps),
+					forgetDelivery(rawDeliveryId),
+				);
+			}
 			return;
 		}
 
@@ -351,21 +346,13 @@ export function webhookRouter(
 				res.status(200).json({ ignored: true });
 				return;
 			}
-			const reviewTenant = parsedReview.installationId !== undefined ? findTenant(parsedReview.installationId) : undefined;
-			const reviewRefreshDeps = reviewTenant?.refreshDeps;
-			if (reviewRefreshDeps === undefined) {
-				console.warn(
-					`Webhook: no tenant bound to installation ${parsedReview.installationId ?? "missing"} (pull_request_review on ${parsedReview.repoOwner}/${parsedReview.repoName}#${parsedReview.pullRequestId}, delivery ${deliveryId})`,
-				);
-				res.status(200).json({ ignored: true });
-				return;
-			}
-			const reviewWatchedRepo = reviewRefreshDeps.accountState.current.repos.find(
-				(r) => r.owner === parsedReview.repoOwner && r.name === parsedReview.repoName,
+			const reviewTenants = parsedReview.installationId !== undefined ? findTenants(parsedReview.installationId) : [];
+			const reviewWatchingTenants = reviewTenants.filter((t) =>
+				t.refreshDeps.accountState.current.repos.some((r) => r.owner === parsedReview.repoOwner && r.name === parsedReview.repoName),
 			);
-			if (reviewWatchedRepo === undefined) {
+			if (reviewWatchingTenants.length === 0) {
 				console.warn(
-					`Webhook: ${parsedReview.repoOwner}/${parsedReview.repoName} is not a watched repo for installation ${parsedReview.installationId} (delivery ${deliveryId}) — ignoring pull_request_review`,
+					`Webhook: no team watching ${parsedReview.repoOwner}/${parsedReview.repoName} via installation ${parsedReview.installationId ?? "missing"} (pull_request_review on #${parsedReview.pullRequestId}, delivery ${deliveryId})`,
 				);
 				res.status(200).json({ ignored: true });
 				return;
@@ -382,12 +369,14 @@ export function webhookRouter(
 
 			recordDelivery(rawDeliveryId);
 			res.status(202).json({ accepted: true });
-			runWithRetries(
-				`Webhook-triggered pull_request_review reattempt for ${parsedReview.repoOwner}/${parsedReview.repoName}`,
-				retryDelaysMs,
-				() => reattemptAndMaybeAutoMerge([parsedReview.pullRequestId], reviewRefreshDeps),
-				forgetDelivery(rawDeliveryId),
-			);
+			for (const tenant of reviewWatchingTenants) {
+				runWithRetries(
+					`Webhook-triggered pull_request_review reattempt for ${parsedReview.repoOwner}/${parsedReview.repoName}`,
+					retryDelaysMs,
+					() => reattemptAndMaybeAutoMerge([parsedReview.pullRequestId], tenant.refreshDeps),
+					forgetDelivery(rawDeliveryId),
+				);
+			}
 			return;
 		}
 
@@ -397,19 +386,13 @@ export function webhookRouter(
 			res.status(200).json({ ignored: true });
 			return;
 		}
-		const tenant = parsed.installationId !== undefined ? findTenant(parsed.installationId) : undefined;
-		const refreshDeps = tenant?.refreshDeps;
-		if (refreshDeps === undefined) {
+		const tenants = parsed.installationId !== undefined ? findTenants(parsed.installationId) : [];
+		const watchingTenants = tenants.filter((t) =>
+			t.refreshDeps.accountState.current.repos.some((r) => r.owner === parsed.repoOwner && r.name === parsed.repoName),
+		);
+		if (watchingTenants.length === 0) {
 			console.warn(
-				`Webhook: no tenant bound to installation ${parsed.installationId ?? "missing"} (${parsed.repoOwner}/${parsed.repoName}#${parsed.pullRequestId}, delivery ${deliveryId})`,
-			);
-			res.status(200).json({ ignored: true });
-			return;
-		}
-		const watchedRepo = refreshDeps.accountState.current.repos.find((r) => r.owner === parsed.repoOwner && r.name === parsed.repoName);
-		if (watchedRepo === undefined) {
-			console.warn(
-				`Webhook: ${parsed.repoOwner}/${parsed.repoName} is not a watched repo for installation ${parsed.installationId} (delivery ${deliveryId}) — ignoring ${parsed.action}`,
+				`Webhook: no team watching ${parsed.repoOwner}/${parsed.repoName} via installation ${parsed.installationId ?? "missing"} (${parsed.repoOwner}/${parsed.repoName}#${parsed.pullRequestId}, delivery ${deliveryId})`,
 			);
 			res.status(200).json({ ignored: true });
 			return;
@@ -429,45 +412,50 @@ export function webhookRouter(
 		// reattemptForPr, recordExternalMerge/Close, and the full re-fetch in enqueueRefresh
 		// all converge on the same result when re-run — even the auto-merge path re-checks
 		// mergeability and skips already-merged PRs), so the whole delivery is safe to retry
-		// as a unit after a partial failure.
-		runWithRetries(
-			`Webhook-triggered refresh for ${parsed.repoOwner}/${parsed.repoName}`,
-			retryDelaysMs,
-			async () => {
-				if (parsed.action === "synchronize") {
-					// New commits on a previously-decided PR (e.g. rejected, then reworked)
-					// deserve fresh review instead of staying permanently excluded. (A body-only
-					// "edited" event deliberately does NOT clear the decision — fixing a marker
-					// without new commits shouldn't resurrect a rejected PR.)
-					await refreshDeps.decidedStore.clearDecided(parsed.pullRequestId);
+		// as a unit after a partial failure. Every watching team gets its own independent
+		// retry loop — several teams may have this same repo bound through the same shared
+		// installation, and one team's failure must not block another's refresh.
+		for (const tenant of watchingTenants) {
+			const refreshDeps = tenant.refreshDeps;
+			runWithRetries(
+				`Webhook-triggered refresh for ${parsed.repoOwner}/${parsed.repoName}`,
+				retryDelaysMs,
+				async () => {
+					if (parsed.action === "synchronize") {
+						// New commits on a previously-decided PR (e.g. rejected, then reworked)
+						// deserve fresh review instead of staying permanently excluded. (A body-only
+						// "edited" event deliberately does NOT clear the decision — fixing a marker
+						// without new commits shouldn't resurrect a rejected PR.)
+						await refreshDeps.decidedStore.clearDecided(parsed.pullRequestId);
 
-					// New commits may be exactly what a fleet was asked to push after a flagged
-					// conflict (or a human's own fix) — pick the stuck bundle back up instead of
-					// leaving it in "conflict" until someone notices and clicks "Retry".
-					await reattemptAndMaybeAutoMerge([parsed.pullRequestId], refreshDeps);
-				}
-				if (parsed.action === "closed" && parsed.merged) {
-					// A human (or another tool) merged this PR directly on GitHub instead of
-					// through Quire's own dequeueNext() — keep the queue's view of reality accurate
-					// instead of waiting for the next Process click to notice via
-					// ensureMergeable()'s alreadyMerged check. Push the corrected merge status to the
-					// browser right away — don't wait on the enqueueRefresh below, which fetches
-					// *new* PRs and can fail/be slow independently of whether this update succeeded.
-					const updated = await refreshDeps.queue.recordExternalMerge(parsed.pullRequestId);
-					if (updated !== undefined) {
-						await triggerAutoMergeIfEnabled(updated, refreshDeps);
+						// New commits may be exactly what a fleet was asked to push after a flagged
+						// conflict (or a human's own fix) — pick the stuck bundle back up instead of
+						// leaving it in "conflict" until someone notices and clicks "Retry".
+						await reattemptAndMaybeAutoMerge([parsed.pullRequestId], refreshDeps);
 					}
-				} else if (parsed.action === "closed" && !parsed.merged) {
-					// Closed without merging — a member PR this queue entry needed is gone, so the
-					// bundle can never fully land. Record it as "closed" instead of leaving the entry
-					// to poll/retry forever against a PR that will never become mergeable. No
-					// auto-merge trigger: closing isn't a landing event.
-					await refreshDeps.queue.recordExternalClose(parsed.pullRequestId);
-				}
-				await enqueueRefresh(parsed.repoOwner, parsed.repoName, refreshDeps);
-			},
-			forgetDelivery(rawDeliveryId),
-		);
+					if (parsed.action === "closed" && parsed.merged) {
+						// A human (or another tool) merged this PR directly on GitHub instead of
+						// through Quire's own dequeueNext() — keep the queue's view of reality accurate
+						// instead of waiting for the next Process click to notice via
+						// ensureMergeable()'s alreadyMerged check. Push the corrected merge status to the
+						// browser right away — don't wait on the enqueueRefresh below, which fetches
+						// *new* PRs and can fail/be slow independently of whether this update succeeded.
+						const updated = await refreshDeps.queue.recordExternalMerge(parsed.pullRequestId);
+						if (updated !== undefined) {
+							await triggerAutoMergeIfEnabled(updated, refreshDeps);
+						}
+					} else if (parsed.action === "closed" && !parsed.merged) {
+						// Closed without merging — a member PR this queue entry needed is gone, so the
+						// bundle can never fully land. Record it as "closed" instead of leaving the entry
+						// to poll/retry forever against a PR that will never become mergeable. No
+						// auto-merge trigger: closing isn't a landing event.
+						await refreshDeps.queue.recordExternalClose(parsed.pullRequestId);
+					}
+					await enqueueRefresh(parsed.repoOwner, parsed.repoName, refreshDeps);
+				},
+				forgetDelivery(rawDeliveryId),
+			);
+		}
 	});
 
 	return router;

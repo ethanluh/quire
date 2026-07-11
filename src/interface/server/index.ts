@@ -195,17 +195,15 @@ async function main(): Promise<void> {
 	// otherwise consume the body as parsed JSON. Its own signature check is the trust
 	// boundary here, independent of session auth (GitHub's delivery carries no cookie).
 	// One App, one webhook endpoint, many tenants' installations (each tenant possibly
-	// binding several) — each delivery is routed to its owning tenant by the installation id
-	// it carries (see webhookRouter and TenantRegistry.findByInstallationId).
+	// binding several, and the same installation possibly bound by several tenants) — each
+	// delivery is fanned out to every tenant that has this installation bound (see
+	// webhookRouter and TenantRegistry.findAllByInstallationId).
 	if (webhookConfig !== undefined) {
 		app.use(
 			"/webhooks/github",
 			express.raw({ type: "application/json", limit: "1mb" }),
 			verifyGithubSignature(webhookConfig.secret),
-			webhookRouter((installationId) => {
-				const tenant = registry.findByInstallationId(installationId);
-				return tenant !== undefined ? { refreshDeps: tenant.refreshDeps } : undefined;
-			}),
+			webhookRouter((installationId) => registry.findAllByInstallationId(installationId).map((tenant) => ({ refreshDeps: tenant.refreshDeps }))),
 		);
 		console.log("GitHub webhook receiver: enabled at /webhooks/github");
 	} else {
