@@ -39,8 +39,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.QUIRE_DATA_DIR ?? join(process.cwd(), "data");
 
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
-const RECONCILE_INTERVAL_MS =
-	parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "20", 10) * 60 * 1000;
 const QUEUE_REFRESH_INTERVAL_MS =
 	parseInt(process.env["QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES"] ?? "5", 10) * 60 * 1000;
 
@@ -129,6 +127,19 @@ async function main(): Promise<void> {
 			? { publicUrl, secret: webhookSecret }
 			: undefined;
 
+	// With webhooks delivering changes as they happen, the reconcile poll is only a safety
+	// net and 20 minutes is plenty. Without them it is the *primary* ingestion channel, and a
+	// 20-minute floor is exactly the "PRs show up whenever" experience — poll every 5 minutes
+	// instead (not tighter: each refresh costs ~3 API calls per open PR, and a busy repo at a
+	// faster cadence brushes the GitHub App's 5000/hr installation limit). An explicit
+	// QUIRE_RECONCILE_INTERVAL_MINUTES overrides either default; empty or non-numeric values
+	// fall back rather than becoming a NaN interval (.env.example ships the key blank).
+	const defaultReconcileMinutes = webhookConfig !== undefined ? 20 : 5;
+	const parsedReconcileMinutes = parseInt(process.env["QUIRE_RECONCILE_INTERVAL_MINUTES"] ?? "", 10);
+	const reconcileMinutes =
+		Number.isFinite(parsedReconcileMinutes) && parsedReconcileMinutes > 0 ? parsedReconcileMinutes : defaultReconcileMinutes;
+	const reconcileIntervalMs = reconcileMinutes * 60 * 1000;
+
 	// Fails fast on a bad LLM_PROVIDER/key combination at startup instead of on whichever
 	// tenant's first request happens to hit resolveDefaultLlmProvider() first.
 	const { description: defaultLlmDescription } = resolveLlmProvider(process.env);
@@ -199,8 +210,9 @@ async function main(): Promise<void> {
 		console.log("GitHub webhook receiver: enabled at /webhooks/github");
 	} else {
 		console.warn(
-			"GitHub webhook receiver disabled (set QUIRE_PUBLIC_URL and GITHUB_APP_WEBHOOK_SECRET to enable) — " +
-				"PR updates rely on the 60s background refresh and 20-min reconcile poll instead of instant delivery.",
+			"GitHub webhook receiver disabled (set QUIRE_PUBLIC_URL and GITHUB_APP_WEBHOOK_SECRET to enable; " +
+				"for local dev, point the App's webhook at a smee.io channel or an `ngrok http 3000` tunnel) — " +
+				`PR updates rely on the 60s background refresh and the ${reconcileMinutes}-min reconcile poll instead of instant delivery.`,
 		);
 	}
 
@@ -283,7 +295,7 @@ async function main(): Promise<void> {
 				});
 			}
 		}
-	}, RECONCILE_INTERVAL_MS);
+	}, reconcileIntervalMs);
 	reconcileTimer.unref();
 
 	// Keeps queued PRs from drifting far behind main while they wait their turn — a bundle
