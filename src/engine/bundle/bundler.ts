@@ -110,17 +110,29 @@ export async function buildBundles(
 
 	// A prior bundle can only be seeded (its members skipped in clustering entirely)
 	// when every one of its members is both still present in this run's PR set and
-	// unchanged (not re-extracted). A single changed or missing (closed/merged) member
-	// invalidates the whole seed — its still-present members fall back to the normal
-	// comparison loop below rather than risk carrying a stale centroid (the anchor may
-	// be the one that changed) or duplicating a member across two clusters.
+	// unchanged (not re-extracted, and — since a PR body edit with no new commit is a
+	// cache hit for effects, not a re-extraction — with the same declaredDirection/
+	// directionInferred as when this bundle was last computed). A single changed or
+	// missing (closed/merged) member invalidates the whole seed — its still-present
+	// members fall back to the normal comparison loop below rather than risk carrying a
+	// stale centroid (the anchor may be the one that changed) or duplicating a member
+	// across two clusters. Without the direction-fields check, an edited PR whose marker
+	// was added/removed would stay stuck in its old bundle (an undeclared singleton
+	// missing a chance to join a matching bundle, or worse, a now-undeclared PR left
+	// grouped inside a multi-PR bundle in violation of INV-1/INV-3) until its next commit.
 	const currentIds = new Set(currentById.keys());
 	const seeds: ClusterSeed[] = [];
 	const seededIds = new Set<string>();
 	for (const bundle of priorBundles) {
-		const allUnchanged = bundle.members.every(
-			(m) => currentIds.has(m.id) && !reextractedPrIds.has(m.id),
-		);
+		const allUnchanged = bundle.members.every((m) => {
+			const current = currentById.get(m.id);
+			return (
+				current !== undefined &&
+				!reextractedPrIds.has(m.id) &&
+				current.declaredDirection === m.declaredDirection &&
+				current.directionInferred === m.directionInferred
+			);
+		});
 		if (!allUnchanged) continue;
 		// Refresh every seed member to this run's freshly-fetched PullRequest object
 		// instead of carrying the prior run's object forward — declaredDirection/ciStatus/
