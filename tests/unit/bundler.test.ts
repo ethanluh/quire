@@ -251,4 +251,60 @@ describe("buildBundles — seeded clustering from a prior run's bundles", () => 
 		expect(second.bundles[0]?.members[0]?.declaredDirection).toBe("refactor auth token storage");
 		expect(second.bundles[0]?.members[0]?.ciStatus).toBe("failure");
 	});
+
+	it("regroups a PR whose marker was added (still undeclared singleton in the seed) with a matching declared bundle", async () => {
+		const cache = new PrEffectCache();
+		const stub = new StubLlmProvider();
+		// First run: pr-a declares a direction and forms its own bundle; pr-b has no
+		// marker yet, so it's forced into its own undeclared singleton bundle.
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+
+		const prA = makePR("pr-a", "add passwordless auth");
+		const prB = makePR("pr-b", UNDECLARED_DIRECTION, { directionInferred: true });
+		const first = await buildBundles([prA, prB], stub, { similarityThreshold: 0.75 }, cache);
+		expect(first.bundles).toHaveLength(2);
+		const aBundle = first.bundles.find((b) => b.members.some((m) => m.id === "pr-a"))!;
+		const bBundle = first.bundles.find((b) => b.members.some((m) => m.id === "pr-b"))!;
+
+		// pr-b's body is edited to add a matching marker — no new commit, so headSha (and
+		// thus its cached effects) are unchanged, but directionInferred flips to false.
+		// This must invalidate pr-b's own seed and let it re-cluster into pr-a's bundle
+		// instead of being carried forward as a stale undeclared singleton.
+		stub.queueCompletion("1"); // pr-b's classify() call matches pr-a's centroid
+		const prBEdited = { ...prB, declaredDirection: "add passwordless auth", directionInferred: false };
+		const second = await buildBundles(
+			[prA, prBEdited], stub, { similarityThreshold: 0.75 }, cache, [aBundle, bBundle],
+		);
+
+		expect(second.bundles).toHaveLength(1);
+		expect(second.bundles[0]?.members.map((m) => m.id).sort()).toEqual(["pr-a", "pr-b"]);
+	});
+
+	it("splits a now-undeclared PR (marker removed) out of a multi-PR bundle instead of carrying the stale seed forward", async () => {
+		const cache = new PrEffectCache();
+		const stub = new StubLlmProvider();
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+		stub.queueCompletion("1"); // pr-b's classify() call matches pr-a's centroid
+
+		const prA = makePR("pr-a", "add passwordless auth");
+		const prB = makePR("pr-b", "add passwordless auth");
+		const first = await buildBundles([prA, prB], stub, { similarityThreshold: 0.75 }, cache);
+		const priorBundle = first.bundles[0]!;
+		expect(priorBundle.members.map((m) => m.id).sort()).toEqual(["pr-a", "pr-b"]);
+
+		// pr-b's marker is removed via edit — no new commit, so its effects are still a
+		// cache hit, but it must no longer be groupable with pr-a (INV-1/INV-3): the
+		// bundle's seed must be invalidated so pr-b splits into its own singleton and
+		// pr-a is free to re-cluster on its own.
+		const prBEdited = { ...prB, declaredDirection: UNDECLARED_DIRECTION, directionInferred: true };
+		const second = await buildBundles(
+			[prA, prBEdited], stub, { similarityThreshold: 0.75 }, cache, [priorBundle],
+		);
+
+		expect(second.bundles).toHaveLength(2);
+		const memberIds = second.bundles.map((b) => b.members.map((m) => m.id)).sort();
+		expect(memberIds).toEqual([["pr-a"], ["pr-b"]]);
+	});
 });
