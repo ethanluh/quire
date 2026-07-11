@@ -268,7 +268,6 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 			filterReposForUser: shared.filterReposForUser,
 			canUserAccessRepo: shared.canUserAccessRepo,
 			listInstallationsForUser,
-			isInstallationBoundToAnotherTeam: (installationId) => registry.isInstallationBoundToOtherTeam(installationId, teamId),
 			dataDir: shared.dataDir,
 			oauth: shared.oauth,
 			buildOctokit: (installationId) => buildInstallationOctokit(shared.appConfig, installationId),
@@ -339,24 +338,16 @@ export class TenantRegistry {
 	// small) installations[] array, instead of a maintained reverse index —
 	// accountState.current.installations is the one place installationId already lives, kept
 	// up to date by githubApp.ts's existing routes, so there's nothing else that could drift
-	// out of sync with it. One tenant can bind several installations, so this can't stop at
-	// the first tenant whose *selected* installation doesn't match — it has to check every
-	// installation that tenant has ever bound.
-	findByInstallationId(installationId: number): TenantContext | undefined {
+	// out of sync with it. One installation can now be bound by several teams at once (an org
+	// admin installing the App once and multiple Quire teams each connecting it), so this
+	// returns every match rather than picking a single "owner" — callers (webhookRouter's
+	// findTenant, in particular) fan an event out to all of them.
+	findAllByInstallationId(installationId: number): ReadonlyArray<TenantContext> {
+		const matches: TenantContext[] = [];
 		for (const tenant of this.tenants.values()) {
-			if (tenant.accountState.current.installations.some((i) => i.installationId === installationId)) return tenant;
+			if (tenant.accountState.current.installations.some((i) => i.installationId === installationId)) matches.push(tenant);
 		}
-		return undefined;
-	}
-
-	// True when some OTHER already-loaded team has this installation bound. Checked by
-	// githubApp.ts's install callback before it binds — without this, two teams could each
-	// bind the same installation and findByInstallationId's scan above would then route
-	// every webhook for it to whichever team happened to load first, silently starving the
-	// other's queue with no error on either side.
-	isInstallationBoundToOtherTeam(installationId: number, exceptTeamId: string): boolean {
-		const owner = this.findByInstallationId(installationId);
-		return owner !== undefined && owner.teamId !== exceptTeamId;
+		return matches;
 	}
 
 	// Loads every team that has ever connected anything, so the reconciliation poll and

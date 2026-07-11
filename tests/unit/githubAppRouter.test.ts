@@ -182,7 +182,11 @@ describe("githubAppRouter", () => {
 			repos,
 		) => repos,
 		listInstallationsForUser: (accessToken: string) => Promise<ReadonlyArray<AccessibleInstallation>> = async () => [],
-		isInstallationBoundToAnotherTeam: ((installationId: number) => boolean) | undefined = undefined,
+		// Unused: githubAppRouter no longer takes an isInstallationBoundToAnotherTeam option
+		// (one installation can now be bound by several teams at once), but this positional
+		// slot is kept as a placeholder so every existing positional setup(...) call below
+		// doesn't have to be renumbered.
+		_unusedInstallationBoundGuardSlot: unknown = undefined,
 		// Defaults to a no-op that always fails the exchange — fine for every test that never
 		// persists a github-user-token.json in the first place (refreshUserTokenFromDisk is a
 		// no-op with nothing on disk to load), and tests that DO care about the on-demand
@@ -261,7 +265,6 @@ describe("githubAppRouter", () => {
 				filterReposForUser,
 				canUserAccessRepo,
 				listInstallationsForUser,
-				isInstallationBoundToAnotherTeam,
 				dataDir: dir,
 				oauth,
 				buildOctokit,
@@ -437,7 +440,11 @@ describe("githubAppRouter", () => {
 		expect(persisted.installations[0]?.["accountLogin"]).toBe("acme-corp-renamed");
 	});
 
-	it("refuses to bind an installation another team already has bound", async () => {
+	it("binds an installation this router's team has never seen before, even if another team already has it bound elsewhere", async () => {
+		// githubAppRouter itself has no visibility into other teams at all (that cross-team
+		// question, when it existed, lived in TenantRegistry — see tenant.test.ts's
+		// findAllByInstallationId coverage) — from a single team's router's perspective,
+		// binding installation 555 always just succeeds.
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		const { accountPath } = setup(
 			async () => [],
@@ -445,11 +452,6 @@ describe("githubAppRouter", () => {
 			new StubLlmProvider(),
 			undefined,
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
-			"owner",
-			undefined,
-			async (repos) => repos,
-			undefined,
-			() => true,
 		);
 		await new Promise((resolve) => server.once("listening", resolve));
 		const start = await call(server, "POST", "/account/github/install/start");
@@ -462,8 +464,9 @@ describe("githubAppRouter", () => {
 		);
 
 		expect(status).toBe(302);
-		expect(location).toBe("/?account=error&reason=this+GitHub+installation+is+already+connected+to+a+different+Quire+team");
-		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+		expect(location).toBe("/?account=connected");
+		const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { installations: Record<string, unknown>[] };
+		expect(persisted.installations[0]?.["installationId"]).toBe(555);
 	});
 
 	it("derives accountType from the real installation instead of hardcoding it", async () => {

@@ -145,11 +145,11 @@ describe("TenantRegistry", () => {
 		);
 
 		expect(alpha.accountState.current.installations.map((i) => i.installationId)).toEqual([111, 222]);
-		expect(registry.findByInstallationId(111)?.teamId).toBe("alpha");
-		expect(registry.findByInstallationId(222)?.teamId).toBe("alpha");
+		expect(registry.findAllByInstallationId(111).map((t) => t.teamId)).toEqual(["alpha"]);
+		expect(registry.findAllByInstallationId(222).map((t) => t.teamId)).toEqual(["alpha"]);
 	});
 
-	it("findByInstallationId routes to the team that owns that installation, not any other", async () => {
+	it("findAllByInstallationId routes to the team that owns that installation, not any other", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
 		const registry = makeRegistry();
 
@@ -158,9 +158,22 @@ describe("TenantRegistry", () => {
 		alpha.accountState.current = accountStateWith(binding({ installationId: 111 }));
 		bravo.accountState.current = accountStateWith(binding({ installationId: 222 }));
 
-		expect(registry.findByInstallationId(111)?.teamId).toBe("alpha");
-		expect(registry.findByInstallationId(222)?.teamId).toBe("bravo");
-		expect(registry.findByInstallationId(999)).toBeUndefined();
+		expect(registry.findAllByInstallationId(111).map((t) => t.teamId)).toEqual(["alpha"]);
+		expect(registry.findAllByInstallationId(222).map((t) => t.teamId)).toEqual(["bravo"]);
+		expect(registry.findAllByInstallationId(999)).toEqual([]);
+	});
+
+	it("findAllByInstallationId returns every team that has bound the same installation", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
+		const registry = makeRegistry();
+
+		const alpha = await registry.getOrCreate("alpha");
+		const bravo = await registry.getOrCreate("bravo");
+		await registry.getOrCreate("charlie");
+		alpha.accountState.current = accountStateWith(binding({ installationId: 555 }));
+		bravo.accountState.current = accountStateWith(binding({ installationId: 555 }));
+
+		expect(registry.findAllByInstallationId(555).map((t) => t.teamId).sort()).toEqual(["alpha", "bravo"]);
 	});
 
 	it("hydrateExisting loads every team directory already on disk without a prior request", async () => {
@@ -173,8 +186,8 @@ describe("TenantRegistry", () => {
 		await registry.hydrateExisting();
 
 		expect(registry.all().map((t) => t.teamId).sort()).toEqual(["alpha", "bravo"]);
-		expect(registry.findByInstallationId(333)?.teamId).toBe("alpha");
-		expect(registry.findByInstallationId(444)?.teamId).toBe("bravo");
+		expect(registry.findAllByInstallationId(333).map((t) => t.teamId)).toEqual(["alpha"]);
+		expect(registry.findAllByInstallationId(444).map((t) => t.teamId)).toEqual(["bravo"]);
 	});
 
 	it("rejects a team id that doesn't look like one this process minted before touching the filesystem", async () => {
@@ -182,34 +195,5 @@ describe("TenantRegistry", () => {
 		const registry = makeRegistry();
 
 		await expect(registry.getOrCreate("../../etc/passwd")).rejects.toThrow();
-	});
-
-	describe("isInstallationBoundToOtherTeam", () => {
-		it("is false when no team has the installation bound", async () => {
-			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
-			const registry = makeRegistry();
-			await registry.getOrCreate("alpha");
-
-			expect(registry.isInstallationBoundToOtherTeam(555, "alpha")).toBe(false);
-		});
-
-		it("is false when the exempted team itself holds the installation", async () => {
-			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
-			const registry = makeRegistry();
-			const alpha = await registry.getOrCreate("alpha");
-			alpha.accountState.current = accountStateWith(binding({ installationId: 555 }));
-
-			expect(registry.isInstallationBoundToOtherTeam(555, "alpha")).toBe(false);
-		});
-
-		it("is true when a different team already holds the installation", async () => {
-			dir = await mkdtemp(join(tmpdir(), "quire-tenant-"));
-			const registry = makeRegistry();
-			const alpha = await registry.getOrCreate("alpha");
-			await registry.getOrCreate("bravo");
-			alpha.accountState.current = accountStateWith(binding({ installationId: 555 }));
-
-			expect(registry.isInstallationBoundToOtherTeam(555, "bravo")).toBe(true);
-		});
 	});
 });
