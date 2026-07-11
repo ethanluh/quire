@@ -5,6 +5,7 @@ import { join } from "node:path";
 import express from "express";
 import type { Server } from "node:http";
 import { webhookRouter } from "../../src/interface/server/routes/webhook.js";
+import type { WebhookRouterOptions } from "../../src/interface/server/routes/webhook.js";
 import type { RefreshDeps } from "../../src/interface/server/refreshRepoQueue.js";
 import { createAccountState } from "../../src/interface/server/accountState.js";
 import { createServerState } from "../../src/interface/server/state.js";
@@ -111,7 +112,11 @@ describe("webhookRouter", () => {
 		if (dir) await rm(dir, { recursive: true, force: true });
 	});
 
-	async function setup(client: StubGitHubClient = new StubGitHubClient(), provider = new StubLlmProvider()): Promise<{ refreshDeps: RefreshDeps; queue: MergeQueue }> {
+	async function setup(
+		client: StubGitHubClient = new StubGitHubClient(),
+		provider = new StubLlmProvider(),
+		options?: WebhookRouterOptions,
+	): Promise<{ refreshDeps: RefreshDeps; queue: MergeQueue }> {
 		const queue = new MergeQueue(join(dir, "queue.json"), client, new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson"));
 		await queue.load();
 		const refreshDeps: RefreshDeps = {
@@ -143,17 +148,19 @@ describe("webhookRouter", () => {
 		};
 		const app = express();
 		app.use(express.raw({ type: "application/json" }));
-		app.use(webhookRouter((installationId) => (installationId === BINDING.installationId ? { refreshDeps } : undefined)));
+		app.use(webhookRouter((installationId) => (installationId === BINDING.installationId ? { refreshDeps } : undefined), options));
 		server = app.listen(0);
 		return { refreshDeps, queue };
 	}
 
-	async function post(payload: unknown, event: string): Promise<{ status: number; body: unknown }> {
+	async function post(payload: unknown, event: string, deliveryId?: string): Promise<{ status: number; body: unknown }> {
 		const address = server.address();
 		if (address === null || typeof address === "string") throw new Error("no address");
+		const headers: Record<string, string> = { "Content-Type": "application/json", "X-GitHub-Event": event };
+		if (deliveryId !== undefined) headers["X-GitHub-Delivery"] = deliveryId;
 		const res = await fetch(`http://127.0.0.1:${address.port}/`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json", "X-GitHub-Event": event },
+			headers,
 			body: JSON.stringify(payload),
 		});
 		return { status: res.status, body: await res.json() };
@@ -216,6 +223,107 @@ describe("webhookRouter", () => {
 		expect(body).toEqual({ accepted: true });
 
 		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(refreshDeps.state.bundles.size).toBe(1);
+	});
+
+	it("ingests on an edited event, so a fixed declared-direction marker shows up without a new push", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		client.addFixture("octocat", "hello-world", makePrFixture());
+		const provider = new StubLlmProvider();
+		provider.queueCompletion('["adds OTP login"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		const { refreshDeps } = await setup(client, provider);
+
+		const { status, body } = await post(pullRequestEventPayload("octocat", "hello-world", "edited"), "pull_request");
+
+		expect(status).toBe(202);
+		expect(body).toEqual({ accepted: true });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(refreshDeps.state.bundles.size).toBe(1);
+	});
+
+	it("treats converted_to_draft as a trigger action", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		await setup();
+
+		const { status, body } = await post(pullRequestEventPayload("octocat", "hello-world", "converted_to_draft"), "pull_request");
+
+		expect(status).toBe(202);
+		expect(body).toEqual({ accepted: true });
+	});
+
+	it("ignores a redelivery that reuses an already-processed X-GitHub-Delivery id", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		client.addFixture("octocat", "hello-world", makePrFixture());
+		const provider = new StubLlmProvider();
+		provider.queueCompletion('["adds OTP login"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		await setup(client, provider);
+		let refreshes = 0;
+		const original = client.listOpenPullRequests.bind(client);
+		client.listOpenPullRequests = async (owner: string, repo: string) => {
+			refreshes++;
+			return original(owner, repo);
+		};
+
+		const first = await post(pullRequestEventPayload("octocat", "hello-world", "opened"), "pull_request", "guid-1");
+		const second = await post(pullRequestEventPayload("octocat", "hello-world", "opened"), "pull_request", "guid-1");
+
+		expect(first.status).toBe(202);
+		expect(second.status).toBe(200);
+		expect(second.body).toEqual({ ignored: true });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(refreshes).toBe(1);
+	});
+
+	it("processes a manual redelivery after the original delivery's retries were exhausted", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		client.addFixture("octocat", "hello-world", makePrFixture());
+		const provider = new StubLlmProvider();
+		provider.queueCompletion('["adds OTP login"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		const { refreshDeps } = await setup(client, provider, { retryDelaysMs: [] });
+		let calls = 0;
+		const original = client.listOpenPullRequests.bind(client);
+		client.listOpenPullRequests = async (owner: string, repo: string) => {
+			if (calls++ === 0) throw new Error("GitHub outage");
+			return original(owner, repo);
+		};
+
+		const first = await post(pullRequestEventPayload("octocat", "hello-world", "opened"), "pull_request", "guid-2");
+		expect(first.status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 50)); // fails, gives up, forgets the delivery id
+
+		const redelivery = await post(pullRequestEventPayload("octocat", "hello-world", "opened"), "pull_request", "guid-2");
+
+		expect(redelivery.status).toBe(202); // not swallowed as a duplicate
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(refreshDeps.state.bundles.size).toBe(1);
+	});
+
+	it("retries the post-ack refresh after a transient failure instead of losing the delivery", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
+		const client = new StubGitHubClient();
+		client.addFixture("octocat", "hello-world", makePrFixture());
+		const provider = new StubLlmProvider();
+		provider.queueCompletion('["adds OTP login"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		const { refreshDeps } = await setup(client, provider, { retryDelaysMs: [10, 10] });
+		let calls = 0;
+		const original = client.listOpenPullRequests.bind(client);
+		client.listOpenPullRequests = async (owner: string, repo: string) => {
+			if (calls++ === 0) throw new Error("transient GitHub API error");
+			return original(owner, repo);
+		};
+
+		const { status } = await post(pullRequestEventPayload("octocat", "hello-world", "opened"), "pull_request");
+
+		expect(status).toBe(202);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(calls).toBe(2);
 		expect(refreshDeps.state.bundles.size).toBe(1);
 	});
 
