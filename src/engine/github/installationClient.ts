@@ -1,6 +1,35 @@
 import { Octokit } from "@octokit/rest";
 import { createAppAuth } from "@octokit/auth-app";
+import { throttling } from "@octokit/plugin-throttling";
+import { retry } from "@octokit/plugin-retry";
 import { OctokitGitHubClient, isHttpError } from "./octokitClient.js";
+
+// The installation client is the one that fans out — ~3 calls per open PR per refresh,
+// across every tenant and every repo on the reconcile timer — so it's the one that trips
+// GitHub's primary/secondary rate limits. Without these plugins a 429/secondary-limit
+// response just threw, the refresh died, and the next poll re-tripped the same limit.
+// throttling waits out rate-limit windows (bounded retries below); retry handles transient
+// 5xx. The user/app clients below (single interactive calls) stay plain Octokit.
+const ThrottledOctokit = Octokit.plugin(throttling, retry);
+const MAX_RATE_LIMIT_RETRIES = 2;
+
+interface ThrottleCallbackOptions {
+	method: string;
+	url: string;
+}
+
+const throttleOptions = {
+	onRateLimit: (retryAfter: number, options: ThrottleCallbackOptions, _octokit: unknown, retryCount: number): boolean => {
+		console.warn(`GitHub rate limit hit on ${options.method} ${options.url}; retrying after ${retryAfter}s (attempt ${retryCount + 1})`);
+		return retryCount < MAX_RATE_LIMIT_RETRIES;
+	},
+	onSecondaryRateLimit: (retryAfter: number, options: ThrottleCallbackOptions, _octokit: unknown, retryCount: number): boolean => {
+		console.warn(
+			`GitHub secondary rate limit hit on ${options.method} ${options.url}; retrying after ${retryAfter}s (attempt ${retryCount + 1})`,
+		);
+		return retryCount < MAX_RATE_LIMIT_RETRIES;
+	},
+};
 
 export interface GitHubAppConfig {
 	appId: string;
@@ -19,9 +48,10 @@ export function isInstallationRevoked(err: unknown): boolean {
 }
 
 export function buildInstallationOctokit(config: GitHubAppConfig, installationId: number): Octokit {
-	return new Octokit({
+	return new ThrottledOctokit({
 		authStrategy: createAppAuth,
 		auth: { appId: config.appId, privateKey: config.privateKey, installationId },
+		throttle: throttleOptions,
 	});
 }
 

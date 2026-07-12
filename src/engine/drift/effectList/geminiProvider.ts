@@ -24,8 +24,13 @@ interface GeminiEmbedContentResponse {
 	embedding?: { values?: ReadonlyArray<number> };
 }
 
+// Same bound as anthropicProvider.ts: a provider lives as long as the connected LLM
+// account and every recorded prompt embeds a full PR diff — unbounded retention is a slow
+// leak on a long-running server, and nothing in production reads `calls`.
+const MAX_RETAINED_CALLS = 20;
+
 export class GeminiLlmProvider implements LlmProvider {
-	private readonly _calls: LlmCall[] = [];
+	private _calls: LlmCall[] = [];
 	private readonly baseUrl: string;
 	private readonly model: string;
 	private readonly embeddingModel: string;
@@ -80,7 +85,7 @@ export class GeminiLlmProvider implements LlmProvider {
 				?.filter((p) => !p.thought)
 				.map((p) => p.text ?? "")
 				.join("") ?? "";
-		this._calls.push({ messages, response: text });
+		this._calls = [...this._calls.slice(-(MAX_RETAINED_CALLS - 1)), { messages, response: text }];
 		return text;
 	}
 
