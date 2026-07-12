@@ -1,12 +1,36 @@
+// Every failure — network error, non-2xx status, or a non-JSON body (e.g. a 500 HTML
+// error page) — comes back as `{ error, status? }` rather than a rejected promise or a
+// half-parsed body, so callers have exactly one thing to check: `result.error`.
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body !== undefined) opts.body = JSON.stringify(body);
-  const r = await fetch(path, opts);
+  let r;
+  try {
+    r = await fetch(path, opts);
+  } catch {
+    return { error: 'Network error — could not reach the server' };
+  }
   if (r.status === 401) {
     showSigninGate();
-    return { error: 'Sign in required' };
+    return { error: 'Sign in required', status: 401 };
   }
-  return r.json();
+  let parsed;
+  let parseFailed = false;
+  try {
+    parsed = await r.json();
+  } catch {
+    parseFailed = true;
+  }
+  if (!r.ok) {
+    const message = !parseFailed && parsed && parsed.error
+      ? parsed.error
+      : `Request failed (${r.status}${r.statusText ? ' ' + r.statusText : ''})`;
+    return { error: message, status: r.status };
+  }
+  if (parseFailed) {
+    return { error: 'Unexpected non-JSON response from the server', status: r.status };
+  }
+  return parsed;
 }
 
 function escapeHtml(value) {
@@ -22,12 +46,30 @@ function showToast(message, tone) {
   const toast = document.getElementById('toast');
   toast.textContent = message;
   toast.className = `toast-${tone || 'error'} visible`;
+  if (!showToast._dismissWired) {
+    showToast._dismissWired = true;
+    toast.addEventListener('click', () => {
+      clearTimeout(showToast._t);
+      toast.classList.remove('visible');
+    });
+  }
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => toast.classList.remove('visible'), 3500);
+  // Error toasts stick around long enough to actually read (and can be tap-dismissed
+  // sooner); success/notice toasts keep the quick auto-dismiss.
+  const ttl = (tone || 'error') === 'error' ? 10000 : 3500;
+  showToast._t = setTimeout(() => toast.classList.remove('visible'), ttl);
 }
 
 function showError(message) {
   showToast(message, 'error');
+}
+
+// Inline error state for a pane list that failed to load, replacing a "Loading…"
+// placeholder that would otherwise sit there forever. `retryFnName` must be a global
+// zero-arg loader (e.g. 'loadQueue') since this renders through innerHTML.
+function paneErrorHtml(message, retryFnName, className) {
+  return `<div class="${className || 'empty'}">Could not load — ${escapeHtml(message)}<br>
+    <button class="btn" style="margin-top:var(--space-2)" onclick="${retryFnName}()">Retry</button></div>`;
 }
 
 async function withPending(btn, pendingLabel, fn) {
@@ -71,34 +113,54 @@ function startLiveUpdates() {
   source.onmessage = () => pollActivePane();
 }
 
-async function abortQueueEntry(bundleId, mergedCount, totalCount) {
+async function abortQueueEntry(bundleId, mergedCount, totalCount, btn) {
   const message = mergedCount > 0
     ? `Abort this bundle? ${mergedCount} of ${totalCount} member PRs already merged and will stay merged — aborting only stops Quire from retrying the rest. Nothing is reverted.`
     : 'Abort this bundle? It will stop being retried and remain in the queue marked as aborted.';
   if (!(await confirmAction(message))) return;
-  await api('POST', `/queue/${bundleId}/abort`, undefined);
+  const result = await withPending(btn, 'Aborting…', () => api('POST', `/queue/${bundleId}/abort`, undefined));
+  if (result.error) {
+    showError('Could not abort bundle: ' + result.error);
+    return;
+  }
   loadQueue();
 }
 
-async function disconnectInstallation(installationId) {
+async function disconnectInstallation(installationId, btn) {
   if (!(await confirmAction('Disconnect this GitHub App installation?'))) return;
-  await api('POST', `/account/github/disconnect/${installationId}`, undefined);
+  const result = await withPending(btn, 'Disconnecting…', () => api('POST', `/account/github/disconnect/${installationId}`, undefined));
+  if (result.error) {
+    showError('Could not disconnect installation: ' + result.error);
+    return;
+  }
   loadAccount();
 }
 
-async function overturnAudit(entryId) {
-  await api('POST', `/audit/${entryId}/overturn`);
+async function overturnAudit(entryId, btn) {
+  const result = await withPending(btn, 'Marking…', () => api('POST', `/audit/${entryId}/overturn`));
+  if (result.error) {
+    showError('Could not overturn audit entry: ' + result.error);
+    return;
+  }
   loadAudit();
 }
 
-async function promote(bundleId) {
-  await api('DELETE', `/shelf/${bundleId}`);
+async function promote(bundleId, btn) {
+  const result = await withPending(btn, 'Unshelving…', () => api('DELETE', `/shelf/${bundleId}`));
+  if (result.error) {
+    showError('Could not unshelf bundle: ' + result.error);
+    return;
+  }
   loadShelf();
   loadReview();
 }
 
-async function reattemptQueueEntry(bundleId) {
-  await api('POST', `/queue/${bundleId}/retry`, undefined);
+async function reattemptQueueEntry(bundleId, btn) {
+  const result = await withPending(btn, 'Retrying…', () => api('POST', `/queue/${bundleId}/retry`, undefined));
+  if (result.error) {
+    showError('Could not reattempt bundle: ' + result.error);
+    return;
+  }
   loadQueue();
 }
 
@@ -111,9 +173,13 @@ async function removeMember(login) {
   loadTeam();
 }
 
-async function removeRepo(owner, name) {
+async function removeRepo(owner, name, btn) {
   if (!(await confirmAction(`Stop watching ${owner}/${name}? Its review queue and bundle status entries will be cleared.`, { danger: true }))) return;
-  await api('DELETE', `/account/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, undefined);
+  const result = await withPending(btn, 'Removing…', () => api('DELETE', `/account/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, undefined));
+  if (result.error) {
+    showError('Could not remove repo: ' + result.error);
+    return;
+  }
   await loadAccount();
   loadReview();
 }
