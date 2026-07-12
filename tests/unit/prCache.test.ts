@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach } from "@jest/globals";
-import { mkdtemp, rm } from "node:fs/promises";
+import { describe, it, expect, afterEach, jest } from "@jest/globals";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PrEffectCache } from "../../src/engine/cache/prCache.js";
@@ -151,6 +151,36 @@ describe("PrEffectCache — persistence", () => {
 		await reader.load();
 		for (let i = 0; i < 8; i++) {
 			expect(reader.getEffects(`pr-${i}`, "sha-1", MODEL_A)).toEqual([`effect ${i}`]);
+		}
+	});
+
+	it("recovers after a failed write: save() neither throws nor poisons the chain, and retries the data", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-pr-cache-"));
+		// A file where the statePath's parent directory should be forces the write to fail —
+		// simulating a transient disk error (ENOSPC/EIO) during a refresh.
+		const blocker = join(dir, "blocker");
+		await writeFile(blocker, "not a directory", "utf8");
+		const statePath = join(blocker, "pr-cache.json");
+
+		const errorSpy = jest.spyOn(console, "error").mockImplementation(() => undefined);
+		try {
+			const cache = new PrEffectCache(statePath);
+			cache.putEffects("pr-1", "sha-1", "org", "repo", ["adds OTP login"], MODEL_A);
+			// Must not throw: the cache is an optimization, and this save() sits on the
+			// ingestion path (refreshRepoQueue awaits evictStaleForRepo → save) — a transient
+			// write failure aborting every future refresh until restart is the regression.
+			await cache.save();
+
+			// Disk recovers: the next save must actually write (the failed snapshot's dirty
+			// bit was restored), not no-op off a permanently rejected write chain.
+			await rm(blocker);
+			await cache.save();
+
+			const reader = new PrEffectCache(statePath);
+			await reader.load();
+			expect(reader.getEffects("pr-1", "sha-1", MODEL_A)).toEqual(["adds OTP login"]);
+		} finally {
+			errorSpy.mockRestore();
 		}
 	});
 });

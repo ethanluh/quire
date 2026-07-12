@@ -86,18 +86,39 @@ export class MergeQueue {
 		return run;
 	}
 
+	// Every mutating public method goes through withLock — including the ones whose
+	// read-modify-write is synchronous (enqueue, removeQueued, clear). Their mutation
+	// can't itself be torn, but unlocked they could land between a locked operation's
+	// awaits and be clobbered when that operation writes back an entry snapshot it
+	// captured earlier (see revertPr for the clearest case: it holds an entry across a
+	// GitHub network call).
 	async enqueue(bundle: Bundle, card?: ReviewCard): Promise<void> {
-		const entry: MergeQueueEntry = {
-			bundleId: bundle.id,
-			bundle,
-			...(card !== undefined ? { card } : {}),
-			enqueuedAt: new Date().toISOString(),
-			status: "queued",
-			revertedPrIds: [],
-			mergedPrIds: [],
-		};
-		this.state = { entries: [...this.state.entries, entry] };
-		await this.persist();
+		return this.withLock(async () => {
+			// Idempotent against an already-tracked bundle: the accept route enqueues before
+			// markDecided (so a crash between the two re-surfaces the bundle for review
+			// instead of stranding it), which means a re-accept after such a crash calls this
+			// again for a bundle that's already actively queued. bundleId is content-addressed
+			// (hash of the member-id set), so "same id, active status" is the same accept, not
+			// a new one — appending a second entry would corrupt getEntry/setEntry's
+			// one-entry-per-bundleId assumption.
+			const active = this.state.entries.some(
+				(e) =>
+					e.bundleId === bundle.id &&
+					(e.status === "queued" || e.status === "landing" || e.status === "conflict" || e.status === "investigating"),
+			);
+			if (active) return;
+			const entry: MergeQueueEntry = {
+				bundleId: bundle.id,
+				bundle,
+				...(card !== undefined ? { card } : {}),
+				enqueuedAt: new Date().toISOString(),
+				status: "queued",
+				revertedPrIds: [],
+				mergedPrIds: [],
+			};
+			this.state = { entries: [...this.state.entries, entry] };
+			await this.persist();
+		});
 	}
 
 	// Records a bundle rejected via the review-queue gesture straight into a terminal "closed"
@@ -105,18 +126,20 @@ export class MergeQueue {
 	// visible-in-the-queue treatment a landed bundle gets, instead of the bundle just vanishing
 	// once the review queue deletes its own copy.
 	async enqueueClosed(bundle: Bundle, card?: ReviewCard): Promise<void> {
-		const entry: MergeQueueEntry = {
-			bundleId: bundle.id,
-			bundle,
-			...(card !== undefined ? { card } : {}),
-			enqueuedAt: new Date().toISOString(),
-			status: "closed",
-			closedAt: new Date().toISOString(),
-			revertedPrIds: [],
-			mergedPrIds: [],
-		};
-		this.state = { entries: [...this.state.entries, entry] };
-		await this.persist();
+		return this.withLock(async () => {
+			const entry: MergeQueueEntry = {
+				bundleId: bundle.id,
+				bundle,
+				...(card !== undefined ? { card } : {}),
+				enqueuedAt: new Date().toISOString(),
+				status: "closed",
+				closedAt: new Date().toISOString(),
+				revertedPrIds: [],
+				mergedPrIds: [],
+			};
+			this.state = { entries: [...this.state.entries, entry] };
+			await this.persist();
+		});
 	}
 
 	private async setEntry(bundleId: string, updated: MergeQueueEntry): Promise<void> {
@@ -344,7 +367,15 @@ export class MergeQueue {
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
+	// Locked because it holds `entry` across the revertPullRequest network call and then
+	// writes back a spread of that snapshot — unlocked, a concurrent dequeueNext/
+	// recordExternalMerge landing during the call would have its status transition
+	// silently overwritten by the stale snapshot.
 	async revertPr(bundleId: string, prId: string): Promise<string> {
+		return this.withLock(() => this.revertPrLocked(bundleId, prId));
+	}
+
+	private async revertPrLocked(bundleId: string, prId: string): Promise<string> {
 		const entry = this.state.entries.find((e) => e.bundleId === bundleId);
 		if (entry === undefined) throw new Error(`Bundle ${bundleId} not found in queue`);
 		if (!entry.mergedPrIds.includes(prId)) {
@@ -394,11 +425,13 @@ export class MergeQueue {
 	}
 
 	async removeQueued(bundleId: string): Promise<MergeQueueEntry | undefined> {
-		const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "queued");
-		if (entry === undefined) return undefined;
-		this.state = { entries: this.state.entries.filter((e) => e.bundleId !== bundleId) };
-		await this.persist();
-		return entry;
+		return this.withLock(async () => {
+			const entry = this.state.entries.find((e) => e.bundleId === bundleId && e.status === "queued");
+			if (entry === undefined) return undefined;
+			this.state = { entries: this.state.entries.filter((e) => e.bundleId !== bundleId) };
+			await this.persist();
+			return entry;
+		});
 	}
 
 	// Clears a "conflict" or "aborted" entry and runs the merge attempt immediately — a human
@@ -556,8 +589,10 @@ export class MergeQueue {
 	}
 
 	async clear(): Promise<void> {
-		this.state = { entries: [] };
-		await this.persist();
+		return this.withLock(async () => {
+			this.state = { entries: [] };
+			await this.persist();
+		});
 	}
 
 	// Best-effort: catches "behind" drift on queued PRs early via GitHub's free branch-update

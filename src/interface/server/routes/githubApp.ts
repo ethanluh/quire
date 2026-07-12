@@ -222,13 +222,28 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 				const { autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation } = req.body as z.infer<
 					typeof SettingsSchema
 				>;
-				const updatedRepo: RepoBinding = { ...target, autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation };
-				const updated: InstallationAccountState = {
-					...current,
-					repos: current.repos.map((r) => (r === target ? updatedRepo : r)),
-				};
-				accountState.current = updated;
-				await saveInstallation(accountPath, updated);
+				// Locked like the unbind/disconnect routes below: accountState is shared per-team
+				// mutable state, and saveInstallation persists a snapshot — unlocked, a concurrent
+				// repo add/bind could land between this mutation and its save and have its change
+				// clobbered on disk by this stale snapshot (memory and disk then disagree until
+				// the next write). Re-finds the target under the lock for the same reason.
+				const updatedRepo = await withInstallationLock(teamId, async (): Promise<RepoBinding | undefined> => {
+					const locked = accountState.current;
+					const lockedTarget = locked.repos.find((r) => r.owner === owner && r.name === name);
+					if (lockedTarget === undefined) return undefined;
+					const repo: RepoBinding = { ...lockedTarget, autoMergeOnAccept, flagConflictsForFleet, enableDeepConflictInvestigation };
+					const updated: InstallationAccountState = {
+						...locked,
+						repos: locked.repos.map((r) => (r === lockedTarget ? repo : r)),
+					};
+					accountState.current = updated;
+					await saveInstallation(accountPath, updated);
+					return repo;
+				});
+				if (updatedRepo === undefined) {
+					res.status(404).json({ error: "That repo isn't currently added" });
+					return;
+				}
 				res.json(updatedRepo);
 			} catch (err) {
 				next(err);
@@ -284,8 +299,12 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 				throw err;
 			}
 
-			const updated = bindInstallation(installationId, account);
-			await saveInstallation(accountPath, updated);
+			// Locked so the bind and its save are atomic w.r.t. every other accountState
+			// mutation (repo select/settings/unbind) — see the settings route above.
+			await withInstallationLock(teamId, async () => {
+				const updated = bindInstallation(installationId, account);
+				await saveInstallation(accountPath, updated);
+			});
 
 			res.redirect(accountResultRedirectUrl("connected", undefined));
 		} catch (err) {
@@ -357,8 +376,12 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 				}
 				throw err;
 			}
-			const updated = bindInstallation(installationId, account);
-			await saveInstallation(accountPath, updated);
+			// Locked so the bind and its save are atomic w.r.t. every other accountState
+			// mutation — see the settings route above.
+			await withInstallationLock(teamId, async () => {
+				const updated = bindInstallation(installationId, account);
+				await saveInstallation(accountPath, updated);
+			});
 			res.json({ connected: true, accountLogin: account.accountLogin, accountType: account.accountType });
 		} catch (err) {
 			next(err);
@@ -458,19 +481,46 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 			// Add BEFORE calling enqueueRefresh (rather than after): refreshRepoQueue resolves
 			// "is there an installation bound for this repo" via installationForRepo, which reads
 			// accountState.current.repos — with the repo not yet present, that resolution would
-			// fail on the very first refresh. Rolled back below (only if nothing else changed it
-			// meanwhile) if the initial fetch fails, so a failed add never sticks.
-			const updated: InstallationAccountState = { ...current, repos: [...current.repos, newRepo] };
-			accountState.current = updated;
+			// fail on the very first refresh. Rolled back below if the initial fetch fails, so a
+			// failed add never sticks.
+			//
+			// The add (and the rollback/persist below) run under withInstallationLock: the awaits
+			// above (token refresh, canUserAccessRepo) sit between this handler's first read of
+			// accountState.current and this write, so two concurrent selects — or a select racing
+			// settings/bind/unbind — would otherwise both build from the same stale snapshot and
+			// the loser's repo binding would silently vanish (its webhooks and reconcile polls
+			// with it). Re-checks the already-watched condition under the lock; the slow
+			// enqueueRefresh deliberately stays OUTSIDE the lock so a first fetch can't block
+			// every other installation mutation for its duration.
+			const added = await withInstallationLock(teamId, async () => {
+				const locked = accountState.current;
+				if (locked.installations.every((i) => i.installationId !== installationId)) return "unknownInstallation" as const;
+				if (locked.repos.some((r) => r.owner === owner && r.name === name)) return "alreadyWatched" as const;
+				accountState.current = { ...locked, repos: [...locked.repos, newRepo] };
+				return "added" as const;
+			});
+			if (added === "unknownInstallation") {
+				res.status(400).json({ error: "Unknown installation" });
+				return;
+			}
+			if (added === "alreadyWatched") {
+				res.status(409).json({ error: "This repo is already being watched" });
+				return;
+			}
 			let summary;
 			try {
 				summary = await enqueueRefresh(owner, name, refreshDeps);
 			} catch (err) {
-				if (accountState.current === updated) accountState.current = current;
+				await withInstallationLock(teamId, async () => {
+					const locked = accountState.current;
+					accountState.current = { ...locked, repos: locked.repos.filter((r) => r !== newRepo) };
+				});
 				throw err;
 			}
 
-			await saveInstallation(accountPath, updated);
+			// Persists the current locked snapshot (not the pre-refresh one) so a concurrent
+			// mutation that landed during the refresh isn't clobbered on disk.
+			await withInstallationLock(teamId, () => saveInstallation(accountPath, accountState.current));
 			res.json({ added: newRepo, ...summary, ...(webhooksEnabled ? {} : { webhookDisabledReason: "not configured" }) });
 		} catch (err) {
 			next(err);
