@@ -43,7 +43,7 @@ function installationHtml(installation) {
   return `<div class="repo-entry">
     <span class="badge badge-neutral">${escapeHtml(installation.accountType)}</span>
     <span class="repo-name">${escapeHtml(installation.accountLogin)}</span>
-    <button class="btn btn-reject" onclick="disconnectInstallation(${installation.installationId})">Disconnect</button>
+    <button class="btn btn-reject btn-disconnect-installation" data-installation-id="${escapeHtml(String(installation.installationId))}">Disconnect</button>
   </div>`;
 }
 
@@ -87,8 +87,8 @@ function memberRowHtml(m) {
   return `<div class="repo-entry">
     <span class="repo-name">${escapeHtml(m.login)}</span>
     ${badge}
-    <select onchange="setMemberRole('${escapeHtml(m.login)}', this.value)">${roleOptions}</select>
-    <button class="btn btn-reject" onclick="removeMember('${escapeHtml(m.login)}')">Remove</button>
+    <select class="select-member-role" data-login="${escapeHtml(m.login)}">${roleOptions}</select>
+    <button class="btn btn-reject btn-remove-member" data-login="${escapeHtml(m.login)}">Remove</button>
   </div>`;
 }
 
