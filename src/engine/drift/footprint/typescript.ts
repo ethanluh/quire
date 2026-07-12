@@ -48,9 +48,10 @@ export class TypeScriptAnalyzer implements StaticAnalyzer {
 		return symbols;
 	}
 
-	async computeExpectedFootprint(bundle: Bundle): Promise<ReadonlyArray<string>> {
+	async computeExpectedFootprint(bundle: Bundle, screenedPrId: string): Promise<ReadonlyArray<string>> {
 		const files = new Set<string>();
 		for (const member of bundle.members) {
+			if (member.id === screenedPrId) continue;
 			for (const f of member.filesTouched) {
 				files.add(f);
 			}

@@ -172,12 +172,17 @@ export async function orchestratePipeline(
 			const checkCoherence = bundle.members.length > 1;
 			await Promise.all(bundle.members.map(async (member) => {
 				const rawClauses = effectsByPr.get(member.id) ?? [];
+				// Leave-one-out comparison target: the member is screened against the other
+				// members' effect evidence, never its own (see runCheapScreen).
+				const otherClauses = bundle.members
+					.filter((m) => m.id !== member.id)
+					.flatMap((m) => effectsByPr.get(m.id) ?? []);
 				if (!checkCoherence) {
-					driftVerdicts.set(member.id, await runCheapScreen(member, bundle, rawClauses, provider, analyzer));
+					driftVerdicts.set(member.id, await runCheapScreen(member, bundle, rawClauses, otherClauses, provider, analyzer));
 					return;
 				}
 				const [verdict, touches] = await Promise.all([
-					runCheapScreen(member, bundle, rawClauses, provider, analyzer),
+					runCheapScreen(member, bundle, rawClauses, otherClauses, provider, analyzer),
 					analyzer.analyzeSymbolTouches(member.diff),
 				]);
 				driftVerdicts.set(member.id, verdict);

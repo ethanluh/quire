@@ -1,10 +1,39 @@
 import { describe, it, expect } from "@jest/globals";
 import { TypeScriptAnalyzer } from "../../src/engine/drift/footprint/typescript.js";
-import type { Diff } from "../../src/engine/types/core.js";
+import type { Bundle, Diff, PullRequest } from "../../src/engine/types/core.js";
 
 function diffFromHunk(filePath: string, additions: string[], deletions: string[] = []): Diff {
 	return { raw: "", hunks: [{ filePath, additions, deletions }] };
 }
+
+function makePR(id: string, filesTouched: string[]): PullRequest {
+	return {
+		id, repoOwner: "org", repoName: "repo", number: 1,
+		headSha: `sha-${id}`,
+		declaredDirection: "add passwordless auth",
+		directionInferred: false,
+		diff: { raw: "", hunks: [] },
+		filesTouched,
+		symbolsTouched: [], testNamesChanged: [], ciStatus: "success",
+	};
+}
+
+describe("TypeScriptAnalyzer.computeExpectedFootprint — leave-one-out", () => {
+	const analyzer = new TypeScriptAnalyzer();
+
+	it("excludes the screened member's own files — only the other members define the expected footprint", async () => {
+		const bundle: Bundle = {
+			id: "bundle-1", direction: "add passwordless auth", directionInferred: false,
+			effectSummary: "",
+			members: [makePR("pr-a", ["src/auth.ts", "src/otp.ts"]), makePR("pr-b", ["src/auth.ts", "src/rogue.ts"])],
+		};
+		// Screening pr-b: pr-b's own src/rogue.ts must NOT be in the expected set (a
+		// footprint that includes the screened member's own files makes every touch
+		// "expected" by construction and the anomaly signal a structural no-op).
+		const expected = await analyzer.computeExpectedFootprint(bundle, "pr-b");
+		expect([...expected].sort()).toEqual(["src/auth.ts", "src/otp.ts"]);
+	});
+});
 
 describe("TypeScriptAnalyzer.analyzeSymbolTouches", () => {
 	const analyzer = new TypeScriptAnalyzer();
