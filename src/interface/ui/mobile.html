@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta id="theme-color-tag" name="theme-color" content="#fbf6ec">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzdjM2IzMiIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjZmJmNmVjIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5RPC90ZXh0Pjwvc3ZnPg==">
 <title>Quire</title>
 <link rel="stylesheet" href="styles/tokens.css">
@@ -207,7 +208,7 @@
   .repo-entry .btn { width: auto; margin-top: 0; padding: var(--space-2) var(--space-5); flex: 0 0 auto; }
   .repo-entry select { width: auto; margin-bottom: 0; flex: 0 0 auto; }
 
-  .empty { color: var(--color-text-faint); font-size: var(--text-base); padding: var(--space-10) 0; text-align: center; }
+  .empty { color: var(--color-text-muted); font-size: var(--text-base); padding: var(--space-10) 0; text-align: center; }
 
   .audit-list { display: flex; flex-direction: column; gap: var(--space-3); overflow-y: auto; }
   .audit-entry { font-size: var(--text-sm); display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
@@ -1416,11 +1417,21 @@ async function selectRepo(owner, name, installationId) {
 // Theme: "paper" (light, default) and "ink" (dark) — kept in sync with the desktop view.
 const THEME_KEY = 'quire-theme';
 const themeBtn = document.getElementById('btn-theme');
+const themeColorTag = document.getElementById('theme-color-tag');
+const THEME_COLORS = { paper: '#fbf6ec', ink: '#26201a' };
+
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   themeBtn.textContent = theme === 'ink' ? 'Light' : 'Dark';
+  themeColorTag.setAttribute('content', THEME_COLORS[theme]);
 }
-applyTheme(localStorage.getItem(THEME_KEY) === 'ink' ? 'ink' : 'paper');
+
+// Seed: explicit localStorage, then prefers-color-scheme, else default to 'paper'.
+const savedTheme = localStorage.getItem(THEME_KEY);
+const systemPrefersDark = matchMedia('(prefers-color-scheme: dark)').matches;
+const initialTheme = savedTheme || (systemPrefersDark ? 'ink' : 'paper');
+applyTheme(initialTheme);
+
 themeBtn.addEventListener('click', () => {
   const next = document.documentElement.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
   localStorage.setItem(THEME_KEY, next);
