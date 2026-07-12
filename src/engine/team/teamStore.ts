@@ -10,6 +10,11 @@ import { sanitizeIdentifier } from "../util/identifier.js";
 // revoke, and silently succeeding would misleadingly suggest the link stopped working.
 export class InviteAlreadyRedeemedError extends Error {}
 
+// Outcome of redeemInvite's atomic validate-and-consume (see the method). "redeemed" and
+// "already-redeemed-by-self" both permit the caller to proceed (the latter being an idempotent
+// re-click by the same login); the rest are terminal rejections.
+export type InviteRedemptionResult = "redeemed" | "already-redeemed-by-self" | "missing" | "revoked" | "already-used";
+
 // A login is always a GitHub username here (requireSession only ever sets it from a
 // verified GitHub identity), which GitHub itself restricts to alphanumeric characters and
 // hyphens — but it's still externally supplied input joined straight into a filesystem
@@ -272,16 +277,29 @@ export class TeamStore {
 		});
 	}
 
-	// Called by /team/join on successful redemption. Silently a no-op if the record is
-	// missing (e.g. it predates this feature) — the token itself already proved the invite
-	// was valid; this is bookkeeping for visibility, not a second authorization check.
-	async markInviteRedeemed(teamId: string, id: string, redeemedBy: string): Promise<void> {
+	// Called by /team/join. Atomically validates the invite and consumes it: the revocation,
+	// single-use, and already-used checks AND the redeemed stamp all happen inside one per-team
+	// lock, so two concurrent /join calls with the same token can't both observe "not yet
+	// redeemed" and both be admitted — the invite can grant admin, so that race was a privilege-
+	// escalation path (Finding 3). A MISSING record is rejected, not honored: single-use and
+	// revocation state both live in that record, so treating its absence as "valid, unlimited
+	// use" silently disabled both (Finding 4). Re-redemption by the SAME login is idempotent
+	// ("already-redeemed-by-self"), preserving the double-click / second-tab tolerance the
+	// caller relies on.
+	async redeemInvite(teamId: string, id: string, login: string): Promise<InviteRedemptionResult> {
 		return this.withTeamLock(teamId, async () => {
 			const existing = await this.listInvites(teamId);
+			const target = existing.find((invite) => invite.id === id);
+			if (target === undefined) return "missing";
+			if (target.revokedAt !== undefined) return "revoked";
+			if (target.redeemedAt !== undefined) {
+				return target.redeemedBy === login ? "already-redeemed-by-self" : "already-used";
+			}
 			const updated = existing.map((invite) =>
-				invite.id === id ? { ...invite, redeemedBy, redeemedAt: new Date().toISOString() } : invite,
+				invite.id === id ? { ...invite, redeemedBy: login, redeemedAt: new Date().toISOString() } : invite,
 			);
 			await this.saveInvites(teamId, updated);
+			return "redeemed";
 		});
 	}
 

@@ -4,11 +4,16 @@ import type { ServerState } from "../state.js";
 import { validateIncomingPayload, normalizePR } from "../../../engine/ingest/ingest.js";
 import { ingestIntoQueue } from "../ingestIntoQueue.js";
 import type { PipelineDeps } from "../ingestIntoQueue.js";
+import { requireRole } from "../middleware/requireRole.js";
 
 export function prsRouter(state: ServerState, deps: PipelineDeps, _queue: MergeQueue): Router {
 	const router = Router();
 
-	router.post("/ingest", async (req, res, next) => {
+	// Owner/admin only: this injects arbitrary caller-supplied PR payloads straight into the
+	// team's review queue, producing bundles/cards. Real swarm PRs arrive through GitHub
+	// (refreshRepoQueue / the webhook), so this manual seed path shouldn't be open to every
+	// member.
+	router.post("/ingest", requireRole("owner", "admin"), async (req, res, next) => {
 		try {
 			const payloads: unknown[] = Array.isArray(req.body) ? req.body : [req.body];
 			const prs = [];

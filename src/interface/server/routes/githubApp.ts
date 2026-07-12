@@ -161,6 +161,24 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 		return updated;
 	}
 
+	// Both paths that bind an installation — the GitHub Setup-URL redirect (/install/callback)
+	// and the redirect-free /connect — must prove the *signed-in user* actually has access to
+	// the installation, not merely that it exists for the App. getInstallationAccount succeeds
+	// for ANY installation of this App, and installation ids are small enumerable integers, so
+	// without this check any signed-in user could bind another org's installation to their team
+	// and then drive its write token (merge/close/revert on that org's PRs). Resolves the user's
+	// OAuth token (refreshing from disk on a cache miss, same as the repo picker) and checks it
+	// against the installations GitHub says that user can see. Fails closed: no token → denied.
+	async function verifyUserInstallationAccess(login: string | undefined, installationId: number): Promise<"granted" | "no-token" | "no-access"> {
+		if (login !== undefined && userTokenCache.get(login) === undefined) {
+			await refreshUserTokenFromDisk(login, userTokenPath(dataDir, login), oauth, userTokenCache);
+		}
+		const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
+		if (userToken === undefined) return "no-token";
+		const accessible = await listInstallationsForUser(userToken);
+		return accessible.some((i) => i.installationId === installationId) ? "granted" : "no-access";
+	}
+
 	interface RepoListCacheEntry {
 		expiresAt: number;
 		repos: Promise<ReadonlyArray<RepoSummary>>;
@@ -256,7 +274,7 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 	// a retry) can't clobber this one's pending state the way a shared singleton would.
 	// mintOrReuseStateCookie reuses an already-pending nonce from this same browser instead
 	// of always minting fresh, so a double-click or a second tab doesn't orphan the first.
-	router.post("/install/start", (req, res) => {
+	router.post("/install/start", requireRole("owner", "admin"), (req, res) => {
 		const state = mintOrReuseStateCookie(req, res, INSTALL_STATE_COOKIE_NAME, INSTALL_STATE_TTL_MS, secureCookies);
 		const params = new URLSearchParams({ state });
 		res.json({ installUrl: `https://github.com/apps/${appSlug}/installations/new?${params.toString()}` });
@@ -269,8 +287,14 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 	// session cookie to reach this handler at all. If that cookie expires or is cleared while
 	// the GitHub App-installation UI is open, the callback 401s before this code runs and the
 	// installation (already completed on GitHub's side) never gets bound here. Known gap, not
-	// addressed by this change; fixing it means deciding how an install-callback route can be
-	// authenticated without a fresh session in a still-single-tenant, pre-multi-user Quire.
+	// addressed by this change.
+	//
+	// Authorization matches /connect (this is the same bind sink, reached via a redirect rather
+	// than an AJAX call): the caller must be an owner/admin AND must actually have GitHub access
+	// to the installation being bound. The state cookie alone only proves this browser started
+	// an install flow — not which installation it may bind — so on its own it would let any
+	// signed-in member bind an arbitrary enumerable installation id. Both checks redirect to an
+	// error result rather than returning JSON, since the caller is a browser mid-redirect.
 	router.get("/install/callback", async (req, res, next) => {
 		try {
 			const { installation_id: installationIdRaw, state: returnedState } = req.query;
@@ -286,7 +310,26 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 				return;
 			}
 
+			const role = res.locals.membership?.role;
+			if (role !== "owner" && role !== "admin") {
+				res.redirect(accountResultRedirectUrl("error", "only a team owner or admin can connect a GitHub installation"));
+				return;
+			}
+
 			const installationId = Number(installationIdRaw);
+
+			const access = await verifyUserInstallationAccess(res.locals.login, installationId);
+			if (access !== "granted") {
+				res.redirect(
+					accountResultRedirectUrl(
+						"error",
+						access === "no-token"
+							? "reconnect your GitHub sign-in and try connecting the installation again"
+							: "your GitHub account doesn't have access to that installation",
+					),
+				);
+				return;
+			}
 
 			let account: InstallationAccount;
 			try {
@@ -346,22 +389,15 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 			const { installationId } = req.body as z.infer<typeof ConnectInstallationSchema>;
 
 			// getInstallationAccount only proves the installation exists *for the App* — it says
-			// nothing about whether THIS user may bind it. Installation ids are small enumerable
-			// integers, so without an access check any signed-in user could bind another org's
-			// installation to their own team and then drive its write token. Gate it on the same
-			// list the picker (/available-installations) is built from: the installations this
-			// user can actually see on GitHub. Fails closed when no user token is available.
-			const login = res.locals.login;
-			if (login !== undefined && userTokenCache.get(login) === undefined) {
-				await refreshUserTokenFromDisk(login, userTokenPath(dataDir, login), oauth, userTokenCache);
-			}
-			const userToken = login !== undefined ? userTokenCache.get(login) : undefined;
-			if (userToken === undefined) {
+			// nothing about whether THIS user may bind it (see verifyUserInstallationAccess). Gate
+			// on the same list the picker (/available-installations) is built from: the
+			// installations this user can actually see on GitHub. Fails closed when no user token.
+			const access = await verifyUserInstallationAccess(res.locals.login, installationId);
+			if (access === "no-token") {
 				res.status(403).json({ error: "Reconnect your GitHub sign-in to connect an installation." });
 				return;
 			}
-			const accessible = await listInstallationsForUser(userToken);
-			if (!accessible.some((i) => i.installationId === installationId)) {
+			if (access === "no-access") {
 				res.status(403).json({ error: "You don't have access to that GitHub installation." });
 				return;
 			}
@@ -440,8 +476,10 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 	// Adds a repo to the team's watch list — a team can watch several concurrently, so this
 	// is additive, not a single-slot replace. 409 if the repo is already being watched;
 	// re-adding the same (owner, name) through a different installation isn't supported
-	// (remove it first via DELETE /repos/:owner/:name, then re-add).
-	router.post("/repos/select", validateBody(SelectRepoSchema), async (req, res, next) => {
+	// (remove it first via DELETE /repos/:owner/:name, then re-add). Owner/admin only, matching
+	// its inverse (DELETE /repos/:owner/:name) — adding a watched repo is a team-wide config
+	// change (it starts ingesting that repo for everyone), not a per-member action.
+	router.post("/repos/select", requireRole("owner", "admin"), validateBody(SelectRepoSchema), async (req, res, next) => {
 		try {
 			const { owner, name, installationId } = req.body as z.infer<typeof SelectRepoSchema>;
 			const current = accountState.current;

@@ -21,6 +21,7 @@ import { resolveMembership } from "./middleware/resolveMembership.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { eventsRouter } from "./routes/events.js";
 import { accountRouter } from "./routes/account.js";
+import { createSessionEpochStore } from "./sessionEpoch.js";
 import { teamRouter } from "./routes/team.js";
 import { migrateLegacyData } from "./migrateLegacyData.js";
 import { TeamStore } from "../../engine/team/teamStore.js";
@@ -97,16 +98,21 @@ async function main(): Promise<void> {
 	}
 	const sessionSecret = await resolveSessionSecret(DATA_DIR);
 	const allowedLogins = process.env["QUIRE_ALLOWED_GITHUB_LOGINS"];
-	if (allowedLogins === undefined || allowedLogins === "") {
+	// Gate on the PARSED result, not raw string-emptiness: a value like "," or " " is non-empty
+	// as a string but parses to an effectively-empty (allow-all) allowlist, which would sail past
+	// a `=== ""` check and silently admit every GitHub account in production. createAllowlist is
+	// the single source of truth for what "allow-all" means; the explicit "*" is the one allow-all
+	// a host may opt into when hosting.
+	const allowlist = createAllowlist(allowedLogins);
+	if (allowlist.allowsAll && !allowlist.explicitWildcard) {
 		if (isProduction) {
 			throw new Error(
 				"QUIRE_ALLOWED_GITHUB_LOGINS must be set when hosting (QUIRE_PUBLIC_URL is https) — " +
-					"an empty allowlist would let any GitHub account sign in. Set a comma-separated login list.",
+					"an empty allowlist would let any GitHub account sign in. Set a comma-separated login list, or \"*\" to intentionally allow all.",
 			);
 		}
-		console.warn("QUIRE_ALLOWED_GITHUB_LOGINS not set — any GitHub account can sign in. Set this before hosting.");
+		console.warn("QUIRE_ALLOWED_GITHUB_LOGINS not set (or empty) — any GitHub account can sign in. Set this before hosting.");
 	}
-	const allowlist = createAllowlist(allowedLogins);
 
 	const appConfig: GitHubAppConfig = {
 		appId: requireEnv("GITHUB_APP_ID"),
@@ -223,13 +229,14 @@ async function main(): Promise<void> {
 	// so the frontend can always load and show an appropriate signed-in/signed-out state.
 	app.use(express.static(join(__dirname, "../ui")));
 
-	const session = requireSession(sessionSecret, allowlist, isProduction);
+	const sessionEpochs = createSessionEpochStore(DATA_DIR);
+	const session = requireSession(sessionSecret, allowlist, isProduction, sessionEpochs);
 
 	// Login-establishing routes: reachable without a session (that's the point). Mounted
 	// before the global `session` middleware below applies to everything else.
 	app.use(
 		"/account/github",
-		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache, DATA_DIR),
+		accountRouter(oauthDeps, fetchAuthenticatedUser, allowlist, sessionSecret, isProduction, session, userTokenCache, DATA_DIR, sessionEpochs),
 	);
 
 	app.use(session);

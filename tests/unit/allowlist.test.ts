@@ -36,4 +36,35 @@ describe("createAllowlist", () => {
 		const allowlist = createAllowlist(" * ");
 		expect(allowlist.isAllowed("anyone")).toBe(true);
 	});
+
+	// Finding 2: the production boot guard (index.ts) keys off allowsAll/explicitWildcard, not
+	// raw string-emptiness. A value that is non-empty as a string but parses to nothing must
+	// report allowsAll:true so the guard fails closed instead of silently admitting everyone.
+	describe("allow-all classification (drives the production fail-closed guard)", () => {
+		it.each([
+			["undefined", undefined],
+			["empty string", ""],
+			["a lone comma", ","],
+			["only whitespace", "   "],
+			["only separators", ", ,"],
+		])("reports allowsAll:true and explicitWildcard:false for %s", (_label, raw) => {
+			const allowlist = createAllowlist(raw);
+			expect(allowlist.allowsAll).toBe(true);
+			expect(allowlist.explicitWildcard).toBe(false);
+			// And it does behave as allow-all, so the guard isn't over-eager.
+			expect(allowlist.isAllowed("anyone")).toBe(true);
+		});
+
+		it("reports allowsAll:true and explicitWildcard:true for the explicit wildcard", () => {
+			const allowlist = createAllowlist(" * ");
+			expect(allowlist.allowsAll).toBe(true);
+			expect(allowlist.explicitWildcard).toBe(true);
+		});
+
+		it("reports allowsAll:false for a real login list", () => {
+			const allowlist = createAllowlist("alice,bob");
+			expect(allowlist.allowsAll).toBe(false);
+			expect(allowlist.explicitWildcard).toBe(false);
+		});
+	});
 });

@@ -1,5 +1,13 @@
 export interface Allowlist {
 	isAllowed(login: string): boolean;
+	// True when the allowlist admits every login — because it was configured empty
+	// (unset/blank/only separators like "," or " ") OR via the explicit "*". index.ts's
+	// production boot guard keys off THIS (the parsed result), not raw string-emptiness, so a
+	// value like "," that looks configured but parses to nothing can't silently reopen the door.
+	readonly allowsAll: boolean;
+	// Distinguishes the intentional "*" allow-all (permitted even in production) from an
+	// effectively-empty value (rejected in production). Only meaningful when allowsAll is true.
+	readonly explicitWildcard: boolean;
 }
 
 // Empty/unset means "no allowlist configured" -> allow-all, matching this codebase's
@@ -13,7 +21,7 @@ export interface Allowlist {
 // account needs a non-empty value that still means "allow all" to satisfy that check.
 export function createAllowlist(raw: string | undefined): Allowlist {
 	if (raw !== undefined && raw.trim() === "*") {
-		return { isAllowed: () => true };
+		return { isAllowed: () => true, allowsAll: true, explicitWildcard: true };
 	}
 
 	const logins = new Set(
@@ -22,7 +30,10 @@ export function createAllowlist(raw: string | undefined): Allowlist {
 			.map((s) => s.trim().toLowerCase())
 			.filter((s) => s.length > 0),
 	);
+	const allowsAll = logins.size === 0;
 	return {
-		isAllowed: (login) => logins.size === 0 || logins.has(login.toLowerCase()),
+		isAllowed: (login) => allowsAll || logins.has(login.toLowerCase()),
+		allowsAll,
+		explicitWildcard: false,
 	};
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, jest } from "@jest/globals";
 import type { Octokit } from "@octokit/rest";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
@@ -139,6 +139,22 @@ async function callRedirect(server: Server, path: string, cookie?: string): Prom
 function cookiePair(setCookie: string | undefined): string {
 	if (setCookie === undefined) throw new Error("expected a Set-Cookie header");
 	return setCookie.split(";")[0] ?? "";
+}
+
+// The signed-in login used to drive the install/callback flow in tests. /install/callback and
+// /connect now require the caller to actually have GitHub access to the installation they bind
+// (see verifyUserInstallationAccess — this closes the cross-tenant IDOR where any signed-in user
+// could bind another org's enumerable installation id). authorizeInstaller seeds the in-memory
+// user token, and installationsVisibleToUser reports the ids GitHub says that user can see —
+// together they mirror the real flow where the user who just installed the App can see it.
+const INSTALLER_LOGIN = "installer-login";
+
+function authorizeInstaller(userTokenCache: UserTokenCache): void {
+	userTokenCache.set(INSTALLER_LOGIN, { accessToken: "installer-token", expiresAt: Date.now() + 60_000 });
+}
+
+function installationsVisibleToUser(...installationIds: number[]): (accessToken: string) => Promise<ReadonlyArray<AccessibleInstallation>> {
+	return async () => installationIds.map((installationId) => ({ installationId }) as AccessibleInstallation);
 }
 
 // Deliberately not `@octokit/request-error`'s `RequestError`: in production, this error comes
@@ -321,7 +337,8 @@ describe("githubAppRouter", () => {
 
 	it("reuses the pending state when the same browser calls /install/start twice (double-click / second tab)", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		setup(async () => []);
+		const { userTokenCache } = setup(async () => [], undefined, undefined, undefined, undefined, "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(555));
+		authorizeInstaller(userTokenCache);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const first = await call(server, "POST", "/account/github/install/start");
@@ -348,7 +365,8 @@ describe("githubAppRouter", () => {
 
 	it("does not let one browser's /install/start invalidate another's in-flight install", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		setup(async () => []);
+		const { userTokenCache } = setup(async () => [], undefined, undefined, undefined, undefined, "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(555));
+		authorizeInstaller(userTokenCache);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		// Two independent browsers (cookie jars) both start an install around the same time.
@@ -371,7 +389,8 @@ describe("githubAppRouter", () => {
 
 	it("binds the installation on a valid callback, persisting it", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const { accountPath } = setup(async () => []);
+		const { accountPath, userTokenCache } = setup(async () => [], undefined, undefined, undefined, undefined, "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(555));
+		authorizeInstaller(userTokenCache);
 		await new Promise((resolve) => server.once("listening", resolve));
 		const start = await call(server, "POST", "/account/github/install/start");
 		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
@@ -403,7 +422,8 @@ describe("githubAppRouter", () => {
 			.fn<(installationId: number) => Promise<InstallationAccount>>()
 			.mockResolvedValueOnce({ accountLogin: "acme-corp", accountType: "Organization" })
 			.mockResolvedValueOnce({ accountLogin: "octocat", accountType: "User" });
-		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, getInstallationAccount);
+		const { accountPath, userTokenCache } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, getInstallationAccount, "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(555, 777));
+		authorizeInstaller(userTokenCache);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const firstStart = await call(server, "POST", "/account/github/install/start");
@@ -424,7 +444,8 @@ describe("githubAppRouter", () => {
 			.fn<(installationId: number) => Promise<InstallationAccount>>()
 			.mockResolvedValueOnce({ accountLogin: "acme-corp", accountType: "Organization" })
 			.mockResolvedValueOnce({ accountLogin: "acme-corp-renamed", accountType: "Organization" });
-		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, getInstallationAccount);
+		const { accountPath, userTokenCache } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, getInstallationAccount, "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(555));
+		authorizeInstaller(userTokenCache);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const firstStart = await call(server, "POST", "/account/github/install/start");
@@ -446,13 +467,18 @@ describe("githubAppRouter", () => {
 		// findAllByInstallationId coverage) — from a single team's router's perspective,
 		// binding installation 555 always just succeeds.
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const { accountPath } = setup(
+		const { accountPath, userTokenCache } = setup(
 			async () => [],
 			new StubGitHubClient(),
 			new StubLlmProvider(),
 			undefined,
 			async () => ({ accountLogin: "acme-corp", accountType: "Organization" }),
+			"owner",
+			INSTALLER_LOGIN,
+			undefined,
+			installationsVisibleToUser(555),
 		);
+		authorizeInstaller(userTokenCache);
 		await new Promise((resolve) => server.once("listening", resolve));
 		const start = await call(server, "POST", "/account/github/install/start");
 		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
@@ -471,10 +497,11 @@ describe("githubAppRouter", () => {
 
 	it("derives accountType from the real installation instead of hardcoding it", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, async () => ({
+		const { accountPath, userTokenCache } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, async () => ({
 			accountLogin: "octocat",
 			accountType: "User",
-		}));
+		}), "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(777));
+		authorizeInstaller(userTokenCache);
 		await new Promise((resolve) => server.once("listening", resolve));
 		const start = await call(server, "POST", "/account/github/install/start");
 		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
@@ -489,9 +516,10 @@ describe("githubAppRouter", () => {
 	it("redirects gracefully when the installation was revoked before the callback completes", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		const revokedError = new FakeHttpError("Not Found", 404);
-		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, async () => {
+		const { accountPath, userTokenCache } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, async () => {
 			throw revokedError;
-		});
+		}, "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(555));
+		authorizeInstaller(userTokenCache);
 		await new Promise((resolve) => server.once("listening", resolve));
 		const start = await call(server, "POST", "/account/github/install/start");
 		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
@@ -537,6 +565,94 @@ describe("githubAppRouter", () => {
 		expect(status).toBe(302);
 		expect(location).toContain("account=error");
 		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+	});
+
+	it("refuses to bind an installation the signed-in user cannot access (Finding 1: cross-tenant IDOR)", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const getInstallationAccount = jest.fn<(installationId: number) => Promise<InstallationAccount>>(async () => ({
+			accountLogin: "victim-org",
+			accountType: "Organization",
+		}));
+		// The user can see installation 100 but NOT the victim org's installation 999.
+		const { accountPath, userTokenCache } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, getInstallationAccount, "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(100));
+		authorizeInstaller(userTokenCache);
+		await new Promise((resolve) => server.once("listening", resolve));
+		const start = await call(server, "POST", "/account/github/install/start");
+		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
+
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/install/callback?installation_id=999&state=${state}`,
+			cookiePair(start.setCookie),
+		);
+
+		expect(status).toBe(302);
+		expect(location).toContain("account=error");
+		// The bind sink was never reached: no installation was fetched or persisted.
+		expect(getInstallationAccount).not.toHaveBeenCalled();
+		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+	});
+
+	it("refuses /install/callback for a plain member (only owner/admin may connect an installation)", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const { accountPath, userTokenCache } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, undefined, "member", INSTALLER_LOGIN, undefined, installationsVisibleToUser(555));
+		authorizeInstaller(userTokenCache);
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		// /install/start is itself owner/admin-gated now, so mint the state cookie directly —
+		// the callback only requires the cookie value to match the query param, and this test is
+		// about the callback rejecting a member even with an otherwise-valid state + token.
+		const { status, location } = await callRedirect(
+			server,
+			"/account/github/install/callback?installation_id=555&state=teststate",
+			"quire_install_state=teststate",
+		);
+
+		expect(status).toBe(302);
+		expect(location).toContain("account=error");
+		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+	});
+
+	it("refuses /install/callback when no user token can be resolved for the caller", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		// A login is present but its token is never seeded (expired mid-install, never OAuth'd
+		// this process) — fail closed rather than binding on the state cookie alone.
+		const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), undefined, undefined, "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(555));
+		await new Promise((resolve) => server.once("listening", resolve));
+		const start = await call(server, "POST", "/account/github/install/start");
+		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
+
+		const { status, location } = await callRedirect(
+			server,
+			`/account/github/install/callback?installation_id=555&state=${state}`,
+			cookiePair(start.setCookie),
+		);
+
+		expect(status).toBe(302);
+		expect(location).toContain("account=error");
+		await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+	});
+
+	it("refuses POST /install/start for a plain member", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		setup(async () => [], undefined, undefined, undefined, undefined, "member");
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status } = await call(server, "POST", "/account/github/install/start");
+		expect(status).toBe(403);
+	});
+
+	it("persists installation.json with 0600 permissions (Finding 6: not world-readable)", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const { accountPath, userTokenCache } = setup(async () => [], undefined, undefined, undefined, undefined, "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(555));
+		authorizeInstaller(userTokenCache);
+		await new Promise((resolve) => server.once("listening", resolve));
+		const start = await call(server, "POST", "/account/github/install/start");
+		const state = new URL(start.body["installUrl"] as string).searchParams.get("state");
+		await callRedirect(server, `/account/github/install/callback?installation_id=555&state=${state}`, cookiePair(start.setCookie));
+
+		const mode = (await stat(accountPath)).mode & 0o777;
+		expect(mode).toBe(0o600);
 	});
 
 	it("lists repos for the bound installation", async () => {
@@ -878,6 +994,28 @@ describe("githubAppRouter", () => {
 	});
 
 	describe("POST /repos/select", () => {
+		it("403s for a plain member — adding a watched repo is an owner/admin action (Finding 6)", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const { accountPath } = setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{
+					installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+					repos: [],
+				},
+				undefined,
+				"member",
+				"bob",
+			);
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status } = await call(server, "POST", "/account/github/repos/select", { owner: "acme-corp", name: "widgets", installationId: 555 });
+			expect(status).toBe(403);
+			// Nothing was added — the file was never even written.
+			await expect(readFile(accountPath, "utf8")).rejects.toThrow();
+		});
+
 		it("adds a repo, persists it (with its owning installation), and ingests its open PRs", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 			const client = new StubGitHubClient();
@@ -1682,10 +1820,11 @@ describe("githubAppRouter", () => {
 
 		it("does not resurrect cleared repos when reconnecting after disconnect-all", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
-			const { accountPath } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+			const { accountPath, userTokenCache } = setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
 				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
 				repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
-			});
+			}, undefined, "owner", INSTALLER_LOGIN, undefined, installationsVisibleToUser(555));
+			authorizeInstaller(userTokenCache);
 			await new Promise((resolve) => server.once("listening", resolve));
 
 			await call(server, "POST", "/account/github/disconnect-all");

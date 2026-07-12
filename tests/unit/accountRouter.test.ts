@@ -9,6 +9,7 @@ import { parse } from "cookie";
 import { accountRouter } from "../../src/interface/server/routes/account.js";
 import { loadUserToken } from "../../src/engine/github/userToken.js";
 import { requireSession } from "../../src/interface/server/middleware/requireSession.js";
+import { createSessionEpochStore } from "../../src/interface/server/sessionEpoch.js";
 import { createAllowlist } from "../../src/interface/server/allowlist.js";
 import { InvalidTokenError } from "../../src/engine/github/verifyToken.js";
 import type { VerifiedTokenIdentity } from "../../src/engine/github/verifyToken.js";
@@ -103,14 +104,15 @@ describe("accountRouter (login-only)", () => {
 		oauthDeps: OAuthDeps = makeOAuthDeps(),
 	): Promise<void> {
 		const allowlist = createAllowlist(allowedLogins);
-		const session = requireSession(SECRET, allowlist, false);
 		userTokenCache = createUserTokenCache();
 		dataDir = await mkdtemp(join(tmpdir(), "quire-account-router-"));
+		const sessionEpochs = createSessionEpochStore(dataDir);
+		const session = requireSession(SECRET, allowlist, false, sessionEpochs);
 		const app = express();
 		app.use(express.json());
 		app.use(
 			"/account/github",
-			accountRouter(oauthDeps, verifyIdentity, allowlist, SECRET, false, session, userTokenCache, dataDir),
+			accountRouter(oauthDeps, verifyIdentity, allowlist, SECRET, false, session, userTokenCache, dataDir, sessionEpochs),
 		);
 		app.use(errorHandler);
 		server = app.listen(0);
@@ -392,5 +394,24 @@ describe("accountRouter (login-only)", () => {
 		await call(server, "POST", "/account/github/logout", sessionCookieValue.split(";")[0]);
 
 		expect(await loadUserToken(tokenPath)).toBeUndefined();
+	});
+
+	it("POST /logout invalidates the old session cookie server-side, not just in the browser (Finding 5)", async () => {
+		await setup(async () => ({ login: "octocat", scopes: [] }), "octocat");
+		await new Promise((resolve) => server.once("listening", resolve));
+		const { state, cookie } = await startOAuth();
+		const { setCookies } = await callRedirect(server, `/account/github/oauth/callback?code=good&state=${state}`, cookie);
+		const sessionCookie = (findCookie(setCookies, SESSION_COOKIE_NAME) ?? "").split(";")[0] ?? "";
+
+		// The session authenticates before logout.
+		const before = await call(server, "GET", "/account/github/session", sessionCookie);
+		expect(before.status).toBe(200);
+
+		await call(server, "POST", "/account/github/logout", sessionCookie);
+
+		// The SAME cookie value — as if an attacker captured it before the user logged out — no
+		// longer authenticates, because logout bumped the login's session epoch server-side.
+		const after = await call(server, "GET", "/account/github/session", sessionCookie);
+		expect(after.status).toBe(401);
 	});
 });

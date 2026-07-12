@@ -275,24 +275,59 @@ describe("TeamStore", () => {
 			expect(await store.getInvite(team.teamId, "inv-1")).toEqual(record);
 		});
 
-		it("markInviteRedeemed stamps redeemedBy/redeemedAt on the matching record only", async () => {
+		it("redeemInvite stamps redeemedBy/redeemedAt on the matching record only", async () => {
 			await setup();
 			const team = await store.createTeamForLogin("ivy", "Ivy's team");
 			await store.addInvite(team.teamId, { id: "inv-1", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" });
 			await store.addInvite(team.teamId, { id: "inv-2", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" });
 
-			await store.markInviteRedeemed(team.teamId, "inv-1", "jack");
+			expect(await store.redeemInvite(team.teamId, "inv-1", "jack")).toBe("redeemed");
 
 			const invites = await store.listInvites(team.teamId);
 			expect(invites.find((i) => i.id === "inv-1")).toMatchObject({ redeemedBy: "jack" });
 			expect(invites.find((i) => i.id === "inv-2")?.redeemedBy).toBeUndefined();
 		});
 
-		it("markInviteRedeemed is a silent no-op for an unknown id", async () => {
+		it("redeemInvite rejects an unknown id as 'missing' (Finding 4: a missing record is not honored)", async () => {
 			await setup();
 			const team = await store.createTeamForLogin("ivy", "Ivy's team");
 
-			await expect(store.markInviteRedeemed(team.teamId, "does-not-exist", "jack")).resolves.toBeUndefined();
+			expect(await store.redeemInvite(team.teamId, "does-not-exist", "jack")).toBe("missing");
+		});
+
+		it("redeemInvite rejects a revoked invite", async () => {
+			await setup();
+			const team = await store.createTeamForLogin("ivy", "Ivy's team");
+			await store.addInvite(team.teamId, { id: "inv-1", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" });
+			await store.revokeInvite(team.teamId, "inv-1");
+
+			expect(await store.redeemInvite(team.teamId, "inv-1", "jack")).toBe("revoked");
+		});
+
+		it("redeemInvite is single-use across different logins but idempotent for the same login (Finding 3)", async () => {
+			await setup();
+			const team = await store.createTeamForLogin("ivy", "Ivy's team");
+			await store.addInvite(team.teamId, { id: "inv-1", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" });
+
+			expect(await store.redeemInvite(team.teamId, "inv-1", "jack")).toBe("redeemed");
+			// A different login can't reuse the consumed link.
+			expect(await store.redeemInvite(team.teamId, "inv-1", "mallory")).toBe("already-used");
+			// The same login re-clicking is a no-op success, not a rejection.
+			expect(await store.redeemInvite(team.teamId, "inv-1", "jack")).toBe("already-redeemed-by-self");
+		});
+
+		it("redeemInvite admits exactly one of two concurrent redemptions by different logins (Finding 3)", async () => {
+			await setup();
+			const team = await store.createTeamForLogin("ivy", "Ivy's team");
+			await store.addInvite(team.teamId, { id: "inv-1", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" });
+
+			const [a, b] = await Promise.all([
+				store.redeemInvite(team.teamId, "inv-1", "jack"),
+				store.redeemInvite(team.teamId, "inv-1", "mallory"),
+			]);
+
+			const outcomes = [a, b].sort();
+			expect(outcomes).toEqual(["already-used", "redeemed"]);
 		});
 
 		it("revokeInvite stamps revokedAt on a pending invite", async () => {
@@ -309,7 +344,7 @@ describe("TeamStore", () => {
 			await setup();
 			const team = await store.createTeamForLogin("ivy", "Ivy's team");
 			await store.addInvite(team.teamId, { id: "inv-1", invitedBy: "ivy", issuedAt: "t0", expiresAt: "t1" });
-			await store.markInviteRedeemed(team.teamId, "inv-1", "jack");
+			await store.redeemInvite(team.teamId, "inv-1", "jack");
 
 			await expect(store.revokeInvite(team.teamId, "inv-1")).rejects.toBeInstanceOf(InviteAlreadyRedeemedError);
 		});
