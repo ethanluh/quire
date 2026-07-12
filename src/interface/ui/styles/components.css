@@ -21,6 +21,10 @@ body {
 	line-height: var(--leading-normal);
 }
 
+body.modal-open {
+	overflow: hidden;
+}
+
 .heading {
 	font-family: var(--font-display);
 	font-weight: var(--weight-semibold);
@@ -159,6 +163,13 @@ body {
 	opacity: 0.5;
 	cursor: not-allowed;
 	pointer-events: none;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
 }
 
 .btn-accept { color: var(--color-accept); --btn-color: var(--color-accept); }
@@ -472,13 +483,25 @@ a.btn {
 }
 
 .tab {
+	font-family: var(--font-body);
 	font-size: var(--text-sm);
 	color: var(--color-text-muted);
 	padding: var(--space-2) var(--space-4);
+	border: none;
 	border-bottom: 2px solid transparent;
+	background: transparent;
 	cursor: pointer;
 	transition: color var(--duration-base) var(--ease-standard),
 		border-color var(--duration-base) var(--ease-standard);
+}
+
+.tab:hover {
+	color: var(--color-text-primary);
+}
+
+.tab:focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
 }
 
 .tab.active {

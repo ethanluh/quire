@@ -351,11 +351,11 @@
     <div class="audit-list" id="audit-list"><div class="empty">No shadow-mode audit entries.</div></div>
   </div>
 
-<nav class="tabbar">
-  <div class="tab active" data-tab="review"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg><span class="tab-badge" id="tab-badge-review" style="display:none">0</span></span>Review</div>
-  <div class="tab" data-tab="shelf"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg></span>Shelf</div>
-  <div class="tab" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Status</div>
-  <div class="tab" data-tab="audit"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Audit</div>
+<nav class="tabbar" role="tablist">
+  <button class="tab active" role="tab" aria-selected="true" aria-controls="pane-review" data-tab="review"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg><span class="tab-badge" id="tab-badge-review" style="display:none">0</span></span>Review</button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="pane-shelf" data-tab="shelf"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg></span>Shelf</button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="pane-queue" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Status</button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="pane-audit" data-tab="audit"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Audit</button>
 </nav>
 
 <div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
@@ -382,38 +382,38 @@
     <div class="settings-section account-panel">
       <h4>Team</h4>
       <p>Teammates on the same team share this GitHub connection, repo, LLM key, and bundle status.</p>
-      <div class="account-status" id="team-status">Checking team&hellip;</div>
+      <div class="account-status" id="team-status" aria-live="polite">Checking team&hellip;</div>
       <div id="team-members-list"></div>
-      <select id="team-switcher"></select>
-      <input type="text" id="team-name-input" placeholder="Team name">
+      <select id="team-switcher" aria-label="Select team"></select>
+      <input type="text" id="team-name-input" placeholder="Team name" aria-label="Team name">
       <button class="btn btn-defer" id="btn-team-rename">Save name</button>
       <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
-      <input type="text" id="team-create-input" placeholder="New team name">
+      <input type="text" id="team-create-input" placeholder="New team name" aria-label="New team name">
       <button class="btn btn-defer" id="btn-team-create">Create new team</button>
       <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
-      <div id="team-result" class="result-msg" style="display:none"></div>
+      <div id="team-result" class="result-msg" style="display:none" aria-live="polite"></div>
     </div>
 
       <div class="settings-section account-panel">
         <h4>GitHub connection</h4>
-        <div class="account-status" id="account-status">Checking connection&hellip;</div>
+        <div class="account-status" id="account-status" aria-live="polite">Checking connection&hellip;</div>
         <div id="installations-list"></div>
         <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
         <div id="account-connect-form">
           <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
           <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
         </div>
-        <div id="account-result" class="result-msg" style="display:none"></div>
+        <div id="account-result" class="result-msg" style="display:none" aria-live="polite"></div>
 
         <div class="repo-panel" id="repo-panel" style="display:none">
           <h3>Repositories to work on</h3>
           <div id="watched-repos-list"></div>
-          <div id="sorting-notice" class="result-msg" style="display:none">
+          <div id="sorting-notice" class="result-msg" style="display:none" aria-live="polite">
             Starred/pinned sorting is unavailable — reconnect GitHub to restore it.
             <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
           </div>
-          <div id="repo-list-warning" class="result-msg error" style="display:none"></div>
-          <select id="repo-picker"><option value="" disabled selected>Loading repos&hellip;</option></select>
+          <div id="repo-list-warning" class="result-msg error" style="display:none" aria-live="polite"></div>
+          <select id="repo-picker" aria-label="Repository"><option value="" disabled selected>Loading repos&hellip;</option></select>
         </div>
       </div>
 
@@ -422,15 +422,15 @@
         <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
         <div id="llm-connect-form">
           <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles.</p>
-          <select id="llm-provider-select">
+          <select id="llm-provider-select" aria-label="LLM provider">
             <option value="anthropic">Anthropic</option>
             <option value="gemini">Gemini</option>
           </select>
-          <input type="password" id="llm-api-key" placeholder="API key" autocomplete="off">
+          <input type="password" id="llm-api-key" placeholder="API key" aria-label="API key" autocomplete="off">
           <button class="btn btn-accept" id="btn-llm-connect">Connect</button>
         </div>
         <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
-        <div id="llm-account-result" class="result-msg" style="display:none"></div>
+        <div id="llm-account-result" class="result-msg" style="display:none" aria-live="polite"></div>
       </div>
 
       <div class="settings-section">
@@ -441,7 +441,7 @@
   </div>
 </div>
 
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <div class="modal-backdrop" id="detail-modal-backdrop" style="display:none">
   <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
@@ -466,50 +466,52 @@
 
 <script src="shared/api.js"></script>
 <script src="shared/render.js"></script>
+<script src="shared/modal.js"></script>
 <script>
 // Only shelf/queue get a placeholder — review is the swipeable card stack (#stack),
 // whose own render path shouldn't be touched here.
 const TAB_LIST_IDS = { shelf: 'shelf-list', queue: 'queue-list' };
-const tabs = document.querySelectorAll('.tab');
-tabs.forEach(tab => {
-  tab.addEventListener('click', () => {
-    tabs.forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
-    document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
-    // Force a real re-render instead of a cache hit silently no-op'ing against the
-    // placeholder below (see lastRenderedJson) — a deliberate tab switch should always
-    // show something, even if the underlying data turns out to be unchanged.
-    const listId = TAB_LIST_IDS[tab.dataset.tab];
-    if (listId) {
-      delete lastRenderedJson[tab.dataset.tab];
-      document.getElementById(listId).innerHTML = '<div class="empty">Loading&hellip;</div>';
-    }
-    if (tab.dataset.tab === 'review') loadReview();
-    if (tab.dataset.tab === 'shelf') loadShelf();
-    if (tab.dataset.tab === 'queue') loadQueue();
-    if (tab.dataset.tab === 'audit') loadAudit();
+const tabs = document.querySelectorAll('[role="tab"]');
+
+function selectMobileTab(tab) {
+  tabs.forEach(t => {
+    t.classList.remove('active');
+    t.setAttribute('aria-selected', 'false');
   });
+  tab.classList.add('active');
+  tab.setAttribute('aria-selected', 'true');
+  document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
+  document.getElementById('pane-' + tab.dataset.tab).classList.add('active');
+  // Force a real re-render instead of a cache hit silently no-op'ing against the
+  // placeholder below (see lastRenderedJson) — a deliberate tab switch should always
+  // show something, even if the underlying data turns out to be unchanged.
+  const listId = TAB_LIST_IDS[tab.dataset.tab];
+  if (listId) {
+    delete lastRenderedJson[tab.dataset.tab];
+    document.getElementById(listId).innerHTML = '<div class="empty">Loading&hellip;</div>';
+  }
+  if (tab.dataset.tab === 'review') loadReview();
+  if (tab.dataset.tab === 'shelf') loadShelf();
+  if (tab.dataset.tab === 'queue') loadQueue();
+  if (tab.dataset.tab === 'audit') loadAudit();
+}
+
+tabs.forEach(tab => {
+  tab.addEventListener('click', () => selectMobileTab(tab));
 });
 
 const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
 function openSettingsModal() {
-  settingsModalBackdrop.style.display = 'flex';
+  modalManager.open(settingsModalBackdrop);
   loadAccount();
   loadLlmAccount();
   loadTeam();
 }
 function closeSettingsModal() {
-  settingsModalBackdrop.style.display = 'none';
+  modalManager.close(settingsModalBackdrop);
 }
 document.getElementById('btn-settings').addEventListener('click', openSettingsModal);
 document.getElementById('btn-settings-modal-close').addEventListener('click', closeSettingsModal);
-settingsModalBackdrop.addEventListener('click', (event) => {
-  if (event.target === settingsModalBackdrop) closeSettingsModal();
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && settingsModalBackdrop.style.display !== 'none') closeSettingsModal();
-});
 
 function cardBodyHtml(card) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
@@ -580,11 +582,11 @@ function detailBodyHtml(detail, opts) {
 
 function openDetailModal(html) {
   detailModalBody.innerHTML = html;
-  detailModalBackdrop.style.display = 'flex';
+  modalManager.open(detailModalBackdrop);
 }
 
 function closeDetailModal() {
-  detailModalBackdrop.style.display = 'none';
+  modalManager.close(detailModalBackdrop);
 }
 
 async function showBundleDetail(bundleId) {

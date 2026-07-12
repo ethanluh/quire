@@ -351,11 +351,11 @@
   </div>
 </div>
 
-<div class="tabs">
-  <div class="tab active" data-tab="review">Review queue</div>
-  <div class="tab" data-tab="shelf">Shelf</div>
-  <div class="tab" data-tab="queue">Bundle status</div>
-  <div class="tab" data-tab="audit">Audit</div>
+<div class="tabs" role="tablist">
+  <button class="tab active" role="tab" aria-selected="true" aria-controls="pane-review" data-tab="review">Review queue</button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="pane-shelf" data-tab="shelf">Shelf</button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="pane-queue" data-tab="queue">Bundle status</button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="pane-audit" data-tab="audit">Audit</button>
 </div>
 
 <div id="pane-review" class="pane active">
@@ -425,7 +425,7 @@
 
         <div class="settings-panel account-panel" data-section="team">
           <p>Teammates on the same team share this GitHub connection, repo, LLM key, and bundle status.</p>
-          <div class="account-status" id="team-status">Checking team&hellip;</div>
+          <div class="account-status" id="team-status" aria-live="polite">Checking team&hellip;</div>
           <div id="team-members-list"></div>
 
           <div class="subsection">
@@ -434,23 +434,23 @@
               <select id="team-switcher"></select>
             </div>
             <div class="account-connect-actions">
-              <input type="text" id="team-name-input" placeholder="Team name">
+              <input type="text" id="team-name-input" placeholder="Team name" aria-label="Team name">
               <button class="btn btn-defer" id="btn-team-rename">Save name</button>
             </div>
             <div class="account-connect-actions">
-              <input type="text" id="team-create-input" placeholder="New team name">
+              <input type="text" id="team-create-input" placeholder="New team name" aria-label="New team name">
               <button class="btn btn-defer" id="btn-team-create">Create new team</button>
             </div>
             <div class="account-connect-actions">
               <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
               <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
             </div>
-            <div id="team-result" class="result-msg" style="display:none"></div>
+            <div id="team-result" class="result-msg" style="display:none" aria-live="polite"></div>
           </div>
         </div>
 
         <div class="settings-panel account-panel" data-section="github">
-          <div class="account-status" id="account-status">Checking connection&hellip;</div>
+          <div class="account-status" id="account-status" aria-live="polite">Checking connection&hellip;</div>
           <div id="installations-list"></div>
           <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
           <div id="account-connect-form">
@@ -460,18 +460,18 @@
               <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
             </div>
           </div>
-          <div id="account-result" class="result-msg" style="display:none"></div>
+          <div id="account-result" class="result-msg" style="display:none" aria-live="polite"></div>
 
           <div class="repo-panel" id="repo-panel" style="display:none">
             <h3>Repositories to work on</h3>
             <div class="automation-status" id="automation-status" style="display:none"></div>
             <div id="watched-repos-list"></div>
-            <div id="sorting-notice" class="result-msg" style="display:none">
+            <div id="sorting-notice" class="result-msg" style="display:none" aria-live="polite">
               Starred/pinned sorting is unavailable — reconnect GitHub to restore it.
               <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
             </div>
-            <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" autocomplete="off">
-            <div id="repo-list-warning" class="result-msg error" style="display:none"></div>
+            <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" aria-label="Search repositories" autocomplete="off">
+            <div id="repo-list-warning" class="result-msg error" style="display:none" aria-live="polite"></div>
             <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
           </div>
         </div>
@@ -483,7 +483,7 @@
             <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
           </div>
           <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
-          <div id="llm-account-result" class="result-msg" style="display:none"></div>
+          <div id="llm-account-result" class="result-msg" style="display:none" aria-live="polite"></div>
         </div>
 
         <div class="settings-panel" data-section="danger">
@@ -498,12 +498,12 @@
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="llm-modal-title">
     <h3 class="modal-title" id="llm-modal-title">Connect an LLM API key</h3>
     <p>Stored locally in Quire's data directory; used only for calls to the provider you choose.</p>
-    <select id="llm-provider-select">
+    <select id="llm-provider-select" aria-label="LLM provider">
       <option value="anthropic">Anthropic</option>
       <option value="gemini">Gemini</option>
     </select>
-    <input type="password" id="llm-api-key" placeholder="API key" autocomplete="off">
-    <div id="llm-modal-result" class="result-msg" style="display:none"></div>
+    <input type="password" id="llm-api-key" placeholder="API key" aria-label="API key" autocomplete="off">
+    <div id="llm-modal-result" class="result-msg" style="display:none" aria-live="polite"></div>
     <div class="modal-actions">
       <button class="btn btn-defer" id="btn-llm-modal-cancel">Cancel</button>
       <button class="btn btn-accept" id="btn-llm-modal-connect">Connect</button>
@@ -532,28 +532,68 @@
   </div>
 </div>
 
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="shared/api.js"></script>
 <script src="shared/render.js"></script>
+<script src="shared/modal.js"></script>
 <script>
 function showTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
 }
 const TAB_LIST_IDS = { review: 'card-list', shelf: 'shelf-list', queue: 'queue-list' };
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    showTab(tab.dataset.tab);
-    // Force a real re-render instead of a cache hit silently no-op'ing against the
-    // placeholder below (see lastRenderedJson) — a deliberate tab switch should always
-    // show something, even if the underlying data turns out to be unchanged.
-    delete lastRenderedJson[tab.dataset.tab];
-    document.getElementById(TAB_LIST_IDS[tab.dataset.tab]).innerHTML = '<div class="empty">Loading&hellip;</div>';
-    if (tab.dataset.tab === 'review') loadReview();
-    if (tab.dataset.tab === 'shelf') loadShelf();
-    if (tab.dataset.tab === 'queue') loadQueue();
-    if (tab.dataset.tab === 'audit') loadAudit();
+
+// Handle tab selection with keyboard navigation
+function selectTab(tabEl) {
+  const tabName = tabEl.dataset.tab;
+  document.querySelectorAll('.tabs [role="tab"]').forEach(t => {
+    const isSelected = t === tabEl;
+    t.classList.toggle('active', isSelected);
+    t.setAttribute('aria-selected', isSelected);
+  });
+  showTab(tabName);
+  // Force a real re-render instead of a cache hit silently no-op'ing against the
+  // placeholder below (see lastRenderedJson) — a deliberate tab switch should always
+  // show something, even if the underlying data turns out to be unchanged.
+  delete lastRenderedJson[tabName];
+  if (TAB_LIST_IDS[tabName]) {
+    document.getElementById(TAB_LIST_IDS[tabName]).innerHTML = '<div class="empty">Loading&hellip;</div>';
+  }
+  if (tabName === 'review') loadReview();
+  if (tabName === 'shelf') loadShelf();
+  if (tabName === 'queue') loadQueue();
+  if (tabName === 'audit') loadAudit();
+}
+
+document.querySelectorAll('.tabs [role="tab"]').forEach((tab, index) => {
+  tab.addEventListener('click', () => selectTab(tab));
+
+  // Arrow key navigation for tabs
+  tab.addEventListener('keydown', (event) => {
+    const tabs = Array.from(document.querySelectorAll('.tabs [role="tab"]'));
+    let nextTab = null;
+
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      const nextIndex = (index + 1) % tabs.length;
+      nextTab = tabs[nextIndex];
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const nextIndex = (index - 1 + tabs.length) % tabs.length;
+      nextTab = tabs[nextIndex];
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      nextTab = tabs[0];
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      nextTab = tabs[tabs.length - 1];
+    }
+
+    if (nextTab) {
+      selectTab(nextTab);
+      nextTab.focus();
+    }
   });
 });
 
@@ -563,28 +603,31 @@ const settingsPanels = document.querySelectorAll('.settings-panel');
 function activateSettingsSection(section) {
   settingsNavItems.forEach((item) => item.classList.toggle('active', item.dataset.section === section));
   settingsPanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.section === section));
+  // Scroll the active panel into view
+  const activePanel = document.querySelector('.settings-panel.active');
+  if (activePanel) {
+    activePanel.scrollIntoView({ block: 'start' });
+  }
 }
 settingsNavItems.forEach((item) => {
   item.addEventListener('click', () => activateSettingsSection(item.dataset.section));
 });
 function openSettingsModal() {
-  settingsModalBackdrop.style.display = 'flex';
+  modalManager.open(settingsModalBackdrop, {
+    onClose: () => {
+      // Optional cleanup on close
+    }
+  });
   activateSettingsSection('preferences');
   loadAccount();
   loadLlmAccount();
   loadTeam();
 }
 function closeSettingsModal() {
-  settingsModalBackdrop.style.display = 'none';
+  modalManager.close(settingsModalBackdrop);
 }
 document.getElementById('btn-settings').addEventListener('click', openSettingsModal);
 document.getElementById('btn-settings-modal-close').addEventListener('click', closeSettingsModal);
-settingsModalBackdrop.addEventListener('click', (event) => {
-  if (event.target === settingsModalBackdrop) closeSettingsModal();
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && settingsModalBackdrop.style.display !== 'none') closeSettingsModal();
-});
 
 const confirmModalBackdrop = document.getElementById('confirm-modal-backdrop');
 const confirmModalCard = confirmModalBackdrop.querySelector('.card');
@@ -605,12 +648,12 @@ function confirmAction(message, opts) {
   confirmModalConfirmBtn.className = 'btn ' + (opts.danger ? 'btn-reject' : 'btn-accept');
   confirmModalConfirmBtn.textContent = opts.confirmLabel || (opts.danger ? 'Yes, proceed' : 'Confirm');
   confirmModalCancelBtn.textContent = opts.cancelLabel || 'Cancel';
-  confirmModalBackdrop.style.display = 'flex';
+  modalManager.open(confirmModalBackdrop);
   return new Promise((resolve) => { confirmModalResolve = resolve; });
 }
 
 function closeConfirmModal(result) {
-  confirmModalBackdrop.style.display = 'none';
+  modalManager.close(confirmModalBackdrop);
   if (confirmModalResolve) {
     const resolve = confirmModalResolve;
     confirmModalResolve = null;
@@ -620,12 +663,6 @@ function closeConfirmModal(result) {
 
 confirmModalConfirmBtn.addEventListener('click', () => closeConfirmModal(true));
 confirmModalCancelBtn.addEventListener('click', () => closeConfirmModal(false));
-confirmModalBackdrop.addEventListener('click', (event) => {
-  if (event.target === confirmModalBackdrop) closeConfirmModal(false);
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && confirmModalBackdrop.style.display !== 'none') closeConfirmModal(false);
-});
 
 function cardHtml(card, shelfMode) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
@@ -821,11 +858,11 @@ function detailBodyHtml(detail, opts) {
 
 function openDetailModal(html) {
   detailModalBody.innerHTML = html;
-  detailModalBackdrop.style.display = 'flex';
+  modalManager.open(detailModalBackdrop);
 }
 
 function closeDetailModal() {
-  detailModalBackdrop.style.display = 'none';
+  modalManager.close(detailModalBackdrop);
 }
 
 async function showBundleDetail(bundleId) {
@@ -888,6 +925,32 @@ document.getElementById('review-filter-bar').addEventListener('click', (event) =
   setReviewRepoFilter(tab.dataset.repo);
 });
 
+document.getElementById('review-filter-bar').addEventListener('keydown', (event) => {
+  const tabs = Array.from(document.getElementById('review-filter-bar').querySelectorAll('[role="tab"]'));
+  const currentIndex = tabs.indexOf(event.target);
+  if (currentIndex === -1) return;
+
+  let nextTab = null;
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+    event.preventDefault();
+    nextTab = tabs[(currentIndex + 1) % tabs.length];
+  } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    nextTab = tabs[(currentIndex - 1 + tabs.length) % tabs.length];
+  } else if (event.key === 'Home') {
+    event.preventDefault();
+    nextTab = tabs[0];
+  } else if (event.key === 'End') {
+    event.preventDefault();
+    nextTab = tabs[tabs.length - 1];
+  }
+
+  if (nextTab) {
+    setReviewRepoFilter(nextTab.dataset.repo);
+    nextTab.focus();
+  }
+});
+
 // Hidden entirely below two distinct repos — a filter with only one option to pick
 // isn't a filter, it's clutter.
 function renderReviewFilterBar(cards) {
@@ -907,10 +970,13 @@ function renderReviewFilterBar(cards) {
     return;
   }
   bar.style.display = 'flex';
-  const allTab = `<div class="tab${reviewRepoFilter ? '' : ' active'}" data-repo="">All</div>`;
-  const repoTabs = repos.map(r =>
-    `<div class="tab${reviewRepoFilter === r ? ' active' : ''}" data-repo="${escapeHtml(r)}">${escapeHtml(r)}</div>`
-  ).join('');
+  bar.setAttribute('role', 'tablist');
+  const isAllSelected = !reviewRepoFilter;
+  const allTab = `<button class="tab${isAllSelected ? ' active' : ''}" role="tab" aria-selected="${isAllSelected}" data-repo="">All</button>`;
+  const repoTabs = repos.map(r => {
+    const isSelected = reviewRepoFilter === r;
+    return `<button class="tab${isSelected ? ' active' : ''}" role="tab" aria-selected="${isSelected}" data-repo="${escapeHtml(r)}">${escapeHtml(r)}</button>`;
+  }).join('');
   bar.innerHTML = allTab + repoTabs;
 }
 
@@ -1008,6 +1074,32 @@ document.getElementById('queue-filter-bar').addEventListener('click', (event) =>
   setQueueRepoFilter(tab.dataset.repo);
 });
 
+document.getElementById('queue-filter-bar').addEventListener('keydown', (event) => {
+  const tabs = Array.from(document.getElementById('queue-filter-bar').querySelectorAll('[role="tab"]'));
+  const currentIndex = tabs.indexOf(event.target);
+  if (currentIndex === -1) return;
+
+  let nextTab = null;
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+    event.preventDefault();
+    nextTab = tabs[(currentIndex + 1) % tabs.length];
+  } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    nextTab = tabs[(currentIndex - 1 + tabs.length) % tabs.length];
+  } else if (event.key === 'Home') {
+    event.preventDefault();
+    nextTab = tabs[0];
+  } else if (event.key === 'End') {
+    event.preventDefault();
+    nextTab = tabs[tabs.length - 1];
+  }
+
+  if (nextTab) {
+    setQueueRepoFilter(nextTab.dataset.repo);
+    nextTab.focus();
+  }
+});
+
 function renderQueueFilterBar(entries) {
   const bar = document.getElementById('queue-filter-bar');
   const repos = [...new Set(entries.map(entryRepoLabel))];
@@ -1024,10 +1116,13 @@ function renderQueueFilterBar(entries) {
     return;
   }
   bar.style.display = 'flex';
-  const allTab = `<div class="tab${queueRepoFilter ? '' : ' active'}" data-repo="">All</div>`;
-  const repoTabs = repos.map(r =>
-    `<div class="tab${queueRepoFilter === r ? ' active' : ''}" data-repo="${escapeHtml(r)}">${escapeHtml(r)}</div>`
-  ).join('');
+  bar.setAttribute('role', 'tablist');
+  const isAllSelected = !queueRepoFilter;
+  const allTab = `<button class="tab${isAllSelected ? ' active' : ''}" role="tab" aria-selected="${isAllSelected}" data-repo="">All</button>`;
+  const repoTabs = repos.map(r => {
+    const isSelected = queueRepoFilter === r;
+    return `<button class="tab${isSelected ? ' active' : ''}" role="tab" aria-selected="${isSelected}" data-repo="${escapeHtml(r)}">${escapeHtml(r)}</button>`;
+  }).join('');
   bar.innerHTML = allTab + repoTabs;
 }
 
@@ -1449,6 +1544,7 @@ const llmConnectBtn = document.getElementById('btn-llm-connect');
 const llmDisconnectBtn = document.getElementById('btn-llm-disconnect');
 const llmModalBackdrop = document.getElementById('llm-modal-backdrop');
 const llmModalCancelBtn = document.getElementById('btn-llm-modal-cancel');
+const llmModalConnectBtn = document.getElementById('btn-llm-modal-connect');
 
 async function loadLlmAccount() {
   const statusEl = document.getElementById('llm-account-status');
@@ -1469,22 +1565,15 @@ async function loadLlmAccount() {
 function openLlmModal() {
   document.getElementById('llm-api-key').value = '';
   document.getElementById('llm-modal-result').style.display = 'none';
-  llmModalBackdrop.style.display = 'flex';
-  document.getElementById('llm-api-key').focus();
+  modalManager.open(llmModalBackdrop);
 }
 
 function closeLlmModal() {
-  llmModalBackdrop.style.display = 'none';
+  modalManager.close(llmModalBackdrop);
 }
 
 llmConnectBtn.addEventListener('click', openLlmModal);
 llmModalCancelBtn.addEventListener('click', closeLlmModal);
-llmModalBackdrop.addEventListener('click', (event) => {
-  if (event.target === llmModalBackdrop) closeLlmModal();
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && llmModalBackdrop.style.display !== 'none') closeLlmModal();
-});
 
 document.getElementById('btn-llm-modal-connect').addEventListener('click', async (e) => {
   const provider = document.getElementById('llm-provider-select').value;
