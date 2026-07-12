@@ -15,8 +15,14 @@ interface AnthropicMessagesResponse {
 	content?: ReadonlyArray<{ type: string; text?: string }>;
 }
 
+// Bounds `_calls` (below): a provider lives as long as the connected LLM account and
+// records every prompt — which embeds full PR diffs — so unbounded retention is a slow
+// leak on a long-running server. Nothing in production reads `calls`; a short recent
+// window keeps it useful for debugging/tests without retaining megabytes of history.
+const MAX_RETAINED_CALLS = 20;
+
 export class AnthropicLlmProvider implements LlmProvider {
-	private readonly _calls: LlmCall[] = [];
+	private _calls: LlmCall[] = [];
 	private readonly baseUrl: string;
 	private readonly model: string;
 
@@ -59,7 +65,7 @@ export class AnthropicLlmProvider implements LlmProvider {
 
 		const data = (await res.json()) as AnthropicMessagesResponse;
 		const text = data.content?.find((block) => block.type === "text")?.text ?? "";
-		this._calls.push({ messages, response: text });
+		this._calls = [...this._calls.slice(-(MAX_RETAINED_CALLS - 1)), { messages, response: text }];
 		return text;
 	}
 

@@ -32,6 +32,10 @@ function hashText(text: string): string {
 	return createHash("sha256").update(text).digest("hex");
 }
 
+// Cap on retained embedding vectors — see putEmbedding. Sized generously above any
+// realistic live-PR working set (one embedding per distinct effect text).
+const MAX_EMBEDDINGS = 5000;
+
 // Persists effect-extraction results (keyed on PR id + head SHA + model) and embedding
 // vectors (keyed on embedded-text hash + model) across pipeline runs, so a refresh that
 // finds no new commits for a PR skips re-calling the LLM/embedding provider entirely.
@@ -110,7 +114,14 @@ export class PrEffectCache {
 		const remaining = this.state.embeddings.filter(
 			(e) => !(e.textHash === textHash && e.modelKey === modelKey),
 		);
-		this.state = { ...this.state, embeddings: [...remaining, { textHash, modelKey, vector, cachedAt }] };
+		// Bounded, oldest-first eviction: unlike effects (evicted per-repo as PRs close),
+		// embeddings are keyed on text alone and were never evicted — months of churn left
+		// pr-cache.json growing without bound, and save() rewrites the whole file each time.
+		// Entries append in insertion order, so the slice drops the oldest; a live PR's
+		// effect text that gets evicted early is just re-embedded on its next comparison.
+		const appended = [...remaining, { textHash, modelKey, vector, cachedAt }];
+		const embeddings = appended.length > MAX_EMBEDDINGS ? appended.slice(appended.length - MAX_EMBEDDINGS) : appended;
+		this.state = { ...this.state, embeddings };
 		this.dirty = true;
 	}
 
