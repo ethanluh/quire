@@ -74,15 +74,6 @@
 
   .card-meta { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
 
-  .drift-signals {
-    margin-top: var(--space-3); padding: var(--space-3); background: var(--color-surface-sunken);
-    border-left: 2px solid var(--color-flagged); border-radius: var(--radius-sm);
-    font-size: var(--text-sm); color: var(--color-text-secondary);
-  }
-  .drift-signals strong { color: var(--color-text-primary); font-weight: var(--weight-medium); }
-  .drift-signals ul { padding-left: var(--space-4); margin: var(--space-1) 0 0; }
-  .drift-signals li { margin-top: var(--space-1); }
-
   /* Stamps are a calm seal of intent, not a scoreboard flash. */
   .stamp {
     position: absolute; top: var(--space-4); padding: var(--space-2) var(--space-4); font-size: var(--text-base);
@@ -114,15 +105,6 @@
   .list-card .gestures { display: flex; gap: var(--space-2); }
   .list-card .gestures .btn { flex: 1; }
 
-  .queue-entry { font-size: var(--text-sm); display: flex; justify-content: space-between; align-items: center; }
-  .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
-  .queue-entry-actions { display: flex; align-items: center; gap: var(--space-2); }
-  .queue-entry-actions .btn { width: auto; margin-top: 0; padding: var(--space-1) var(--space-3); }
-  /* Separates the informational "Details" button from the state-changing action
-     cluster with a hairline divider, so a row of up to 4 same-weight buttons still
-     reads as two groups rather than one flat list. */
-  .queue-entry-actions .btn-group { display: flex; gap: var(--space-2); margin-left: var(--space-2); padding-left: var(--space-2); border-left: 1px solid var(--color-border); }
-
   /* Dense, repeated list rows get tighter padding on narrow viewports; the single
      full-bleed stack-card and modals stay at the generous --space-5/--space-6. */
   @media (max-width: 480px) {
@@ -136,92 +118,18 @@
     .btn-icon { min-width: 44px; }
     a.btn { display: inline-flex; align-items: center; justify-content: center; }
   }
-  .decision-packet {
-    margin-top: var(--space-3);
-    padding: var(--space-4);
-    background: var(--color-surface-sunken);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-  }
-  .decision-packet h4 { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--color-text-primary); }
-  .decision-packet ul { padding-left: var(--space-4); margin: var(--space-2) 0; font-size: var(--text-sm); }
-  .decision-packet .gestures { margin-top: var(--space-3); }
 
-  .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
-  .result-msg.error { color: var(--color-reject); }
-
-  .account-panel p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
-  .account-panel input, .account-panel select {
-    width: 100%; background: var(--color-surface-overlay); border: 1px solid var(--color-border);
-    border-radius: var(--radius-md); color: var(--color-text-primary); font-family: var(--font-mono);
-    font-size: var(--text-sm); padding: var(--space-3);
-  }
-  .account-panel select {
-    margin-bottom: var(--space-3);
-    appearance: none;
-    -webkit-appearance: none;
-    font-family: var(--font-body);
-    background-image: var(--select-chevron);
-    background-repeat: no-repeat;
-    background-position: right var(--space-3) center;
-    background-size: var(--space-3);
-    padding-right: var(--space-8);
-  }
   .account-panel .btn, .settings-section .btn { margin-top: var(--space-3); width: 100%; text-align: center; }
   .settings-btn-row { margin-top: var(--space-3); }
   .settings-btn-row .btn { width: auto; margin-top: 0; }
-  .account-panel + .account-panel { margin-top: var(--space-6); }
-  .account-status { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); font-size: var(--text-sm); }
-  .account-status .login { font-weight: var(--weight-medium); color: var(--color-text-primary); }
 
-  #installations-list, #team-members-list { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-3); }
-  #installations-list:empty, #team-members-list:empty { display: none; }
-
-  .repo-panel { margin-top: var(--space-6); padding-top: var(--space-6); border-top: 1px solid var(--color-border); }
-  .repo-panel h3 {
-    font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--color-text-muted);
-    text-transform: uppercase; letter-spacing: var(--tracking-wider); margin: 0 0 var(--space-3);
-  }
-  .auto-merge-toggle {
-    display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm);
-    color: var(--color-text-muted); margin-bottom: var(--space-3); cursor: pointer;
-  }
-  .auto-merge-toggle input { width: auto; max-width: none; margin: 0; }
-  .watched-repo-row {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-3);
-    margin-bottom: var(--space-3);
-  }
-  .watched-repo-row .auto-merge-toggle:last-child { margin-bottom: 0; }
-  .watched-repo-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: var(--space-2);
-  }
-  .watched-repo-header .repo-name { font-weight: var(--weight-medium); }
-  .repo-entry {
-    background: var(--color-surface-card); border: 1px solid var(--color-border); border-radius: var(--radius-md);
-    padding: var(--space-2) var(--space-3); font-size: var(--text-sm);
-    display: flex; justify-content: space-between; align-items: center; gap: var(--space-2);
-  }
-  .repo-entry .repo-name {
-    font-family: var(--font-mono); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
   /* The blanket `.account-panel .btn { width: 100% }` rule above is meant for the
      connect/disconnect buttons; without this override it also stretches each
      row's button (e.g. installation Disconnect, member Remove) to fill the row. */
   .repo-entry .btn { width: auto; margin-top: 0; padding: var(--space-2) var(--space-5); flex: 0 0 auto; }
   .repo-entry select { width: auto; margin-bottom: 0; flex: 0 0 auto; }
 
-  .empty { color: var(--color-text-muted); font-size: var(--text-base); padding: var(--space-10) 0; text-align: center; }
-
   .audit-list { display: flex; flex-direction: column; gap: var(--space-3); overflow-y: auto; }
-  .audit-entry { font-size: var(--text-sm); display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
-  .audit-entry .audit-meta { display: flex; flex-direction: column; gap: var(--space-1); }
-  .audit-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
 
   /* --- Bottom tab bar --- */
   nav.tabbar {

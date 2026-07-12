@@ -106,20 +106,6 @@
 
   .card-meta { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
 
-  /* Drift signals read as a noted observation, not a warning. */
-  .drift-signals {
-    margin-top: var(--space-3);
-    padding: var(--space-3) var(--space-4);
-    background: var(--color-surface-sunken);
-    border-left: 2px solid var(--color-flagged);
-    border-radius: var(--radius-sm);
-    font-size: var(--text-sm);
-    color: var(--color-text-secondary);
-  }
-  .drift-signals strong { color: var(--color-text-primary); font-weight: var(--weight-medium); }
-  .drift-signals ul { padding-left: var(--space-4); margin: var(--space-1) 0 0; }
-  .drift-signals li { margin-top: var(--space-1); }
-
   .gestures { display: flex; gap: var(--space-2); margin-top: var(--space-4); }
 
   .shelf-tray h3 {
@@ -131,42 +117,8 @@
     margin: 0 0 var(--space-4);
   }
 
-  .account-panel p { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); max-width: 640px; }
   .account-connect-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
-  .account-panel input, .account-panel select,
-  .modal-backdrop input, .modal-backdrop select {
-    width: 100%;
-    max-width: 480px;
-    background: var(--color-surface-overlay);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    color: var(--color-text-primary);
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    padding: var(--space-2) var(--space-3);
-  }
-  .account-panel input:focus-visible, .account-panel select:focus-visible,
-  .modal-backdrop input:focus-visible, .modal-backdrop select:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-  .account-panel select, .modal-backdrop select {
-    margin-bottom: var(--space-3);
-    appearance: none;
-    -webkit-appearance: none;
-    font-family: var(--font-body);
-    background-image: var(--select-chevron);
-    background-repeat: no-repeat;
-    background-position: right var(--space-3) center;
-    background-size: var(--space-3);
-    padding-right: var(--space-8);
-  }
-  .account-panel + .account-panel { margin-top: var(--space-6); }
-  .account-status {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin-bottom: var(--space-4);
-    font-size: var(--text-sm);
-  }
-  .account-status .login { font-weight: var(--weight-medium); color: var(--color-text-primary); }
+  .account-panel p { max-width: 640px; }
 
   #installations-list, #team-members-list, #connectable-installations {
     display: flex;
@@ -176,147 +128,19 @@
   }
   #installations-list:empty, #team-members-list:empty { display: none; }
 
-  /* Shared "titled sub-section" divider — separates a distinct concern (repo
-     picker, team settings) from the account controls above it within the same
-     panel, the same way top-level settings sections used to divide before the
-     sidebar-nav rebuild moved each into its own nav item. */
-  .repo-panel, .subsection {
-    margin-top: var(--space-6);
-    padding-top: var(--space-6);
-    border-top: 1px solid var(--color-border);
-  }
-  .repo-panel h3, .subsection h3 {
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-    letter-spacing: var(--tracking-wider);
-    margin: 0 0 var(--space-3);
-  }
   .repo-entry select {
     width: auto;
     max-width: none;
     margin-bottom: 0;
     flex: 0 0 auto;
   }
+
   .automation-status { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
-  .auto-merge-toggle {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    font-size: var(--text-sm);
-    color: var(--color-text-muted);
-    margin-bottom: var(--space-3);
-    cursor: pointer;
-  }
-  .auto-merge-toggle input { width: auto; max-width: none; margin: 0; }
-  .watched-repo-row {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-3);
-    margin-bottom: var(--space-3);
-  }
-  .watched-repo-row .auto-merge-toggle:last-child { margin-bottom: 0; }
-  .watched-repo-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: var(--space-2);
-  }
-  .watched-repo-header .repo-name { font-weight: var(--weight-medium); }
   .repo-search { margin-bottom: var(--space-3); }
   .repo-list { display: flex; flex-direction: column; gap: var(--space-2); max-height: 320px; overflow-y: auto; }
-  .repo-entry {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-2) var(--space-3);
-    font-size: var(--text-sm);
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-  .repo-entry .repo-name {
-    font-family: var(--font-mono);
-    flex: 1 1 auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .repo-entry.selected { border-color: var(--color-brand); }
-  .repo-entry .badge-private { font-size: var(--text-xs); flex: 0 0 var(--space-16); justify-content: center; }
-  .repo-entry .badge-priority { font-size: var(--text-xs); flex: 0 0 auto; white-space: nowrap; }
-  .repo-group-header {
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-    letter-spacing: var(--tracking-wider);
-    margin: var(--space-2) 0 0;
-  }
-  .repo-group-header:first-child { margin-top: 0; }
-
-  .result-msg { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-accept); }
-  .result-msg.error { color: var(--color-reject); }
-
-  .empty { color: var(--color-text-muted); font-size: var(--text-base); padding: var(--space-10) 0; text-align: center; }
 
   .queue-list { display: flex; flex-direction: column; gap: var(--space-2); }
-  .queue-entry {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-3) var(--space-4);
-    font-size: var(--text-sm);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .queue-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
-  .queue-entry-actions { display: flex; align-items: center; gap: var(--space-2); }
-  .queue-entry-actions .btn { padding: var(--space-1) var(--space-3); }
-  /* Separates the informational "Details" button from the state-changing action
-     cluster with a hairline divider, so a row of up to 4 same-weight buttons still
-     reads as two groups rather than one flat list. */
-  .queue-entry-actions .btn-group { display: flex; gap: var(--space-2); margin-left: var(--space-2); padding-left: var(--space-2); border-left: 1px solid var(--color-border); }
-
-  .decision-packet {
-    margin-top: var(--space-3);
-    padding: var(--space-4);
-    background: var(--color-surface-sunken);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-  }
-  .decision-packet h4 { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--color-text-primary); }
-  .decision-packet ul { padding-left: var(--space-4); margin: var(--space-2) 0; font-size: var(--text-sm); }
-  .decision-packet .gestures { margin-top: var(--space-3); }
-
   .audit-list { display: flex; flex-direction: column; gap: var(--space-2); }
-  .audit-entry {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-3) var(--space-4);
-    font-size: var(--text-sm);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: var(--space-3);
-  }
-  .audit-entry .audit-meta { display: flex; flex-direction: column; gap: var(--space-1); }
-  .audit-entry .entry-id { font-family: var(--font-mono); color: var(--color-text-muted); font-size: var(--text-xs); }
-
-  #toast {
-    position: fixed; left: var(--space-4); right: var(--space-4); bottom: var(--space-4);
-    border-radius: var(--radius-md); padding: var(--space-3); font-size: var(--text-sm); text-align: center;
-    opacity: 0; pointer-events: none; transition: opacity var(--duration-base) var(--ease-standard); z-index: 100;
-  }
-  #toast.visible { opacity: 1; }
-  #toast.toast-error   { background: var(--color-reject-wash);  color: var(--color-reject);  border: 1px solid var(--color-reject); }
-  /* "Noted, not a siren" — routine nudges use the same flagged tier as a drift flag. */
-  #toast.toast-notice  { background: var(--color-flagged-wash); color: var(--color-flagged); border: 1px solid var(--color-flagged); }
-  #toast.toast-neutral { background: var(--color-surface-sunken); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
 </style>
 </head>
 <body>
