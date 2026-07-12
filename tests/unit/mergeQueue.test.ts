@@ -1576,3 +1576,56 @@ describe("MergeQueue.recordExternalMerge — deep investigation interaction", ()
 		expect(updated?.mergedPrIds).toEqual([pr2.id]);
 	});
 });
+
+describe("MergeQueue — mutation serialization and enqueue idempotence", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	// revertPr holds its entry snapshot across the revertPullRequest network call — this stub
+	// makes that call slow enough for a concurrent mutation to try to land in the window.
+	class SlowRevertClient extends StubGitHubClient {
+		override async revertPullRequest(owner: string, repo: string, prNumber: number): Promise<string> {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			return super.revertPullRequest(owner, repo, prNumber);
+		}
+	}
+
+	it("serializes concurrent revertPr calls so neither revert is lost", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new SlowRevertClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+
+		const pr1 = makePr({ id: "pr-1", number: 1 });
+		const pr2 = makePr({ id: "pr-2", number: 2 });
+		await queue.enqueue(makeBundle("bundle-1", [pr1, pr2]));
+		await queue.dequeueNext(); // lands both members
+
+		// Unserialized, each revert captures the entry with revertedPrIds: [] and writes back
+		// its own single-id list — the loser's revert record silently vanishes.
+		await Promise.all([queue.revertPr("bundle-1", "pr-1"), queue.revertPr("bundle-1", "pr-2")]);
+
+		const entry = await queue.getEntry("bundle-1");
+		expect(new Set(entry?.revertedPrIds)).toEqual(new Set(["pr-1", "pr-2"]));
+	});
+
+	it("enqueue is idempotent while the same bundle is already actively tracked", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+
+		const pr = makePr();
+		// bundleId is content-addressed (hash of the member-id set), so a re-accept after a
+		// crash between the accept route's enqueue and markDecided re-enqueues the same id —
+		// a second entry would corrupt getEntry/setEntry's one-entry-per-bundleId assumption.
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		const entries = await queue.listEntries();
+		expect(entries.filter((e) => e.bundleId === "bundle-1")).toHaveLength(1);
+		expect(entries[0]?.status).toBe("queued");
+	});
+});

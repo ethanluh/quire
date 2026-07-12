@@ -948,6 +948,51 @@ describe("githubAppRouter", () => {
 			expect(persisted.repos.map((r) => r["name"]).sort()).toEqual(["gadgets", "widgets"]);
 		});
 
+		it("does not lose a binding when two repos are selected concurrently", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			// Slow access check so both requests' unlocked await window (token refresh +
+			// canUserAccessRepo) overlaps — unserialized, both selects read the same repos
+			// snapshot and the last write silently drops the other's binding.
+			const canUserAccessRepo = async () => {
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				return true;
+			};
+			const { accountPath, refreshDeps, userTokenCache } = setup(
+				async () => [],
+				new StubGitHubClient(),
+				new StubLlmProvider(),
+				{
+					installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+					repos: [],
+				},
+				undefined,
+				undefined,
+				"octocat",
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				canUserAccessRepo,
+			);
+			userTokenCache.set("octocat", { accessToken: "user-token", expiresAt: Date.now() + 60_000 });
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const [first, second] = await Promise.all([
+				call(server, "POST", "/account/github/repos/select", { owner: "acme-corp", name: "widgets", installationId: 555 }),
+				call(server, "POST", "/account/github/repos/select", { owner: "acme-corp", name: "gadgets", installationId: 555 }),
+			]);
+
+			expect(first.status).toBe(200);
+			expect(second.status).toBe(200);
+			expect(refreshDeps.accountState.current.repos.map((r) => r.name).sort()).toEqual(["gadgets", "widgets"]);
+			const persisted = JSON.parse(await readFile(accountPath, "utf8")) as { repos: Record<string, unknown>[] };
+			expect(persisted.repos.map((r) => r["name"]).sort()).toEqual(["gadgets", "widgets"]);
+		});
+
 		it("409s when re-adding a repo that's already being watched", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {

@@ -128,12 +128,27 @@ export class PrEffectCache {
 	// The single point where put*'s in-memory-only mutations actually hit disk. A no-op
 	// if nothing changed since the last save (avoids a redundant write when two batches
 	// happen to both call save() with nothing new in between).
+	//
+	// A failed write never throws and never poisons the chain. This cache is purely an
+	// optimization — the in-memory state is still correct after a failed write, so a
+	// transient disk error (ENOSPC, EIO) must not abort the refresh that called save(),
+	// and — since this instance is shared server-wide across every repo's refreshes — it
+	// must not leave writeChain permanently rejected, which would make every future
+	// save() a no-op-that-throws until restart. The `.catch` before chaining mirrors
+	// keyedLock.ts; `dirty` is re-set on failure so the next save() retries the write
+	// instead of believing the failed snapshot was persisted.
 	async save(): Promise<void> {
 		if (this.statePath === undefined || !this.dirty) return;
 		this.dirty = false;
 		const path = this.statePath;
 		const snapshot = this.state;
-		this.writeChain = this.writeChain.then(() => saveState(path, snapshot));
-		await this.writeChain;
+		const write = this.writeChain.catch(() => undefined).then(() => saveState(path, snapshot));
+		this.writeChain = write;
+		try {
+			await write;
+		} catch (err) {
+			this.dirty = true;
+			console.error(`pr-cache write failed (kept in memory, will retry on next save): ${path}:`, err);
+		}
 	}
 }
