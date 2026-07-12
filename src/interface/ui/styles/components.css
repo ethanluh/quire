@@ -494,18 +494,6 @@ a.btn {
 	padding: var(--space-5);
 }
 
-.card.dropping-to-shelf {
-	animation: drop-to-shelf var(--duration-shelf) var(--ease-settle) forwards;
-}
-
-.card.leaving-right {
-	animation: leave-right var(--duration-slow) var(--ease-standard) forwards;
-}
-
-.card.leaving-left {
-	animation: leave-left var(--duration-slow) var(--ease-standard) forwards;
-}
-
 @keyframes card-settle {
 	from { opacity: 0; transform: translateY(6px) scale(0.99); }
 	to   { opacity: 1; transform: translateY(0) scale(1); }
@@ -514,18 +502,4 @@ a.btn {
 @keyframes drift-reveal {
 	from { opacity: 0; transform: translateY(-2px); }
 	to   { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes drop-to-shelf {
-	0%   { opacity: 1; transform: translateY(0) scale(1); }
-	60%  { opacity: 1; transform: translateY(28px) scale(0.97); }
-	100% { opacity: 0; transform: translateY(40px) scale(0.94); }
-}
-
-@keyframes leave-right {
-	to { opacity: 0; transform: translateX(36px); }
-}
-
-@keyframes leave-left {
-	to { opacity: 0; transform: translateX(-36px); }
 }

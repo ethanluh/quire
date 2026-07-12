@@ -140,13 +140,10 @@
 	--radius-lg: 12px;
 	--radius-pill: 999px;
 
-	/* Motion — deliberate, decelerating settle; no bounce/spring/elastic.
-	   --duration-shelf is intentionally the longest: the defer gesture is
-	   the one place the spec asks the animation to *teach* the meaning. */
+	/* Motion — deliberate, decelerating settle; no bounce/spring/elastic. */
 	--duration-fast: 120ms;
 	--duration-base: 200ms;
 	--duration-slow: 360ms;
-	--duration-shelf: 480ms;
 
 	--ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 	--ease-settle: cubic-bezier(0.16, 1, 0.3, 1);
