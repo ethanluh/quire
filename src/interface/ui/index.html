@@ -629,15 +629,13 @@ document.addEventListener('keydown', (event) => {
 function cardHtml(card, shelfMode) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
   const bundleId = escapeHtml(card.bundleId);
-  const detailsBtn = `<button class="btn" onclick="showBundleDetail('${bundleId}')">Details</button>`;
-  const acceptOnclick = card.requiresAcceptConfirmation
-    ? `gesture('${bundleId}','accept',true)`
-    : `gesture('${bundleId}','accept')`;
+  const detailsBtn = `<button class="btn btn-show-bundle-detail" data-bundle-id="${bundleId}">Details</button>`;
+  const requiresConfirm = card.requiresAcceptConfirmation ? 'true' : 'false';
   const gestures = shelfMode
-    ? `${detailsBtn}<button class="btn btn-accept" onclick="promote('${bundleId}')">Unshelf</button>`
-    : `${detailsBtn}<button class="btn btn-accept" onclick="${acceptOnclick}">Accept</button>
-       <button class="btn btn-defer"  onclick="gesture('${bundleId}','defer')">Defer</button>
-       <button class="btn btn-reject" onclick="gesture('${bundleId}','reject')">Reject</button>`;
+    ? `${detailsBtn}<button class="btn btn-accept btn-promote" data-bundle-id="${bundleId}">Unshelf</button>`
+    : `${detailsBtn}<button class="btn btn-accept btn-gesture" data-bundle-id="${bundleId}" data-gesture="accept" data-requires-confirm="${requiresConfirm}">Accept</button>
+       <button class="btn btn-defer btn-gesture" data-bundle-id="${bundleId}" data-gesture="defer">Defer</button>
+       <button class="btn btn-reject btn-gesture" data-bundle-id="${bundleId}" data-gesture="reject">Reject</button>`;
   return `<div class="card" id="card-${bundleId}">
     <div class="card-direction">${escapeHtml(card.directionSummary)} ${directionInferredBadge(card.directionInferred)}</div>
     <div class="card-meta">
@@ -676,6 +674,119 @@ detailModalBody.addEventListener('click', async (event) => {
     closeDetailModal();
     loadQueue();
   });
+});
+
+// Delegated listeners for gesture buttons and other actions
+document.addEventListener('click', async (event) => {
+  // Bundle detail buttons
+  const detailBtn = event.target.closest('.btn-show-bundle-detail');
+  if (detailBtn) {
+    const bundleId = detailBtn.dataset.bundleId;
+    await showBundleDetail(bundleId);
+    return;
+  }
+
+  // Gesture buttons (accept/defer/reject)
+  const gestureBtn = event.target.closest('.btn-gesture');
+  if (gestureBtn) {
+    const bundleId = gestureBtn.dataset.bundleId;
+    const gestureAction = gestureBtn.dataset.gesture;
+    const requiresConfirm = gestureBtn.dataset.requiresConfirm === 'true';
+    await gesture(bundleId, gestureAction, requiresConfirm);
+    return;
+  }
+
+  // Promote (unshelf) buttons
+  const promoteBtn = event.target.closest('.btn-promote');
+  if (promoteBtn) {
+    const bundleId = promoteBtn.dataset.bundleId;
+    await promote(bundleId);
+    return;
+  }
+
+  // Queue detail buttons
+  const queueDetailBtn = event.target.closest('.btn-show-queue-detail');
+  if (queueDetailBtn) {
+    const bundleId = queueDetailBtn.dataset.bundleId;
+    await showQueueDetail(bundleId);
+    return;
+  }
+
+  // Queue action buttons
+  const removeQueueBtn = event.target.closest('.btn-remove-from-queue');
+  if (removeQueueBtn) {
+    const bundleId = removeQueueBtn.dataset.bundleId;
+    await removeFromQueue(bundleId);
+    return;
+  }
+
+  const reattemptBtn = event.target.closest('.btn-reattempt-queue-entry');
+  if (reattemptBtn) {
+    const bundleId = reattemptBtn.dataset.bundleId;
+    await reattemptQueueEntry(bundleId);
+    return;
+  }
+
+  const abortBtn = event.target.closest('.btn-abort-queue-entry');
+  if (abortBtn) {
+    const bundleId = abortBtn.dataset.bundleId;
+    const mergedPrCount = parseInt(abortBtn.dataset.mergedPrCount, 10);
+    const memberCount = parseInt(abortBtn.dataset.memberCount, 10);
+    await abortQueueEntry(bundleId, mergedPrCount, memberCount);
+    return;
+  }
+
+  // Audit overturn button
+  const auditBtn = event.target.closest('.btn-overturn-audit');
+  if (auditBtn) {
+    const auditId = auditBtn.dataset.auditId;
+    await overturnAudit(auditId);
+    return;
+  }
+
+  // Installation buttons
+  const connectBtn = event.target.closest('.btn-connect-installation');
+  if (connectBtn) {
+    const installationId = parseInt(connectBtn.dataset.installationId, 10);
+    await connectInstallation(installationId);
+    return;
+  }
+
+  const disconnectBtn = event.target.closest('.btn-disconnect-installation');
+  if (disconnectBtn) {
+    const installationId = parseInt(disconnectBtn.dataset.installationId, 10);
+    await disconnectInstallation(installationId);
+    return;
+  }
+
+  // Repo selection button
+  const selectRepoBtn = event.target.closest('.btn-select-repo');
+  if (selectRepoBtn) {
+    const owner = selectRepoBtn.dataset.owner;
+    const name = selectRepoBtn.dataset.name;
+    const installationId = parseInt(selectRepoBtn.dataset.installationId, 10);
+    await selectRepo(owner, name, installationId);
+    return;
+  }
+
+  // Remove member button
+  const removeBtn = event.target.closest('.btn-remove-member');
+  if (removeBtn) {
+    const login = removeBtn.dataset.login;
+    await removeMember(login);
+    return;
+  }
+});
+
+// Delegated listener for member role changes
+document.addEventListener('change', async (event) => {
+  const roleSelect = event.target.closest('.select-member-role');
+  if (roleSelect) {
+    const login = roleSelect.dataset.login;
+    const value = roleSelect.value;
+    await setMemberRole(login, value);
+    return;
+  }
 });
 
 // Headline/guidance per conflict kind for the detail-modal residual banner — the full
@@ -979,9 +1090,9 @@ document.getElementById('btn-queue-age-clear').addEventListener('click', () => s
 
 function queueEntryHtml(e) {
   const actionButtons = [
-    e.status === 'queued' && isOwner() ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : '',
-    ['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept" onclick="reattemptQueueEntry('${escapeHtml(e.bundleId)}')">Reattempt</button>` : '',
-    ['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject" onclick="abortQueueEntry('${escapeHtml(e.bundleId)}', ${e.mergedPrIds.length}, ${e.bundle.members.length})">Abort</button>` : '',
+    e.status === 'queued' && isOwner() ? `<button class="btn btn-reject btn-remove-from-queue" data-bundle-id="${escapeHtml(e.bundleId)}">Remove</button>` : '',
+    ['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept btn-reattempt-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}">Reattempt</button>` : '',
+    ['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject btn-abort-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}" data-merged-pr-count="${e.mergedPrIds.length}" data-member-count="${e.bundle.members.length}">Abort</button>` : '',
   ].filter(Boolean).join('');
   return `<div class="queue-entry">
     <div>
@@ -990,7 +1101,7 @@ function queueEntryHtml(e) {
     </div>
     <div class="queue-entry-actions">
       ${queueStatusBadge(e)}
-      <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
+      <button class="btn btn-show-queue-detail" data-bundle-id="${escapeHtml(e.bundleId)}">Details</button>
       ${actionButtons ? `<span class="btn-group">${actionButtons}</span>` : ''}
     </div>
   </div>`;
@@ -1024,7 +1135,7 @@ function auditEntryHtml(entry) {
   const prLabel = `${escapeHtml(entry.pr.repoOwner)}/${escapeHtml(entry.pr.repoName)}#${entry.pr.number}`;
   const action = entry.overturnedAt !== null
     ? '<span class="badge badge-flagged">Overturned</span>'
-    : `<button class="btn btn-reject" onclick="overturnAudit('${escapeHtml(entry.id)}')">Mark as false positive</button>`;
+    : `<button class="btn btn-reject btn-overturn-audit" data-audit-id="${escapeHtml(entry.id)}">Mark as false positive</button>`;
   return `<div class="audit-entry">
     <div class="audit-meta">
       <div>${escapeHtml(entry.criterionName)} &mdash; ${escapeHtml(entry.reason)}</div>
@@ -1183,7 +1294,7 @@ function connectableInstallationHtml(installation) {
   return `<div class="repo-entry">
     <span class="badge badge-neutral">${escapeHtml(installation.accountType)}</span>
     <span class="repo-name">${escapeHtml(installation.accountLogin)}</span>
-    <button class="btn btn-accept" onclick="connectInstallation(${installation.installationId})">Connect</button>
+    <button class="btn btn-accept btn-connect-installation" data-installation-id="${escapeHtml(String(installation.installationId))}">Connect</button>
   </div>`;
 }
 
@@ -1546,7 +1657,7 @@ function repoHtml(repo, watchedRepos) {
     <span class="repo-name">${escapeHtml(repo.fullName)}</span>
     ${isWatched
       ? '<span class="badge badge-clean">Watched</span>'
-      : `<button class="btn btn-defer" ${repoSelectionInProgress ? 'disabled' : ''} onclick="selectRepo('${escapeHtml(repo.owner)}','${escapeHtml(repo.name)}',${repo.installationId})">${isTarget ? 'Adding…' : 'Add'}</button>`}
+      : `<button class="btn btn-defer btn-select-repo" ${repoSelectionInProgress ? 'disabled' : ''} data-owner="${escapeHtml(repo.owner)}" data-name="${escapeHtml(repo.name)}" data-installation-id="${escapeHtml(String(repo.installationId))}">${isTarget ? 'Adding…' : 'Add'}</button>`}
   </div>`;
 }
 

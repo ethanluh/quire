@@ -929,8 +929,8 @@ async function loadShelf() {
   el.innerHTML = cards.length ? cards.map(c => `<div class="list-card card">
     ${cardBodyHtml(c)}
     <div class="gestures">
-      <button class="btn" onclick="showBundleDetail('${escapeHtml(c.bundleId)}')">Details</button>
-      <button class="btn btn-accept" onclick="promote('${escapeHtml(c.bundleId)}')">Unshelf</button>
+      <button class="btn btn-show-bundle-detail" data-bundle-id="${escapeHtml(c.bundleId)}">Details</button>
+      <button class="btn btn-accept btn-promote" data-bundle-id="${escapeHtml(c.bundleId)}">Unshelf</button>
     </div>
   </div>`).join('') : '<div class="empty">Shelf is empty.</div>';
 }
@@ -946,9 +946,9 @@ async function loadQueue() {
   if (!entries.length) { el.innerHTML = '<div class="empty">Bundle status is empty.</div>'; return; }
   el.innerHTML = entries.map(e => {
     const actionButtons = [
-      e.status === 'queued' && isOwner() ? `<button class="btn btn-reject" onclick="removeFromQueue('${escapeHtml(e.bundleId)}')">Remove</button>` : '',
-      ['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept" onclick="reattemptQueueEntry('${escapeHtml(e.bundleId)}')">Reattempt</button>` : '',
-      ['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject" onclick="abortQueueEntry('${escapeHtml(e.bundleId)}', ${e.mergedPrIds.length}, ${e.bundle.members.length})">Abort</button>` : '',
+      e.status === 'queued' && isOwner() ? `<button class="btn btn-reject btn-remove-from-queue" data-bundle-id="${escapeHtml(e.bundleId)}">Remove</button>` : '',
+      ['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept btn-reattempt-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}">Reattempt</button>` : '',
+      ['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject btn-abort-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}" data-merged-pr-count="${e.mergedPrIds.length}" data-member-count="${e.bundle.members.length}">Abort</button>` : '',
     ].filter(Boolean).join('');
     return `<div class="queue-entry card">
     <div>
@@ -957,7 +957,7 @@ async function loadQueue() {
     </div>
     <div class="queue-entry-actions">
       ${queueStatusBadge(e)}
-      <button class="btn" onclick="showQueueDetail('${escapeHtml(e.bundleId)}')">Details</button>
+      <button class="btn btn-show-queue-detail" data-bundle-id="${escapeHtml(e.bundleId)}">Details</button>
       ${actionButtons ? `<span class="btn-group">${actionButtons}</span>` : ''}
     </div>
   </div>`;
@@ -998,7 +998,7 @@ function auditEntryHtml(entry) {
   const prLabel = `${escapeHtml(entry.pr.repoOwner)}/${escapeHtml(entry.pr.repoName)}#${entry.pr.number}`;
   const action = entry.overturnedAt !== null
     ? '<span class="badge badge-flagged">Overturned</span>'
-    : `<button class="btn btn-reject" onclick="overturnAudit('${escapeHtml(entry.id)}')">Not a real flag</button>`;
+    : `<button class="btn btn-reject btn-overturn-audit" data-audit-id="${escapeHtml(entry.id)}">Not a real flag</button>`;
   return `<div class="audit-entry card">
     <div class="audit-meta">
       <div>${escapeHtml(entry.criterionName)} &mdash; ${escapeHtml(entry.reason)}</div>
@@ -1425,6 +1425,84 @@ themeBtn.addEventListener('click', () => {
   const next = document.documentElement.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
   localStorage.setItem(THEME_KEY, next);
   applyTheme(next);
+});
+
+// Delegated listeners for button actions
+document.addEventListener('click', async (event) => {
+  // Bundle detail buttons
+  const detailBtn = event.target.closest('.btn-show-bundle-detail');
+  if (detailBtn) {
+    const bundleId = detailBtn.dataset.bundleId;
+    await showBundleDetail(bundleId);
+    return;
+  }
+
+  // Promote (unshelf) buttons
+  const promoteBtn = event.target.closest('.btn-promote');
+  if (promoteBtn) {
+    const bundleId = promoteBtn.dataset.bundleId;
+    await promote(bundleId);
+    return;
+  }
+
+  // Queue detail buttons
+  const queueDetailBtn = event.target.closest('.btn-show-queue-detail');
+  if (queueDetailBtn) {
+    const bundleId = queueDetailBtn.dataset.bundleId;
+    await showQueueDetail(bundleId);
+    return;
+  }
+
+  // Queue action buttons
+  const removeQueueBtn = event.target.closest('.btn-remove-from-queue');
+  if (removeQueueBtn) {
+    const bundleId = removeQueueBtn.dataset.bundleId;
+    await removeFromQueue(bundleId);
+    return;
+  }
+
+  const reattemptBtn = event.target.closest('.btn-reattempt-queue-entry');
+  if (reattemptBtn) {
+    const bundleId = reattemptBtn.dataset.bundleId;
+    await reattemptQueueEntry(bundleId);
+    return;
+  }
+
+  const abortBtn = event.target.closest('.btn-abort-queue-entry');
+  if (abortBtn) {
+    const bundleId = abortBtn.dataset.bundleId;
+    const mergedPrCount = parseInt(abortBtn.dataset.mergedPrCount, 10);
+    const memberCount = parseInt(abortBtn.dataset.memberCount, 10);
+    await abortQueueEntry(bundleId, mergedPrCount, memberCount);
+    return;
+  }
+
+  // Audit overturn button
+  const auditBtn = event.target.closest('.btn-overturn-audit');
+  if (auditBtn) {
+    const auditId = auditBtn.dataset.auditId;
+    await overturnAudit(auditId);
+    return;
+  }
+
+  // Remove member button
+  const removeBtn = event.target.closest('.btn-remove-member');
+  if (removeBtn) {
+    const login = removeBtn.dataset.login;
+    await removeMember(login);
+    return;
+  }
+});
+
+// Delegated listener for member role changes
+document.addEventListener('change', async (event) => {
+  const roleSelect = event.target.closest('.select-member-role');
+  if (roleSelect) {
+    const login = roleSelect.dataset.login;
+    const value = roleSelect.value;
+    await setMemberRole(login, value);
+    return;
+  }
 });
 
 checkSignedIn().then((signedIn) => {
