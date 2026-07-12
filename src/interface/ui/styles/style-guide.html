@@ -162,16 +162,15 @@
 
 	<section>
 		<span class="label">Motion</span>
-		<p class="note">Decelerating settle, never bounce/spring/elastic — nothing here should feel like a game piece landing. <code class="mono">--duration-shelf</code> is the longest on purpose: defer is the one gesture the spec asks to teach its meaning spatially.</p>
+		<p class="note">Decelerating settle, never bounce/spring/elastic — nothing here should feel like a game piece landing.</p>
 		<table class="motion-table">
 			<thead><tr><th>Token</th><th>Value</th><th>Used for</th></tr></thead>
 			<tbody>
 				<tr><td>--duration-fast</td><td>120ms</td><td>button press feedback</td></tr>
 				<tr><td>--duration-base</td><td>200ms</td><td>tab switch, drift signal reveal</td></tr>
-				<tr><td>--duration-slow</td><td>360ms</td><td>card entrance, accept/reject exit</td></tr>
-				<tr><td>--duration-shelf</td><td>480ms</td><td>defer → drop into shelf tray</td></tr>
+				<tr><td>--duration-slow</td><td>360ms</td><td>card entrance</td></tr>
 				<tr><td>--ease-standard</td><td>cubic-bezier(0.4, 0, 0.2, 1)</td><td>interactive feedback</td></tr>
-				<tr><td>--ease-settle</td><td>cubic-bezier(0.16, 1, 0.3, 1)</td><td>entrances, the shelf drop</td></tr>
+				<tr><td>--ease-settle</td><td>cubic-bezier(0.16, 1, 0.3, 1)</td><td>card entrance</td></tr>
 			</tbody>
 		</table>
 
@@ -184,9 +183,6 @@
 				</div>
 			</div>
 			<div class="component-block">
-				<button class="btn btn-accept replay-btn" data-anim="leaving-right">Accept →</button>
-				<button class="btn btn-defer replay-btn" data-anim="dropping-to-shelf">Defer ↓</button>
-				<button class="btn btn-reject replay-btn" data-anim="leaving-left">Reject ←</button>
 				<button class="btn replay-btn" id="replay-settle" style="color:var(--color-text-secondary)">Replay entrance</button>
 			</div>
 		</div>
@@ -204,6 +200,7 @@
 				<span class="badge badge-neutral">Blast radius: 6 files</span>
 				<span class="badge badge-clean">Clean</span>
 				<span class="badge badge-flagged">Drift flagged</span>
+				<span class="badge badge-critical">Conflict</span>
 			</div>
 			<div class="tabs">
 				<div class="tab active">Review queue</div>
@@ -225,8 +222,62 @@
 				<span class="label">Deferred for closer inspection</span>
 				<p class="note" style="margin-top:var(--space-2)">A card lands here on a human's discretionary call, or because the drift check flagged it — the card's own badge says which, so the two reasons never collapse into one undifferentiated tray.</p>
 			</div>
-			<div class="row">
+
+			<div style="margin-top:var(--space-6)">
+				<span class="label" style="display:block; margin-bottom:var(--space-3)">PR member list</span>
+				<div class="pr-member-list">
+					<div class="pr-member-row">
+						<div class="pr-member-info">
+							<a href="#" target="_blank">ethanluh/quire#123</a>
+							<span class="pr-member-direction">Add dark mode toggle</span>
+						</div>
+						<div class="pr-member-tags">
+							<span class="badge badge-neutral">Merge: pending</span>
+							<span class="badge badge-critical">Footprint: 1</span>
+							<span class="badge badge-neutral">2 files</span>
+						</div>
+					</div>
+					<div class="pr-member-row">
+						<div class="pr-member-info">
+							<a href="#" target="_blank">ethanluh/quire#124</a>
+							<span class="pr-member-direction">Update settings modal layout</span>
+						</div>
+						<div class="pr-member-tags">
+							<span class="badge badge-neutral">Merge: pending</span>
+							<span class="badge badge-clean">Clean</span>
+							<span class="badge badge-neutral">3 files</span>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<div style="margin-top:var(--space-6)">
+				<span class="label" style="display:block; margin-bottom:var(--space-3)">Button icon &amp; settings</span>
+				<div class="row">
+					<button class="btn btn-icon" title="Close">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+					</button>
+					<button class="btn btn-settings">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m2.12 2.12l4.24 4.24M1 12h6m6 0h6m-16.78 7.78l4.24-4.24m2.12-2.12l4.24-4.24"/></svg>
+						Settings
+					</button>
+				</div>
+			</div>
+
+			<div style="margin-top:var(--space-6)">
+				<span class="label" style="display:block; margin-bottom:var(--space-3)">Settings navigation</span>
+				<div style="max-width:220px">
+					<div class="settings-nav">
+						<button class="settings-nav-item active">Account</button>
+						<button class="settings-nav-item">Team</button>
+						<button class="settings-nav-item">Repositories</button>
+					</div>
+				</div>
+			</div>
+
+			<div class="row" style="margin-top:var(--space-6)">
 				<button class="btn btn-defer" id="btn-open-modal-demo">Open modal</button>
+				<button class="btn btn-reject" id="btn-open-danger-modal-demo">Open danger modal</button>
 			</div>
 		</div>
 	</section>
@@ -235,11 +286,22 @@
 
 <div class="modal-backdrop" id="modal-demo-backdrop" style="display:none">
 	<div class="card">
-		<h3 class="modal-title">Connect with a personal access token</h3>
+		<h3 class="modal-title">Install GitHub App</h3>
 		<p class="note" style="margin:0 0 var(--space-3)">A dossier interrupting the page, not covering it — the backdrop dims what's behind, the dialog is just a .card keeping its usual elevation and entrance animation. Closes on Cancel, Escape, or a click outside the card.</p>
 		<div class="modal-actions">
 			<button class="btn btn-defer" id="btn-close-modal-demo">Cancel</button>
 			<button class="btn btn-accept">Connect</button>
+		</div>
+	</div>
+</div>
+
+<div class="modal-backdrop" id="modal-danger-demo-backdrop" style="display:none">
+	<div class="card modal-danger">
+		<h3 class="modal-title">Disconnect GitHub App</h3>
+		<p class="note" style="margin:0 0 var(--space-3)">An irreversible confirm: clear visual distinction (reject-toned border and title) from a routine modal. Same .card shape and entrance, but the styling signals consequence.</p>
+		<div class="modal-actions">
+			<button class="btn btn-defer" id="btn-close-danger-modal-demo">Cancel</button>
+			<button class="btn btn-reject">Disconnect</button>
 		</div>
 	</div>
 </div>
@@ -249,17 +311,25 @@ const PAPER_SURFACES = [
 	'--color-surface-page',
 	'--color-surface-card',
 	'--color-surface-sunken',
+	'--color-surface-overlay',
 	'--color-border',
+	'--color-border-strong',
 	'--color-text-primary',
 	'--color-text-secondary',
 	'--color-text-muted',
+	'--color-text-faint',
 	'--color-brand',
+	'--color-brand-wash',
 ];
 const STATE_TOKENS = [
 	['--color-accept', 'accept'],
+	['--color-accept-wash', 'accept-wash'],
 	['--color-defer', 'defer'],
+	['--color-defer-wash', 'defer-wash'],
 	['--color-reject', 'reject'],
+	['--color-reject-wash', 'reject-wash'],
 	['--color-flagged', 'flagged'],
+	['--color-flagged-wash', 'flagged-wash'],
 ];
 
 function swatch(varName, label) {
@@ -298,7 +368,7 @@ document.getElementById('weight-scale').innerHTML = WEIGHTS.map(([v, n]) =>
 	`<div class="weight-row"><span class="tag">${v}</span><span style="font-weight:var(${v}); font-size:var(--text-md)">Direction summary (${n})</span></div>`
 ).join('');
 
-const SPACES = ['--space-1','--space-2','--space-3','--space-4','--space-5','--space-6','--space-8','--space-10','--space-12'];
+const SPACES = ['--space-1','--space-2','--space-3','--space-4','--space-5','--space-6','--space-8','--space-10','--space-12','--space-16'];
 document.getElementById('space-ruler').innerHTML = SPACES.map(v =>
 	`<div class="col"><div class="block" style="width:24px; height:var(${v})"></div><span class="tag">${v.replace('--space-','')}</span></div>`
 ).join('');
@@ -313,11 +383,22 @@ document.getElementById('shadow-row').innerHTML = SHADOWS.map(([v, label]) =>
 	`<div class="demo-box" style="box-shadow:var(${v}); border-color:transparent"><span class="tag">${label}</span></div>`
 ).join('');
 
-// Theme toggle
+// Theme toggle — sync with localStorage key used by the app
+function initTheme() {
+	const stored = localStorage.getItem('quire-theme');
+	const theme = stored || 'paper';
+	document.documentElement.setAttribute('data-theme', theme);
+	document.querySelectorAll('#theme-toggle button').forEach(b => {
+		b.classList.toggle('active', b.dataset.theme === theme);
+	});
+}
+initTheme();
 document.getElementById('theme-toggle').addEventListener('click', (e) => {
 	const btn = e.target.closest('button');
 	if (!btn) return;
-	document.documentElement.setAttribute('data-theme', btn.dataset.theme);
+	const theme = btn.dataset.theme;
+	localStorage.setItem('quire-theme', theme);
+	document.documentElement.setAttribute('data-theme', theme);
 	document.querySelectorAll('#theme-toggle button').forEach(b => b.classList.toggle('active', b === btn));
 });
 
@@ -342,17 +423,30 @@ document.getElementById('replay-settle').addEventListener('click', () => {
 // Modal demo — same open/close pattern the app uses: Cancel, Escape, or a click
 // on the backdrop itself (not the card) all close it.
 const modalDemoBackdrop = document.getElementById('modal-demo-backdrop');
+const modalDangerDemoBackdrop = document.getElementById('modal-danger-demo-backdrop');
 document.getElementById('btn-open-modal-demo').addEventListener('click', () => {
 	modalDemoBackdrop.style.display = 'flex';
 });
 document.getElementById('btn-close-modal-demo').addEventListener('click', () => {
 	modalDemoBackdrop.style.display = 'none';
 });
+document.getElementById('btn-open-danger-modal-demo').addEventListener('click', () => {
+	modalDangerDemoBackdrop.style.display = 'flex';
+});
+document.getElementById('btn-close-danger-modal-demo').addEventListener('click', () => {
+	modalDangerDemoBackdrop.style.display = 'none';
+});
 modalDemoBackdrop.addEventListener('click', (e) => {
 	if (e.target === modalDemoBackdrop) modalDemoBackdrop.style.display = 'none';
 });
+modalDangerDemoBackdrop.addEventListener('click', (e) => {
+	if (e.target === modalDangerDemoBackdrop) modalDangerDemoBackdrop.style.display = 'none';
+});
 document.addEventListener('keydown', (e) => {
-	if (e.key === 'Escape' && modalDemoBackdrop.style.display !== 'none') modalDemoBackdrop.style.display = 'none';
+	if (e.key === 'Escape') {
+		if (modalDemoBackdrop.style.display !== 'none') modalDemoBackdrop.style.display = 'none';
+		if (modalDangerDemoBackdrop.style.display !== 'none') modalDangerDemoBackdrop.style.display = 'none';
+	}
 });
 </script>
 </body>
