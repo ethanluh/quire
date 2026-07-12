@@ -10,6 +10,7 @@ import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
 import { saveUserToken, clearUserToken, userTokenPath, DEFAULT_USER_TOKEN_TTL_MS } from "../../../engine/github/userToken.js";
 import { SESSION_COOKIE_NAME, SESSION_TTL_MS, createSession, verifySession } from "../session.js";
 import { cookieOptions, mintOrReuseStateCookie, consumeStateCookie } from "../stateCookie.js";
+import type { SessionEpochStore } from "../sessionEpoch.js";
 
 const OAUTH_STATE_COOKIE_NAME = "quire_oauth_state";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -50,6 +51,7 @@ export function accountRouter(
 	requireSession: RequestHandler,
 	userTokenCache: UserTokenCache,
 	dataDir: string,
+	sessionEpochs: SessionEpochStore,
 ): Router {
 	const router = Router();
 
@@ -130,6 +132,11 @@ export function accountRouter(
 		if (payload !== undefined) {
 			userTokenCache.clear(payload.login);
 			await clearUserToken(userTokenPath(dataDir, payload.login));
+			// Invalidate the just-cleared cookie server-side too: clearCookie only asks the
+			// browser to drop it, but the signed token stays valid until expiry, so a copy
+			// captured before logout would keep working. Bumping the login's session epoch makes
+			// requireSession reject every token issued before now (see sessionEpoch.ts).
+			await sessionEpochs.invalidateSessions(payload.login, Date.now());
 		}
 
 		res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });

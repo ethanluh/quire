@@ -12,6 +12,7 @@ import {
 	recordCollaboratorSyncFailure,
 } from "../../../engine/github/collaboratorSyncLog.js";
 import type { TeamRole } from "../../../engine/types/team.js";
+import { sanitizeIdentifier } from "../../../engine/util/identifier.js";
 import { createInvite, verifyInvite, INVITE_TTL_MS } from "../invite.js";
 import { validateBody } from "../middleware/validation.js";
 import { requireRole } from "../middleware/requireRole.js";
@@ -42,12 +43,16 @@ export function teamRouter(
 ): Router {
 	const router = Router();
 
+	// Route teamId through sanitizeIdentifier before joining it into a path — the same guard
+	// TeamStore and tenant.ts already apply to their own data/teams/<id> joins. The teamIds that
+	// reach here are server-minted or HMAC-signed today, but validating at the path-building
+	// layer keeps the traversal guarantee from depending on every caller pre-validating.
 	function installationPathFor(teamId: string): string {
-		return join(dataDir, "teams", teamId, "installation.json");
+		return join(dataDir, "teams", sanitizeIdentifier(teamId, { scope: "team data", label: "team id" }), "installation.json");
 	}
 
 	function collaboratorSyncIssuesPathFor(teamId: string): string {
-		return join(dataDir, "teams", teamId, "collaborator-sync-issues.json");
+		return join(dataDir, "teams", sanitizeIdentifier(teamId, { scope: "team data", label: "team id" }), "collaborator-sync-issues.json");
 	}
 
 	// Logs AND persists the outcome of a fire-and-forget GitHub collaborator sync — logging
@@ -338,22 +343,23 @@ export function teamRouter(
 				return;
 			}
 
-			// A revoked invite's token still verifies (the signature alone can't know about a
-			// later revocation) — the persisted record is the only place that can be checked.
-			// A missing record (predates this feature, or the team's invites.json was reset)
-			// is not treated as revoked: the token's own signature is still sufficient proof.
-			const inviteRecord = await teamStore.getInvite(payload.teamId, payload.id);
-			if (inviteRecord?.revokedAt !== undefined) {
+			// Atomically validate-and-consume the invite BEFORE any membership mutation (see
+			// teamStore.redeemInvite): revocation, single-use, and already-used are all checked
+			// and the redeemed-stamp written inside one per-team lock, so a losing race in two
+			// concurrent redemptions of the same (admin-granting) token can never still add a
+			// member. A missing record is now rejected rather than honored — single-use and
+			// revocation both live in that record, so its absence can't be treated as unlimited
+			// use. Re-redemption by the same login is idempotent (double-click / second tab).
+			const redemption = await teamStore.redeemInvite(payload.teamId, payload.id, login);
+			if (redemption === "missing") {
+				res.status(400).json({ error: "This invite link is invalid or has expired" });
+				return;
+			}
+			if (redemption === "revoked") {
 				res.status(400).json({ error: "This invite has been revoked" });
 				return;
 			}
-			// Single-use: an invite link is a 7-day bearer capability (and can grant admin), so a
-			// leaked/forwarded URL must not stay joinable after the intended invitee redeems it.
-			// A redeemer who is already a member of this team is the one exception — a second
-			// browser or a re-click by the same accepted user shouldn't 400 (the membership add
-			// below is idempotent, and the role never escalates: syncCollaboratorAdd uses their
-			// existing role, not payload.role).
-			if (inviteRecord?.redeemedAt !== undefined && inviteRecord.redeemedBy !== login) {
+			if (redemption === "already-used") {
 				res.status(400).json({ error: "This invite has already been used" });
 				return;
 			}
@@ -372,7 +378,6 @@ export function teamRouter(
 				teamIds: [...new Set([...(current?.teamIds ?? []), payload.teamId])],
 				activeTeamId: payload.teamId,
 			}));
-			await teamStore.markInviteRedeemed(payload.teamId, payload.id, login);
 
 			// Best-effort, never awaited into the response — see syncCollaboratorAdd. Uses the
 			// login's actual current role, not payload.role: invites are single-use except for a

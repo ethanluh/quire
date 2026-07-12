@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import { readJsonFile, writeJsonFileAtomic } from "../jsonFile.js";
+import { readJsonFile, writeSecretFileAtomic } from "../jsonFile.js";
 
 export interface InstallationBinding {
 	installationId: number;
@@ -84,7 +84,11 @@ export async function loadInstallation(path: string): Promise<InstallationAccoun
 }
 
 export async function saveInstallation(path: string, state: InstallationAccountState): Promise<void> {
-	await writeJsonFileAtomic(path, state);
+	// Written 0600 (not the default 0644): this holds no credential itself, but it enumerates
+	// which orgs/installation ids a team is connected to — exactly the small, guessable integers
+	// an installation-hijack attempt needs (see the /install/callback access check). Keep it out
+	// of reach of other local users / backups on a shared host, same as the token files.
+	await writeSecretFileAtomic(path, state);
 }
 
 export async function clearInstallation(path: string): Promise<void> {

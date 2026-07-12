@@ -10,7 +10,8 @@ import type { BuildOctokit } from "../../src/engine/github/collaborators.js";
 import { saveInstallation } from "../../src/engine/github/installation.js";
 import type { InstallationBinding, RepoBinding } from "../../src/engine/github/installation.js";
 import { TeamStore } from "../../src/engine/team/teamStore.js";
-import { createInvite } from "../../src/interface/server/invite.js";
+import { createInvite, INVITE_TTL_MS } from "../../src/interface/server/invite.js";
+import type { TeamRole } from "../../src/engine/types/team.js";
 
 const SECRET = "test-secret";
 const PUBLIC_URL = "http://localhost:3000";
@@ -116,6 +117,21 @@ describe("teamRouter", () => {
 		currentLogin = login;
 		const team = await store.createTeamForLogin(login, teamName);
 		return team.teamId;
+	}
+
+	// Mints an invite token AND persists its backing record, mirroring POST /invite in production
+	// (createInvite + store.addInvite). /join now requires the record to exist — single-use and
+	// revocation state live there (Findings 3/4) — so a bare token is no longer redeemable.
+	async function persistedInviteToken(teamId: string, invitedBy: string, role: TeamRole): Promise<string> {
+		const { token, id } = createInvite(teamId, invitedBy, role, SECRET);
+		await store.addInvite(teamId, {
+			id,
+			invitedBy,
+			issuedAt: new Date().toISOString(),
+			expiresAt: new Date(Date.now() + INVITE_TTL_MS).toISOString(),
+			role,
+		});
+		return token;
 	}
 
 	// store.addMember alone puts a login on the roster but not the reverse-index the stub
@@ -224,7 +240,7 @@ describe("teamRouter", () => {
 
 	it("POST /join adds the invited login as a member and switches their active team to it", async () => {
 		const ownerTeamId = await signIn("owner");
-		const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
+		const token = await persistedInviteToken(ownerTeamId, "owner", "member");
 
 		currentLogin = "bob";
 		await store.createTeamForLogin("bob", "bob's team"); // bob already has his own personal team
@@ -256,7 +272,7 @@ describe("teamRouter", () => {
 
 	it("POST /join is idempotent when the login is already a member", async () => {
 		const ownerTeamId = await signIn("owner");
-		const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
+		const token = await persistedInviteToken(ownerTeamId, "owner", "member");
 		currentLogin = "bob";
 		await store.createTeamForLogin("bob", "bob's team");
 
@@ -273,6 +289,48 @@ describe("teamRouter", () => {
 
 		const members = await store.listMembers(ownerTeamId);
 		expect(members.filter((m) => m.login === "bob")).toHaveLength(1);
+	});
+
+	it("POST /join is single-use across different logins (Finding 3)", async () => {
+		const ownerTeamId = await signIn("owner");
+		const token = await persistedInviteToken(ownerTeamId, "owner", "admin");
+
+		currentLogin = "bob";
+		await store.createTeamForLogin("bob", "bob's team");
+		const first = await fetch(`${baseUrl}/account/team/join`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ token }),
+		});
+		expect(first.status).toBe(200);
+
+		// A different login can't reuse the same (admin-granting) link after bob consumed it.
+		currentLogin = "mallory";
+		await store.createTeamForLogin("mallory", "mallory's team");
+		const second = await fetch(`${baseUrl}/account/team/join`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ token }),
+		});
+		expect(second.status).toBe(400);
+		expect(await store.getMembership(ownerTeamId, "mallory")).toBeUndefined();
+	});
+
+	it("POST /join rejects a signed token with no persisted invite record (Finding 4)", async () => {
+		const ownerTeamId = await signIn("owner");
+		// A bare token minted without the /invite route ever persisting a record — single-use and
+		// revocation both live in that record, so a missing one must not be honored as unlimited use.
+		const { token } = createInvite(ownerTeamId, "owner", "admin", SECRET);
+
+		currentLogin = "bob";
+		await store.createTeamForLogin("bob", "bob's team");
+		const res = await fetch(`${baseUrl}/account/team/join`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ token }),
+		});
+		expect(res.status).toBe(400);
+		expect(await store.getMembership(ownerTeamId, "bob")).toBeUndefined();
 	});
 
 	it("POST /leave removes the membership and, if it was active, switches to a remaining team", async () => {
@@ -546,7 +604,7 @@ describe("teamRouter", () => {
 		it("POST /join adds the joining login as a collaborator on every bound repo, mapping role to permission", async () => {
 			const ownerTeamId = await signIn("owner");
 			await bindRepo(ownerTeamId);
-			const { token } = createInvite(ownerTeamId, "owner", "admin", SECRET);
+			const token = await persistedInviteToken(ownerTeamId, "owner", "admin");
 			currentLogin = "bob";
 			await store.createTeamForLogin("bob", "bob's team");
 
@@ -565,9 +623,11 @@ describe("teamRouter", () => {
 		it("POST /join re-redeemed by an existing lower-role member syncs their actual role, not the invite's — no privilege escalation", async () => {
 			const ownerTeamId = await signIn("owner");
 			await bindRepo(ownerTeamId);
-			// A still-valid admin-role invite (unexpired, unrevoked) — invites are reusable
-			// since nothing checks redeemedAt on redemption, only revokedAt.
-			const { token } = createInvite(ownerTeamId, "owner", "admin", SECRET);
+			// A still-valid admin-role invite (unexpired, unrevoked). bob is ALREADY a member, so
+			// his redemption is the idempotent "already a member" path — the guard against a
+			// higher-role invite escalating an existing member's role (the sync must use his
+			// actual role, not the invite's), independent of single-use enforcement.
+			const token = await persistedInviteToken(ownerTeamId, "owner", "admin");
 			currentLogin = "bob";
 			await addMemberWithIndex(ownerTeamId, "bob", "member");
 
@@ -588,7 +648,7 @@ describe("teamRouter", () => {
 
 		it("POST /join is a no-op (not an error) when the team has no repos bound yet", async () => {
 			const ownerTeamId = await signIn("owner");
-			const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
+			const token = await persistedInviteToken(ownerTeamId, "owner", "member");
 			currentLogin = "bob";
 			await store.createTeamForLogin("bob", "bob's team");
 
@@ -621,7 +681,7 @@ describe("teamRouter", () => {
 		it("POST /join responds before the GitHub sync settles (never blocks on it)", async () => {
 			const ownerTeamId = await signIn("owner");
 			await bindRepo(ownerTeamId);
-			const { token } = createInvite(ownerTeamId, "owner", "member", SECRET);
+			const token = await persistedInviteToken(ownerTeamId, "owner", "member");
 			currentLogin = "bob";
 			await store.createTeamForLogin("bob", "bob's team");
 
@@ -747,7 +807,7 @@ describe("teamRouter", () => {
 			addCollaboratorMock.mockImplementationOnce(async () => {
 				throw new FakeHttpError("Resource not accessible by integration", 403);
 			});
-			const { token } = createInvite(teamId, "owner", "member", SECRET);
+			const token = await persistedInviteToken(teamId, "owner", "member");
 			currentLogin = "bob";
 			await store.createTeamForLogin("bob", "bob's team");
 
