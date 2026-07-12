@@ -124,6 +124,13 @@ export async function buildBundles(
 	const seeds: ClusterSeed[] = [];
 	const seededIds = new Set<string>();
 	for (const bundle of priorBundles) {
+		// An undeclared bundle (forced singleton) must never become a seed: seeded members
+		// bypass the directionInferred isolation below, so a declared PR could join the
+		// seed on effect similarity and end up grouped with an undeclared one (INV-1/INV-3).
+		// Letting its member fall through to the isolation path re-forms the identical
+		// singleton (same stableId) at no extra cost — effects are already cache hits and
+		// singletons never reach clusterPRs.
+		if (bundle.directionInferred) continue;
 		const allUnchanged = bundle.members.every((m) => {
 			const current = currentById.get(m.id);
 			return (
@@ -165,14 +172,24 @@ export async function buildBundles(
 
 	const allClusters = [...clusters, ...undeclared.map((pr) => [pr])];
 
-	const bundles = allClusters.map((members): Bundle => {
+	const bundles = allClusters.map((rawMembers): Bundle => {
+		// Sorted by id so the anchor (direction/directionInferred source) and member order
+		// are a function of the member set alone, not of fetch/cluster iteration order —
+		// the same PR set must produce the same bundle run-to-run.
+		const members = [...rawMembers].sort((a, b) => a.id.localeCompare(b.id));
 		const anchor = members[0];
 		if (anchor === undefined) throw new Error("Cluster must have at least one member");
+		// Union of every member's effects (deduped), not just the anchor's: this is the
+		// fingerprint of the bundle's drift-comparison evidence (computeInputsHash), and
+		// anchor-only would score legitimate non-anchor effects as orphans and change with
+		// anchor identity. Per-member drift comparison targets are leave-one-out and built
+		// in the pipeline from effectsByPr, not from this field.
+		const effectSummary = [...new Set(members.flatMap((m) => effectsByPr.get(m.id) ?? []))].join(". ");
 		return {
 			id: stableId(members.map((m) => m.id)),
 			direction: anchor.declaredDirection,
 			directionInferred: anchor.directionInferred,
-			effectSummary: (effectsByPr.get(anchor.id) ?? []).join(". "),
+			effectSummary,
 			members,
 		};
 	});

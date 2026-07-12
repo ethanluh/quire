@@ -23,7 +23,7 @@ export class StubStaticAnalyzer implements StaticAnalyzer {
 		return this.symbolsResult;
 	}
 
-	async computeExpectedFootprint(_bundle: Bundle): Promise<ReadonlyArray<string>> {
+	async computeExpectedFootprint(_bundle: Bundle, _screenedPrId: string): Promise<ReadonlyArray<string>> {
 		return this.footprintResult;
 	}
 

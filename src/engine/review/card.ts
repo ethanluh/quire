@@ -12,6 +12,15 @@ const RESIDUAL_DISCLOSURE =
 	"files may be flagged as if in conflict. Absence of a symbol-inconsistency flag is not " +
 	"proof the bundle's symbols are consistent.";
 
+// The cheap screen's signals (effect-list orphans, footprint anomaly) and the
+// symbol-coherence check are all cross-member comparisons; with one member there is no
+// other evidence to compare against, so none of them ran. Said outright (INV-6) rather
+// than letting the "clean" drift verdict read as "checked and passed".
+const SINGLETON_DISCLOSURE =
+	" This bundle has a single member: the effect-list, footprint-anomaly, and " +
+	"symbol-consistency checks are cross-PR comparisons and produced no signal for it — " +
+	"its drift verdict reflects an unchecked member, not a passed check.";
+
 // A cheap fingerprint of everything blastRadius/flags/drift/specConformance are computed
 // from: which PRs are in the bundle (bundle.id already hashes the sorted member-id set),
 // each member's content version (headSha — filesTouched/diff-derived fields are tied to
@@ -79,7 +88,8 @@ export function buildReviewCard(
 		blastRadius: computeBlastRadius(bundle),
 		flags,
 		drift,
-		residualDisclosure: RESIDUAL_DISCLOSURE, // INV-6: always set
+		residualDisclosure:
+			bundle.members.length === 1 ? RESIDUAL_DISCLOSURE + SINGLETON_DISCLOSURE : RESIDUAL_DISCLOSURE, // INV-6: always set
 		specConformance,
 		specConformanceDisclosure,
 		inputsHash: computeInputsHash(bundle),

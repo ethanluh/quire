@@ -113,6 +113,28 @@ describe("buildBundles — clusters on drift-check evidence, not declaredDirecti
 		expect(bundles[0]?.effectSummary).toBe("adds OTP-based login flow");
 	});
 
+	it("builds effectSummary from every member's effects and orders members by id, independent of input order", async () => {
+		const stub = new StubLlmProvider();
+		// Input order is pr-b first — extraction completions map to input order.
+		stub.queueCompletion(JSON.stringify(["adds recovery codes"])); // pr-b
+		stub.queueCompletion(JSON.stringify(["adds OTP login"])); // pr-a
+		stub.queueCompletion("1"); // pr-a's classify() call matches pr-b's centroid
+
+		const prs = [
+			makePR("pr-b", "add passwordless auth"),
+			makePR("pr-a", "add passwordless auth"),
+		];
+
+		const { bundles } = await buildBundles(prs, stub, { similarityThreshold: 0.75 });
+
+		expect(bundles).toHaveLength(1);
+		// Member order (and with it the anchor) is a function of the member set, not of
+		// fetch order — the same PR set must produce the same bundle run-to-run.
+		expect(bundles[0]?.members.map((m) => m.id)).toEqual(["pr-a", "pr-b"]);
+		// The drift-evidence fingerprint covers ALL members' effects, not just the anchor's.
+		expect(bundles[0]?.effectSummary).toBe("adds OTP login. adds recovery codes");
+	});
+
 	it("excludes a PR whose effect extraction failed, without discarding bundling for the rest", async () => {
 		const provider = new FlakyProvider();
 		provider.queueCompletion(JSON.stringify(["adds OTP-based login flow"])); // pr-good's extraction
@@ -279,6 +301,36 @@ describe("buildBundles — seeded clustering from a prior run's bundles", () => 
 
 		expect(second.bundles).toHaveLength(1);
 		expect(second.bundles[0]?.members.map((m) => m.id).sort()).toEqual(["pr-a", "pr-b"]);
+	});
+
+	it("never seeds an undeclared singleton bundle — a similar declared PR must not join it (INV-1/INV-3)", async () => {
+		const cache = new PrEffectCache();
+		const stub = new StubLlmProvider();
+		// First run: pr-u has no marker, so it's forced into its own undeclared singleton.
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"]));
+
+		const prU = makePR("pr-u", UNDECLARED_DIRECTION, { directionInferred: true });
+		const first = await buildBundles([prU], stub, { similarityThreshold: 0.75 }, cache);
+		const uBundle = first.bundles[0]!;
+		expect(uBundle.directionInferred).toBe(true);
+
+		// Second run: pr-u unchanged, plus a new declared PR with similar effects. If the
+		// undeclared singleton were seeded, pr-d's classify() call (queued to answer "1" =
+		// "matches the first existing cluster") would merge pr-d into pr-u's bundle —
+		// grouping a declared PR with an undeclared one. The seed must be skipped so pr-u
+		// re-forms its own singleton via the isolation path instead.
+		stub.queueCompletion(JSON.stringify(["adds OTP-based login flow"])); // pr-d's extraction
+		stub.queueCompletion("1"); // headroom: consumed only if the forbidden seeded comparison runs
+		const prD = makePR("pr-d", "add passwordless auth");
+		const second = await buildBundles([prU, prD], stub, { similarityThreshold: 0.75 }, cache, [uBundle]);
+
+		expect(second.bundles).toHaveLength(2);
+		const memberIds = second.bundles.map((b) => b.members.map((m) => m.id)).sort();
+		expect(memberIds).toEqual([["pr-d"], ["pr-u"]]);
+		// pr-u's re-formed singleton is identical to the prior one (same stableId), so
+		// downstream card reuse is unaffected by the seed skip.
+		const uAgain = second.bundles.find((b) => b.members[0]?.id === "pr-u")!;
+		expect(uAgain.id).toBe(uBundle.id);
 	});
 
 	it("splits a now-undeclared PR (marker removed) out of a multi-PR bundle instead of carrying the stale seed forward", async () => {

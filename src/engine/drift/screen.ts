@@ -9,14 +9,29 @@ export async function runCheapScreen(
 	// Extracted blind to declaredDirection (INV-2) by the caller, e.g. bundler's
 	// clustering pass — reused here rather than extracted twice.
 	rawClauses: ReadonlyArray<string>,
+	// The OTHER bundle members' extracted effects (leave-one-out) — the direction
+	// evidence this member is compared against. Never includes this member's own
+	// clauses: a comparison target containing them (like the old bundle-wide
+	// effectSummary) self-matches by construction and can never surface an orphan.
+	otherClauses: ReadonlyArray<string>,
 	provider: LlmProvider,
 	analyzer: StaticAnalyzer,
 ): Promise<DriftVerdict> {
 	const signals: DriftSignal[] = [];
 
-	// Compared against the bundle's extracted-effect evidence, never bundle.direction
-	// (declaredDirection) — that field is a label, not a verdict input (INV-1).
-	const effects = await matchEffectsToDirection(rawClauses, bundle.effectSummary, provider);
+	// Both signals here are cross-member comparisons, so a singleton bundle has no
+	// evidence to compare against — running them would either self-match (effect list)
+	// or flag everything (empty expected footprint). Skip instead; the review card
+	// discloses that singletons get no cheap-screen coverage (INV-6), which is honest
+	// where a fabricated "clean from self-comparison" would not be.
+	if (bundle.members.length < 2) {
+		return { status: "clean" };
+	}
+
+	// Compared against the other members' extracted-effect evidence, never
+	// bundle.direction (declaredDirection) — that field is a label, not a verdict
+	// input (INV-1).
+	const effects = await matchEffectsToDirection(rawClauses, otherClauses.join(". "), provider);
 	const orphanClauses = effects
 		.filter((e) => !e.matchedDirection)
 		.map((e) => e.clause);
@@ -25,10 +40,11 @@ export async function runCheapScreen(
 		signals.push({ kind: "effectList", prId: pr.id, orphanClauses });
 	}
 
-	// Footprint signal
+	// Footprint signal — expected footprint is likewise leave-one-out (see
+	// StaticAnalyzer.computeExpectedFootprint).
 	const [touchedSymbols, expectedFiles] = await Promise.all([
 		analyzer.analyzeSymbols(pr.diff),
-		analyzer.computeExpectedFootprint(bundle),
+		analyzer.computeExpectedFootprint(bundle, pr.id),
 	]);
 
 	const expectedSet = new Set(expectedFiles);

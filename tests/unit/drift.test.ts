@@ -88,12 +88,21 @@ describe("runCheapScreen — INV-3: clean only when zero signals", () => {
 		analyzer = new StubStaticAnalyzer();
 	});
 
+	// Cross-member checks need a second member to compare against; otherClauses below is
+	// always the OTHER member's effects, never the screened PR's own.
+	const OTHER_CLAUSES = ["adds OTP-based login"];
+
+	function makeTwoMemberBundle(pr: PullRequest): Bundle {
+		const other = makePR({ id: "pr-2", number: 2, headSha: "sha-2" });
+		return makeBundle([pr, other]);
+	}
+
 	it("returns clean when no orphans and no surprising symbols", async () => {
 		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP-based login", matchedDirection: true }])); // matcher
 		analyzer.setFootprint(["src/auth.ts"]);
 		const pr = makePR();
-		const bundle = makeBundle([pr]);
-		const verdict = await runCheapScreen(pr, bundle, ["adds OTP-based login"], stub, analyzer);
+		const bundle = makeTwoMemberBundle(pr);
+		const verdict = await runCheapScreen(pr, bundle, ["adds OTP-based login"], OTHER_CLAUSES, stub, analyzer);
 		expect(verdict.status).toBe("clean");
 	});
 
@@ -104,9 +113,9 @@ describe("runCheapScreen — INV-3: clean only when zero signals", () => {
 		]));
 		analyzer.setFootprint(["src/auth.ts"]);
 		const pr = makePR();
-		const bundle = makeBundle([pr]);
+		const bundle = makeTwoMemberBundle(pr);
 		const verdict = await runCheapScreen(
-			pr, bundle, ["adds OTP login", "silently enables global rate limiting"], stub, analyzer,
+			pr, bundle, ["adds OTP login", "silently enables global rate limiting"], OTHER_CLAUSES, stub, analyzer,
 		);
 		expect(verdict.status).toBe("flagged");
 		if (verdict.status === "flagged") {
@@ -121,8 +130,8 @@ describe("runCheapScreen — INV-3: clean only when zero signals", () => {
 		analyzer.setFootprint(["src/auth.ts"]);
 		analyzer.setSymbols([{ name: "rateLimiter", filePath: "src/middleware.ts", kind: "export" }]);
 		const pr = makePR();
-		const bundle = makeBundle([pr]);
-		const verdict = await runCheapScreen(pr, bundle, ["adds OTP login"], stub, analyzer);
+		const bundle = makeTwoMemberBundle(pr);
+		const verdict = await runCheapScreen(pr, bundle, ["adds OTP login"], OTHER_CLAUSES, stub, analyzer);
 		expect(verdict.status).toBe("flagged");
 		if (verdict.status === "flagged") {
 			const signal = verdict.signals.find(s => s.kind === "footprintAnomaly");
@@ -136,8 +145,39 @@ describe("runCheapScreen — INV-3: clean only when zero signals", () => {
 		analyzer.setFootprint(["src/auth.ts"]);
 		analyzer.setSymbols([{ name: "logger", filePath: "src/infra/logger.ts", kind: "export" }]);
 		const pr = makePR();
-		const bundle = makeBundle([pr]);
-		const verdict = await runCheapScreen(pr, bundle, ["adds OTP login"], stub, analyzer);
+		const bundle = makeTwoMemberBundle(pr);
+		const verdict = await runCheapScreen(pr, bundle, ["adds OTP login"], OTHER_CLAUSES, stub, analyzer);
 		expect(verdict.status).toBe("flagged");
+	});
+
+	it("fires footprintAnomaly through the real TypeScriptAnalyzer when a member touches a file no other member touches", async () => {
+		// Regression: the old computeExpectedFootprint included the screened member's own
+		// filesTouched in the expected set, so this signal could never fire at all.
+		const { TypeScriptAnalyzer } = await import("../../src/engine/drift/footprint/typescript.js");
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		const pr = makePR({
+			diff: { raw: "", hunks: [{ filePath: "src/rogue.ts", additions: ["+export function backdoor() {}"], deletions: [] }] },
+			filesTouched: ["src/auth.ts", "src/rogue.ts"],
+		});
+		const other = makePR({ id: "pr-2", number: 2, headSha: "sha-2", filesTouched: ["src/auth.ts"] });
+		const bundle = makeBundle([pr, other]);
+		const verdict = await runCheapScreen(pr, bundle, ["adds OTP login"], OTHER_CLAUSES, stub, new TypeScriptAnalyzer());
+		expect(verdict.status).toBe("flagged");
+		if (verdict.status === "flagged") {
+			const signal = verdict.signals.find(s => s.kind === "footprintAnomaly");
+			expect(signal).toBeDefined();
+			if (signal?.kind === "footprintAnomaly") {
+				expect(signal.surprisingSymbols.map((s) => s.filePath)).toEqual(["src/rogue.ts"]);
+			}
+		}
+	});
+
+	it("skips all checks for a singleton bundle — clean verdict, zero LLM calls", async () => {
+		analyzer.setSymbols([{ name: "rateLimiter", filePath: "src/middleware.ts", kind: "export" }]);
+		const pr = makePR();
+		const bundle = makeBundle([pr]);
+		const verdict = await runCheapScreen(pr, bundle, ["adds OTP login"], [], stub, analyzer);
+		expect(verdict.status).toBe("clean");
+		expect(stub.calls.length).toBe(0);
 	});
 });

@@ -90,9 +90,12 @@ describe("runCheapScreen — screen failure must flag, never clear (INV-3)", () 
 		analyzer.setFootprint(["src/auth.ts"]);
 
 		const pr = makePR();
-		const bundle = makeBundle([pr]);
+		const other = makePR({ id: "pr-2", number: 2, headSha: "sha-2" });
+		const bundle = makeBundle([pr, other]);
 
-		const verdict = await runCheapScreen(pr, bundle, ["adds rate limiting to login endpoint"], provider, analyzer);
+		const verdict = await runCheapScreen(
+			pr, bundle, ["adds rate limiting to login endpoint"], ["adds OTP-based login"], provider, analyzer,
+		);
 
 		expect(verdict.status).toBe("flagged");
 		if (verdict.status === "flagged") {
