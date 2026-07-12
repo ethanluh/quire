@@ -302,22 +302,22 @@
     <h1>Quire</h1>
   </div>
   <div class="header-identity">
-    <img class="header-avatar" id="header-avatar" style="display:none" alt="" onerror="this.style.display='none'">
-    <span class="subtitle" id="signed-in-as" style="display:none"></span>
-    <button class="btn btn-icon" id="btn-settings" title="Settings" aria-label="Settings" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <img class="header-avatar" id="header-avatar" class="hidden" alt="" onerror="this.classList.add('hidden')">
+    <span class="subtitle" id="signed-in-as" class="hidden"></span>
+    <button class="btn btn-icon" id="btn-settings" title="Settings" aria-label="Settings" class="hidden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
   </div>
 </header>
-<div class="header-status-bar" id="header-status-bar" style="display:none">
+<div class="header-status-bar" id="header-status-bar" class="hidden">
   <span class="badge badge-neutral" id="header-team-badge"></span>
-  <select class="header-team-switcher" id="header-team-switcher" style="display:none" title="Switch team"></select>
-  <span class="badge badge-neutral header-repo-badge" id="header-repo-badge" style="display:none"></span>
+  <select class="header-team-switcher" id="header-team-switcher" class="hidden" title="Switch team"></select>
+  <span class="badge badge-neutral header-repo-badge" id="header-repo-badge" class="hidden"></span>
 </div>
 
-<div class="modal-backdrop" id="signin-gate" style="display:none">
+<div class="modal-backdrop" id="signin-gate" class="hidden">
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="signin-title">
     <h3 class="modal-title" id="signin-title">Sign in to Quire</h3>
     <p>Sign in with your GitHub account to continue.</p>
-    <div id="signin-result" class="result-msg error" style="display:none"></div>
+    <div id="signin-result" class="result-msg error" class="hidden"></div>
     <div class="modal-actions">
       <button class="btn btn-accept" id="btn-signin">Sign in with GitHub</button>
     </div>
@@ -326,7 +326,7 @@
 
 <main>
   <div id="pane-review" class="pane active">
-    <div class="stack" id="stack"></div>
+    <div class="stack" id="stack"><div class="empty">Loading&hellip;</div></div>
     <div class="gesture-hints">
       <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg> reject</span>
       <span>defer <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></span>
@@ -334,7 +334,7 @@
     </div>
     <div class="tap-gestures">
       <button class="btn" id="btn-tap-details">Details</button>
-      <button class="btn btn-accept" id="btn-tap-accept" style="display:none">Accept</button>
+      <button class="btn btn-accept" id="btn-tap-accept" class="hidden">Accept</button>
     </div>
   </div>
 
@@ -354,13 +354,13 @@
   </div>
 
 <nav class="tabbar" role="tablist">
-  <button class="tab active" role="tab" aria-selected="true" aria-controls="pane-review" data-tab="review"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg><span class="tab-badge" id="tab-badge-review" style="display:none">0</span></span>Review</button>
+  <button class="tab active" role="tab" aria-selected="true" aria-controls="pane-review" data-tab="review"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg><span class="tab-badge hidden" id="tab-badge-review">0</span></span>Review</button>
   <button class="tab" role="tab" aria-selected="false" aria-controls="pane-shelf" data-tab="shelf"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg></span>Shelf</button>
   <button class="tab" role="tab" aria-selected="false" aria-controls="pane-queue" data-tab="queue"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>Status</button>
   <button class="tab" role="tab" aria-selected="false" aria-controls="pane-audit" data-tab="audit"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Audit</button>
 </nav>
 
-<div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
+<div class="modal-backdrop" id="settings-modal-backdrop" class="hidden">
   <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
     <div class="settings-header">
       <button class="btn btn-defer btn-icon" id="btn-settings-modal-close" title="Close" aria-label="Close settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
@@ -393,28 +393,28 @@
       <input type="text" id="team-create-input" placeholder="New team name" aria-label="New team name">
       <button class="btn btn-defer" id="btn-team-create">Create new team</button>
       <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
-      <div id="team-result" class="result-msg" style="display:none" aria-live="polite"></div>
+      <div id="team-result" class="result-msg hidden" aria-live="polite"></div>
     </div>
 
       <div class="settings-section account-panel">
         <h4>GitHub connection</h4>
         <div class="account-status" id="account-status" aria-live="polite">Checking connection&hellip;</div>
         <div id="installations-list"></div>
-        <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
+        <button class="btn btn-reject" id="btn-account-disconnect-all" class="hidden">Disconnect all</button>
         <div id="account-connect-form">
           <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
           <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
         </div>
-        <div id="account-result" class="result-msg" style="display:none" aria-live="polite"></div>
+        <div id="account-result" class="result-msg hidden" aria-live="polite"></div>
 
-        <div class="repo-panel" id="repo-panel" style="display:none">
+        <div class="repo-panel" id="repo-panel" class="hidden">
           <h3>Repositories to work on</h3>
           <div id="watched-repos-list"></div>
-          <div id="sorting-notice" class="result-msg" style="display:none" aria-live="polite">
+          <div id="sorting-notice" class="result-msg hidden" aria-live="polite">
             Starred/pinned sorting is unavailable — reconnect GitHub to restore it.
             <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
           </div>
-          <div id="repo-list-warning" class="result-msg error" style="display:none" aria-live="polite"></div>
+          <div id="repo-list-warning" class="result-msg error hidden" aria-live="polite"></div>
           <select id="repo-picker" aria-label="Repository"><option value="" disabled selected>Loading repos&hellip;</option></select>
         </div>
       </div>
@@ -431,13 +431,13 @@
           <input type="password" id="llm-api-key" placeholder="API key" aria-label="API key" autocomplete="off">
           <button class="btn btn-accept" id="btn-llm-connect">Connect</button>
         </div>
-        <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
-        <div id="llm-account-result" class="result-msg" style="display:none" aria-live="polite"></div>
+        <button class="btn btn-reject hidden" id="btn-llm-disconnect">Disconnect</button>
+        <div id="llm-account-result" class="result-msg hidden" aria-live="polite"></div>
       </div>
 
       <div class="settings-section">
         <h4>Danger zone</h4>
-        <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
+        <button class="btn btn-reject btn-clear-all" id="btn-clear-all" class="hidden" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
       </div>
     </div>
   </div>
@@ -445,7 +445,7 @@
 
 <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
-<div class="modal-backdrop" id="detail-modal-backdrop" style="display:none">
+<div class="modal-backdrop" id="detail-modal-backdrop" class="hidden">
   <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
     <h3 class="modal-title" id="detail-modal-title">Bundle detail</h3>
     <div id="detail-modal-body"><div class="empty">Loading&hellip;</div></div>
@@ -455,7 +455,7 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="confirm-modal-backdrop" style="display:none">
+<div class="modal-backdrop" id="confirm-modal-backdrop" class="hidden">
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
     <h3 class="modal-title" id="confirm-modal-title">Confirm</h3>
     <p id="confirm-modal-message"></p>
@@ -631,13 +631,12 @@ function closeDetailModal() {
 
 async function showBundleDetail(bundleId) {
   openDetailModal('<div class="empty">Loading&hellip;</div>');
-  const res = await fetch(`/bundles/${bundleId}`);
-  if (res.status === 404) {
-    detailModalBody.innerHTML = '<div class="empty">This bundle is no longer available (it may have just been actioned).</div>';
+  const result = await api('GET', `/bundles/${bundleId}`);
+  if (result.error) {
+    detailModalBody.innerHTML = paneErrorHtml(result.error, `showBundleDetail('${bundleId}')`);
     return;
   }
-  const detail = await res.json();
-  detailModalBody.innerHTML = detailBodyHtml(detail);
+  detailModalBody.innerHTML = detailBodyHtml(result);
 }
 
 function showQueueDetail(bundleId) {
@@ -695,7 +694,7 @@ function updateReviewBadge() {
   const badge = document.getElementById('tab-badge-review');
   const count = reviewCards.length;
   badge.textContent = String(count);
-  badge.style.display = count > 0 ? 'inline-flex' : 'none';
+  badge.classList.toggle('hidden', count === 0);
 }
 
 // Pulls the selected repo's current PRs from GitHub before rendering, so a fresh page
@@ -735,7 +734,7 @@ function renderStack() {
   gestureInFlight = false;
   const topCard = reviewCards[0];
   document.querySelector('.gesture-hints').classList.toggle('accept-disabled', !!topCard?.requiresAcceptConfirmation);
-  document.getElementById('btn-tap-accept').style.display = topCard?.requiresAcceptConfirmation ? '' : 'none';
+  document.getElementById('btn-tap-accept').classList.toggle('hidden', !topCard?.requiresAcceptConfirmation);
   if (!reviewCards.length) {
     stackEl.innerHTML = '<div class="stack-empty">No bundles in review queue.</div>';
     return;
@@ -1011,7 +1010,7 @@ document.getElementById('btn-process').addEventListener('click', async (e) => {
 });
 
 const clearAllBtn = document.getElementById('btn-clear-all');
-clearAllBtn.style.display = 'inline-block';
+clearAllBtn.classList.remove('hidden');
 clearAllBtn.addEventListener('click', async () => {
   if (!(await confirmAction('Clear all stored content (bundles, shelf, bundle status, audit log)? This cannot be undone.', { danger: true }))) return;
   const result = await api('POST', '/admin/reset', undefined);
@@ -1054,26 +1053,26 @@ const signoutBtn = document.getElementById('btn-signout');
 const settingsBtn = document.getElementById('btn-settings');
 
 function showSigninGate() {
-  signinGate.style.display = 'flex';
-  signedInAsEl.style.display = 'none';
-  settingsBtn.style.display = 'none';
-  document.getElementById('header-status-bar').style.display = 'none';
-  document.getElementById('header-avatar').style.display = 'none';
+  signinGate.classList.remove('hidden');
+  signedInAsEl.classList.add('hidden');
+  settingsBtn.classList.add('hidden');
+  document.getElementById('header-status-bar').classList.add('hidden');
+  document.getElementById('header-avatar').classList.add('hidden');
 }
 
 // Mobile keeps the avatar as the only visible identity affordance (no "Signed in as
 // X" text — too cramped alongside the repo/team status bar at phone widths) but still
 // carries the login as the avatar's accessible name/tooltip.
 function hideSigninGate(login) {
-  signinGate.style.display = 'none';
+  signinGate.classList.add('hidden');
   signedInAsEl.textContent = `Signed in as ${login}`;
-  settingsBtn.style.display = 'inline-block';
-  document.getElementById('header-status-bar').style.display = 'flex';
+  settingsBtn.classList.remove('hidden');
+  document.getElementById('header-status-bar').classList.remove('hidden');
   const avatar = document.getElementById('header-avatar');
   avatar.src = `https://github.com/${login}.png?size=64`;
   avatar.alt = `Signed in as ${login}`;
   avatar.title = `Signed in as ${login}`;
-  avatar.style.display = 'inline-block';
+  avatar.classList.remove('hidden');
 }
 
 // Shared by "Sign in with GitHub" and "Reconnect GitHub" — both just need to run the OAuth
@@ -1122,7 +1121,7 @@ async function loadAccount() {
   const resultEl = document.getElementById('account-result');
   const listEl = document.getElementById('installations-list');
   const copyEl = document.getElementById('account-connect-copy');
-  resultEl.style.display = 'none';
+  resultEl.classList.add('hidden');
   const status = await api('GET', '/account/github/status');
   loadedInstallations = status.installations || [];
   const watchedRepos = status.repos || [];
@@ -1131,8 +1130,8 @@ async function loadAccount() {
     statusEl.textContent = `Connected to ${loadedInstallations.length} installation${loadedInstallations.length === 1 ? '' : 's'}:`;
     listEl.innerHTML = loadedInstallations.map(installationHtml).join('');
     copyEl.textContent = 'Install on another organization or account.';
-    accountDisconnectAllBtn.style.display = 'block';
-    repoPanel.style.display = 'block';
+    accountDisconnectAllBtn.classList.remove('hidden');
+    repoPanel.classList.remove('hidden');
     renderWatchedRepos(watchedRepos);
     loadRepos(watchedRepos);
   } else {
@@ -1141,8 +1140,8 @@ async function loadAccount() {
       : 'Not connected.';
     listEl.innerHTML = '';
     copyEl.textContent = 'Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.';
-    accountDisconnectAllBtn.style.display = 'none';
-    repoPanel.style.display = 'none';
+    accountDisconnectAllBtn.classList.add('hidden');
+    repoPanel.classList.add('hidden');
   }
   renderHeaderRepo(status.selectedRepo);
 }
@@ -1163,7 +1162,7 @@ installBtn.addEventListener('click', async () => {
   if (result.error) {
     resultEl.textContent = 'Error: ' + result.error;
     resultEl.className = 'result-msg error';
-    resultEl.style.display = 'block';
+    resultEl.classList.remove('hidden');
     installBtn.disabled = false;
     return;
   }
@@ -1189,7 +1188,7 @@ installBtn.addEventListener('click', async () => {
     const resultEl = document.getElementById('account-result');
     resultEl.textContent = 'GitHub connection failed: ' + (params.get('reason') || 'unknown error');
     resultEl.className = 'result-msg error';
-    resultEl.style.display = 'block';
+    resultEl.classList.remove('hidden');
   }
 })();
 
@@ -1199,16 +1198,16 @@ const llmDisconnectBtn = document.getElementById('btn-llm-disconnect');
 async function loadLlmAccount() {
   const statusEl = document.getElementById('llm-account-status');
   const resultEl = document.getElementById('llm-account-result');
-  resultEl.style.display = 'none';
+  resultEl.classList.add('hidden');
   const status = await api('GET', '/account/llm/status');
   if (status.connected) {
     statusEl.textContent = `Connected to ${status.provider}`;
-    llmConnectForm.style.display = 'none';
-    llmDisconnectBtn.style.display = 'block';
+    llmConnectForm.classList.add('hidden');
+    llmDisconnectBtn.classList.remove('hidden');
   } else {
     statusEl.textContent = 'Not connected. Falling back to environment configuration.';
-    llmConnectForm.style.display = 'block';
-    llmDisconnectBtn.style.display = 'none';
+    llmConnectForm.classList.remove('hidden');
+    llmDisconnectBtn.classList.add('hidden');
   }
 }
 
@@ -1222,7 +1221,7 @@ document.getElementById('btn-llm-connect').addEventListener('click', async (e) =
   if (result.error) {
     resultEl.textContent = 'Error: ' + result.error;
     resultEl.className = 'result-msg error';
-    resultEl.style.display = 'block';
+    resultEl.classList.remove('hidden');
     return;
   }
   apiKeyInput.value = '';
@@ -1248,18 +1247,18 @@ function isOwner() { return myRole === 'owner'; }
 // Rename/invite are gated to owner+admin server-side (PATCH /account/team, POST
 // /account/team/invite) — kept in sync with canManageMembers() for the same reason.
 function applyRoleVisibility() {
-  document.getElementById('btn-process').style.display = isOwner() ? 'inline-block' : 'none';
+  document.getElementById('btn-process').classList.toggle('hidden', !isOwner());
   document.querySelectorAll('.chk-repo-setting').forEach((el) => { el.disabled = !isOwner(); });
   document.querySelectorAll('.btn-remove-repo').forEach((el) => { el.disabled = !canManageMembers(); });
   document.getElementById('team-name-input').disabled = !canManageMembers();
-  document.getElementById('btn-team-rename').style.display = canManageMembers() ? 'inline-block' : 'none';
-  document.getElementById('btn-team-invite').style.display = canManageMembers() ? 'inline-block' : 'none';
+  document.getElementById('btn-team-rename').classList.toggle('hidden', !canManageMembers());
+  document.getElementById('btn-team-invite').classList.toggle('hidden', !canManageMembers());
 }
 
 async function loadTeam() {
   const statusEl = document.getElementById('team-status');
   const resultEl = document.getElementById('team-result');
-  resultEl.style.display = 'none';
+  resultEl.classList.add('hidden');
 
   const status = await api('GET', '/account/team');
   if (status.error) {
@@ -1406,19 +1405,19 @@ async function loadRepos(watchedRepos) {
   const result = await api('GET', '/account/github/repos', undefined);
   if (result.error) {
     picker.innerHTML = `<option value="" disabled selected>${escapeHtml(result.error)}</option>`;
-    warningEl.style.display = 'none';
+    warningEl.classList.add('hidden');
     return;
   }
   loadedRepos = result.repos || [];
   loadedWatchedRepos = result.selected || watchedRepos || [];
-  document.getElementById('sorting-notice').style.display = result.sortingAvailable ? 'none' : 'block';
+  document.getElementById('sorting-notice').classList.toggle('hidden', result.sortingAvailable);
   renderRepoPicker();
   const failedAccounts = result.failedAccounts || [];
   if (failedAccounts.length) {
     warningEl.textContent = `Couldn't load repos for: ${failedAccounts.join(', ')} — the installation may have been removed.`;
-    warningEl.style.display = 'block';
+    warningEl.classList.remove('hidden');
   } else {
-    warningEl.style.display = 'none';
+    warningEl.classList.add('hidden');
   }
 }
 
@@ -1434,7 +1433,7 @@ async function selectRepo(owner, name, installationId) {
   const resultEl = document.getElementById('account-result');
   resultEl.textContent = `Selecting ${owner}/${name} — fetching and ingesting pull requests…`;
   resultEl.className = 'result-msg';
-  resultEl.style.display = 'block';
+  resultEl.classList.remove('hidden');
   try {
     await api('POST', '/account/github/repos/select', { owner, name, installationId });
     await loadAccount();

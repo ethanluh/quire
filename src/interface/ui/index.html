@@ -328,23 +328,23 @@
       <span class="subtitle">Direction triage for swarm PRs</span>
     </div>
   </div>
-  <span class="header-status" id="header-status" style="display:none">
+  <span class="header-status" id="header-status" class="hidden">
     <span class="badge badge-neutral" id="header-team-badge"></span>
-    <select class="header-team-switcher" id="header-team-switcher" style="display:none" title="Switch team"></select>
-    <span class="badge badge-neutral header-repo-badge" id="header-repo-badge" style="display:none"></span>
+    <select class="header-team-switcher" id="header-team-switcher" class="hidden" title="Switch team"></select>
+    <span class="badge badge-neutral header-repo-badge" id="header-repo-badge" class="hidden"></span>
   </span>
   <div class="header-identity">
-    <img class="header-avatar" id="header-avatar" style="display:none" alt="" onerror="this.style.display='none'">
-    <span class="subtitle" id="signed-in-as" style="display:none"></span>
-    <button class="btn btn-icon" id="btn-settings" title="Settings" aria-label="Settings" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <img class="header-avatar" id="header-avatar" class="hidden" alt="" onerror="this.classList.add('hidden')">
+    <span class="subtitle" id="signed-in-as" class="hidden"></span>
+    <button class="btn btn-icon" id="btn-settings" title="Settings" aria-label="Settings" class="hidden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
   </div>
 </header>
 
-<div class="modal-backdrop" id="signin-gate" style="display:none">
+<div class="modal-backdrop" id="signin-gate" class="hidden">
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="signin-title">
     <h3 class="modal-title" id="signin-title">Sign in to Quire</h3>
     <p>Sign in with your GitHub account to continue.</p>
-    <div id="signin-result" class="result-msg error" style="display:none"></div>
+    <div id="signin-result" class="result-msg error" class="hidden"></div>
     <div class="modal-actions">
       <button class="btn btn-accept" id="btn-signin">Sign in with GitHub</button>
     </div>
@@ -359,7 +359,7 @@
 </div>
 
 <div id="pane-review" class="pane active">
-  <div class="tabs review-filter-bar" id="review-filter-bar" style="display:none"></div>
+  <div class="tabs review-filter-bar" id="review-filter-bar" class="hidden"></div>
   <div class="card-list" id="card-list">
     <div class="empty">No bundles in review queue.</div>
   </div>
@@ -375,8 +375,8 @@
 </div>
 
 <div id="pane-queue" class="pane">
-  <div class="tabs queue-filter-bar" id="queue-filter-bar" style="display:none"></div>
-  <div class="queue-age-filter" id="queue-age-filter" style="display:none">
+  <div class="tabs queue-filter-bar" id="queue-filter-bar" class="hidden"></div>
+  <div class="queue-age-filter" id="queue-age-filter" class="hidden">
     <label>Landed at least <input type="number" min="0" id="queue-age-min" placeholder="0"> day(s) ago</label>
     <label>at most <input type="number" min="0" id="queue-age-max" placeholder="&infin;"> day(s) ago</label>
     <button class="btn btn-defer" id="btn-queue-age-clear">Clear</button>
@@ -394,7 +394,7 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="settings-modal-backdrop" style="display:none">
+<div class="modal-backdrop" id="settings-modal-backdrop" class="hidden">
   <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
     <div class="settings-header">
       <h3 class="modal-title" id="settings-modal-title">Settings</h3>
@@ -445,33 +445,33 @@
               <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
               <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
             </div>
-            <div id="team-result" class="result-msg" style="display:none" aria-live="polite"></div>
+            <div id="team-result" class="result-msg hidden" aria-live="polite"></div>
           </div>
         </div>
 
         <div class="settings-panel account-panel" data-section="github">
           <div class="account-status" id="account-status" aria-live="polite">Checking connection&hellip;</div>
           <div id="installations-list"></div>
-          <button class="btn btn-reject" id="btn-account-disconnect-all" style="display:none">Disconnect all</button>
+          <button class="btn btn-reject" id="btn-account-disconnect-all" class="hidden">Disconnect all</button>
           <div id="account-connect-form">
-            <div id="connectable-installations" style="display:none"></div>
+            <div id="connectable-installations" class="hidden"></div>
             <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
             <div class="account-connect-actions">
               <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
             </div>
           </div>
-          <div id="account-result" class="result-msg" style="display:none" aria-live="polite"></div>
+          <div id="account-result" class="result-msg hidden" aria-live="polite"></div>
 
-          <div class="repo-panel" id="repo-panel" style="display:none">
+          <div class="repo-panel" id="repo-panel" class="hidden">
             <h3>Repositories to work on</h3>
-            <div class="automation-status" id="automation-status" style="display:none"></div>
+            <div class="automation-status" id="automation-status" class="hidden"></div>
             <div id="watched-repos-list"></div>
-            <div id="sorting-notice" class="result-msg" style="display:none" aria-live="polite">
+            <div id="sorting-notice" class="result-msg hidden" aria-live="polite">
               Starred/pinned sorting is unavailable — reconnect GitHub to restore it.
               <button class="btn btn-defer" id="btn-reconnect-github">Reconnect GitHub</button>
             </div>
             <input type="search" id="repo-search" class="repo-search" placeholder="Search repositories&hellip;" aria-label="Search repositories" autocomplete="off">
-            <div id="repo-list-warning" class="result-msg error" style="display:none" aria-live="polite"></div>
+            <div id="repo-list-warning" class="result-msg error hidden" aria-live="polite"></div>
             <div class="repo-list" id="repo-list"><div class="empty">Loading repos&hellip;</div></div>
           </div>
         </div>
@@ -482,19 +482,19 @@
           <div id="llm-connect-form">
             <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
           </div>
-          <button class="btn btn-reject" style="display:none" id="btn-llm-disconnect">Disconnect</button>
-          <div id="llm-account-result" class="result-msg" style="display:none" aria-live="polite"></div>
+          <button class="btn btn-reject hidden" id="btn-llm-disconnect">Disconnect</button>
+          <div id="llm-account-result" class="result-msg hidden" aria-live="polite"></div>
         </div>
 
         <div class="settings-panel" data-section="danger">
-          <button class="btn btn-reject btn-clear-all" id="btn-clear-all" style="display:none" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
+          <button class="btn btn-reject btn-clear-all" id="btn-clear-all" class="hidden" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
         </div>
       </div>
     </div>
   </div>
 </div>
 
-<div class="modal-backdrop" id="llm-modal-backdrop" style="display:none">
+<div class="modal-backdrop" id="llm-modal-backdrop" class="hidden">
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="llm-modal-title">
     <h3 class="modal-title" id="llm-modal-title">Connect an LLM API key</h3>
     <p>Stored locally in Quire's data directory; used only for calls to the provider you choose.</p>
@@ -503,7 +503,7 @@
       <option value="gemini">Gemini</option>
     </select>
     <input type="password" id="llm-api-key" placeholder="API key" aria-label="API key" autocomplete="off">
-    <div id="llm-modal-result" class="result-msg" style="display:none" aria-live="polite"></div>
+    <div id="llm-modal-result" class="result-msg hidden" aria-live="polite"></div>
     <div class="modal-actions">
       <button class="btn btn-defer" id="btn-llm-modal-cancel">Cancel</button>
       <button class="btn btn-accept" id="btn-llm-modal-connect">Connect</button>
@@ -511,7 +511,7 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="detail-modal-backdrop" style="display:none">
+<div class="modal-backdrop" id="detail-modal-backdrop" class="hidden">
   <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
     <h3 class="modal-title" id="detail-modal-title">Bundle detail</h3>
     <div id="detail-modal-body"><div class="empty">Loading&hellip;</div></div>
@@ -521,7 +521,7 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="confirm-modal-backdrop" style="display:none">
+<div class="modal-backdrop" id="confirm-modal-backdrop" class="hidden">
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
     <h3 class="modal-title" id="confirm-modal-title">Confirm</h3>
     <p id="confirm-modal-message"></p>
@@ -751,7 +751,7 @@ document.addEventListener('click', async (event) => {
   const promoteBtn = event.target.closest('.btn-promote');
   if (promoteBtn) {
     const bundleId = promoteBtn.dataset.bundleId;
-    await promote(bundleId);
+    await promote(bundleId, promoteBtn);
     return;
   }
 
@@ -767,14 +767,14 @@ document.addEventListener('click', async (event) => {
   const removeQueueBtn = event.target.closest('.btn-remove-from-queue');
   if (removeQueueBtn) {
     const bundleId = removeQueueBtn.dataset.bundleId;
-    await removeFromQueue(bundleId);
+    await removeFromQueue(bundleId, removeQueueBtn);
     return;
   }
 
   const reattemptBtn = event.target.closest('.btn-reattempt-queue-entry');
   if (reattemptBtn) {
     const bundleId = reattemptBtn.dataset.bundleId;
-    await reattemptQueueEntry(bundleId);
+    await reattemptQueueEntry(bundleId, reattemptBtn);
     return;
   }
 
@@ -783,7 +783,7 @@ document.addEventListener('click', async (event) => {
     const bundleId = abortBtn.dataset.bundleId;
     const mergedPrCount = parseInt(abortBtn.dataset.mergedPrCount, 10);
     const memberCount = parseInt(abortBtn.dataset.memberCount, 10);
-    await abortQueueEntry(bundleId, mergedPrCount, memberCount);
+    await abortQueueEntry(bundleId, mergedPrCount, memberCount, abortBtn);
     return;
   }
 
@@ -791,7 +791,7 @@ document.addEventListener('click', async (event) => {
   const auditBtn = event.target.closest('.btn-overturn-audit');
   if (auditBtn) {
     const auditId = auditBtn.dataset.auditId;
-    await overturnAudit(auditId);
+    await overturnAudit(auditId, auditBtn);
     return;
   }
 
@@ -806,7 +806,7 @@ document.addEventListener('click', async (event) => {
   const disconnectBtn = event.target.closest('.btn-disconnect-installation');
   if (disconnectBtn) {
     const installationId = parseInt(disconnectBtn.dataset.installationId, 10);
-    await disconnectInstallation(installationId);
+    await disconnectInstallation(installationId, disconnectBtn);
     return;
   }
 
@@ -880,13 +880,12 @@ function closeDetailModal() {
 
 async function showBundleDetail(bundleId) {
   openDetailModal('<div class="empty">Loading&hellip;</div>');
-  const res = await fetch(`/bundles/${bundleId}`);
-  if (res.status === 404) {
-    detailModalBody.innerHTML = '<div class="empty">This bundle is no longer available (it may have just been actioned).</div>';
+  const result = await api('GET', `/bundles/${bundleId}`);
+  if (result.error) {
+    detailModalBody.innerHTML = paneErrorHtml(result.error, `showBundleDetail('${bundleId}')`);
     return;
   }
-  const detail = await res.json();
-  detailModalBody.innerHTML = detailBodyHtml(detail);
+  detailModalBody.innerHTML = detailBodyHtml(result);
 }
 
 function showQueueDetail(bundleId) {
@@ -972,11 +971,11 @@ function renderReviewFilterBar(cards) {
     localStorage.removeItem(REPO_FILTER_KEY);
   }
   if (repos.length < 2) {
-    bar.style.display = 'none';
+    bar.classList.add('hidden');
     bar.innerHTML = '';
     return;
   }
-  bar.style.display = 'flex';
+  bar.classList.remove('hidden');
   bar.setAttribute('role', 'tablist');
   const isAllSelected = !reviewRepoFilter;
   const allTab = `<button class="tab${isAllSelected ? ' active' : ''}" role="tab" aria-selected="${isAllSelected}" data-repo="">All</button>`;
@@ -1005,7 +1004,7 @@ async function loadReview() {
   const status = await api('GET', '/account/github/status');
   const el = document.getElementById('card-list');
   if (!status.connected) {
-    document.getElementById('review-filter-bar').style.display = 'none';
+    document.getElementById('review-filter-bar').classList.add('hidden');
     el.innerHTML = '<div class="empty">Connect a GitHub account to see the review queue.</div>';
     return;
   }
@@ -1118,11 +1117,11 @@ function renderQueueFilterBar(entries) {
     localStorage.removeItem(QUEUE_REPO_FILTER_KEY);
   }
   if (repos.length < 2) {
-    bar.style.display = 'none';
+    bar.classList.add('hidden');
     bar.innerHTML = '';
     return;
   }
-  bar.style.display = 'flex';
+  bar.classList.remove('hidden');
   bar.setAttribute('role', 'tablist');
   const isAllSelected = !queueRepoFilter;
   const allTab = `<button class="tab${isAllSelected ? ' active' : ''}" role="tab" aria-selected="${isAllSelected}" data-repo="">All</button>`;
@@ -1173,7 +1172,7 @@ function setQueueAgeFilter(next) {
 
 function renderQueueAgeFilter(entries) {
   const row = document.getElementById('queue-age-filter');
-  row.style.display = entries.some((e) => e.status === 'landed') ? 'flex' : 'none';
+  row.classList.toggle('hidden', !entries.some((e) => e.status === 'landed'));
   document.getElementById('queue-age-min').value = queueAgeFilter.minDays ?? '';
   document.getElementById('queue-age-max').value = queueAgeFilter.maxDays ?? '';
 }
@@ -1330,7 +1329,7 @@ document.getElementById('btn-process-all').addEventListener('click', async () =>
 });
 
 const clearAllBtn = document.getElementById('btn-clear-all');
-clearAllBtn.style.display = 'inline-block';
+clearAllBtn.classList.remove('hidden');
 clearAllBtn.addEventListener('click', async () => {
   if (!(await confirmAction('Clear all stored content (bundles, shelf, bundle status, audit log)? This cannot be undone.', { danger: true }))) return;
   const result = await api('POST', '/admin/reset', undefined);
@@ -1354,22 +1353,22 @@ const signoutBtn = document.getElementById('btn-signout');
 const settingsBtn = document.getElementById('btn-settings');
 
 function showSigninGate() {
-  signinGate.style.display = 'flex';
-  signedInAsEl.style.display = 'none';
-  settingsBtn.style.display = 'none';
-  document.getElementById('header-status').style.display = 'none';
-  document.getElementById('header-avatar').style.display = 'none';
+  signinGate.classList.remove('hidden');
+  signedInAsEl.classList.add('hidden');
+  settingsBtn.classList.add('hidden');
+  document.getElementById('header-status').classList.add('hidden');
+  document.getElementById('header-avatar').classList.add('hidden');
 }
 
 function hideSigninGate(login) {
-  signinGate.style.display = 'none';
+  signinGate.classList.add('hidden');
   signedInAsEl.textContent = `Signed in as ${login}`;
-  signedInAsEl.style.display = 'inline';
-  settingsBtn.style.display = 'inline-block';
-  document.getElementById('header-status').style.display = 'inline-flex';
+  signedInAsEl.classList.remove('hidden');
+  settingsBtn.classList.remove('hidden');
+  document.getElementById('header-status').classList.remove('hidden');
   const avatar = document.getElementById('header-avatar');
   avatar.src = `https://github.com/${login}.png?size=64`;
-  avatar.style.display = 'inline-block';
+  avatar.classList.remove('hidden');
 }
 
 // Shared by "Sign in with GitHub" and "Reconnect GitHub" — both just need to run the OAuth
@@ -1421,17 +1420,17 @@ async function loadConnectableInstallations() {
   const installations = result.installations || [];
   if (installations.length) {
     el.innerHTML = '<p>Already installed — connect without leaving this page:</p>' + installations.map(connectableInstallationHtml).join('');
-    el.style.display = 'flex';
+    el.classList.remove('hidden');
   } else if (result.needsReconnect) {
     el.innerHTML = `<div class="result-msg">Reconnect GitHub to check for installations you already have access to.
       <button class="btn btn-defer" id="btn-check-installations-reconnect">Reconnect GitHub</button></div>`;
-    el.style.display = 'flex';
+    el.classList.remove('hidden');
     document.getElementById('btn-check-installations-reconnect').addEventListener('click', () => {
       startOAuth(document.getElementById('btn-check-installations-reconnect'), document.getElementById('account-result'));
     });
   } else {
     el.innerHTML = '';
-    el.style.display = 'none';
+    el.classList.add('hidden');
   }
 }
 
@@ -1444,10 +1443,10 @@ accountDisconnectAllBtn.addEventListener('click', async () => {
 function renderAutomationStatus(repos) {
   const el = document.getElementById('automation-status');
   if (!repos || !repos.length) {
-    el.style.display = 'none';
+    el.classList.add('hidden');
     return;
   }
-  el.style.display = 'block';
+  el.classList.remove('hidden');
   el.textContent = 'Watching for new and updated PRs (via webhook, falling back to periodic polling).';
 }
 
@@ -1461,7 +1460,7 @@ document.getElementById('watched-repos-list').addEventListener('change', (e) => 
 document.getElementById('watched-repos-list').addEventListener('click', (e) => {
   if (!e.target.classList.contains('btn-remove-repo')) return;
   const row = e.target.closest('.watched-repo-row');
-  removeRepo(row.dataset.owner, row.dataset.name);
+  removeRepo(row.dataset.owner, row.dataset.name, e.target);
 });
 
 async function loadAccount() {
@@ -1469,7 +1468,7 @@ async function loadAccount() {
   const resultEl = document.getElementById('account-result');
   const listEl = document.getElementById('installations-list');
   const copyEl = document.getElementById('account-connect-copy');
-  resultEl.style.display = 'none';
+  resultEl.classList.add('hidden');
   const status = await api('GET', '/account/github/status');
   loadedInstallations = status.installations || [];
   const watchedRepos = status.repos || [];
@@ -1478,8 +1477,8 @@ async function loadAccount() {
     statusEl.textContent = `Connected to ${loadedInstallations.length} installation${loadedInstallations.length === 1 ? '' : 's'}:`;
     listEl.innerHTML = loadedInstallations.map(installationHtml).join('');
     copyEl.textContent = 'Install on another organization or account.';
-    accountDisconnectAllBtn.style.display = 'inline-block';
-    repoPanel.style.display = 'block';
+    accountDisconnectAllBtn.classList.remove('hidden');
+    repoPanel.classList.remove('hidden');
     renderAutomationStatus(watchedRepos);
     renderWatchedRepos(watchedRepos);
     loadRepos(watchedRepos);
@@ -1489,8 +1488,8 @@ async function loadAccount() {
       : 'Not connected.';
     listEl.innerHTML = '';
     copyEl.textContent = 'Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.';
-    accountDisconnectAllBtn.style.display = 'none';
-    repoPanel.style.display = 'none';
+    accountDisconnectAllBtn.classList.add('hidden');
+    repoPanel.classList.add('hidden');
   }
   loadConnectableInstallations();
   renderHeaderRepo(status.selectedRepo);
@@ -1508,7 +1507,7 @@ function showAccountResult(message, isError) {
   const resultEl = document.getElementById('account-result');
   resultEl.textContent = message;
   resultEl.className = isError ? 'result-msg error' : 'result-msg';
-  resultEl.style.display = 'block';
+  resultEl.classList.remove('hidden');
 }
 
 installBtn.addEventListener('click', async () => {
@@ -1556,23 +1555,24 @@ const llmModalConnectBtn = document.getElementById('btn-llm-modal-connect');
 async function loadLlmAccount() {
   const statusEl = document.getElementById('llm-account-status');
   const resultEl = document.getElementById('llm-account-result');
-  resultEl.style.display = 'none';
+  resultEl.classList.add('hidden');
   const status = await api('GET', '/account/llm/status');
   if (status.connected) {
     statusEl.textContent = `Connected to ${status.provider}`;
-    document.getElementById('llm-connect-form').style.display = 'none';
-    llmDisconnectBtn.style.display = 'inline-block';
+    document.getElementById('llm-connect-form').classList.add('hidden');
+    llmDisconnectBtn.classList.remove('hidden');
   } else {
     statusEl.textContent = 'Not connected. Falling back to environment configuration.';
-    document.getElementById('llm-connect-form').style.display = 'block';
-    llmDisconnectBtn.style.display = 'none';
+    document.getElementById('llm-connect-form').classList.remove('hidden');
+    llmDisconnectBtn.classList.add('hidden');
   }
 }
 
 function openLlmModal() {
   document.getElementById('llm-api-key').value = '';
-  document.getElementById('llm-modal-result').style.display = 'none';
+  document.getElementById('llm-modal-result').classList.add('hidden');
   modalManager.open(llmModalBackdrop);
+  document.getElementById('llm-api-key').focus();
 }
 
 function closeLlmModal() {
@@ -1592,7 +1592,7 @@ document.getElementById('btn-llm-modal-connect').addEventListener('click', async
     const resultEl = document.getElementById('llm-modal-result');
     resultEl.textContent = 'Error: ' + result.error;
     resultEl.className = 'result-msg error';
-    resultEl.style.display = 'block';
+    resultEl.classList.remove('hidden');
     return;
   }
   apiKeyInput.value = '';
@@ -1619,18 +1619,18 @@ function isOwner() { return myRole === 'owner'; }
 // Rename/invite are gated to owner+admin server-side (PATCH /account/team, POST
 // /account/team/invite) — kept in sync with canManageMembers() for the same reason.
 function applyRoleVisibility() {
-  document.getElementById('btn-process').style.display = isOwner() ? 'inline-block' : 'none';
+  document.getElementById('btn-process').classList.toggle('hidden', !isOwner());
   document.querySelectorAll('.chk-repo-setting').forEach((el) => { el.disabled = !isOwner(); });
   document.querySelectorAll('.btn-remove-repo').forEach((el) => { el.disabled = !canManageMembers(); });
   document.getElementById('team-name-input').disabled = !canManageMembers();
-  document.getElementById('btn-team-rename').style.display = canManageMembers() ? 'inline-block' : 'none';
-  document.getElementById('btn-team-invite').style.display = canManageMembers() ? 'inline-block' : 'none';
+  document.getElementById('btn-team-rename').classList.toggle('hidden', !canManageMembers());
+  document.getElementById('btn-team-invite').classList.toggle('hidden', !canManageMembers());
 }
 
 async function loadTeam() {
   const statusEl = document.getElementById('team-status');
   const resultEl = document.getElementById('team-result');
-  resultEl.style.display = 'none';
+  resultEl.classList.add('hidden');
 
   const status = await api('GET', '/account/team');
   if (status.error) {
@@ -1793,19 +1793,19 @@ async function loadRepos(watchedRepos) {
   const result = await api('GET', '/account/github/repos', undefined);
   if (result.error) {
     listEl.innerHTML = `<div class="empty">${escapeHtml(result.error)}</div>`;
-    warningEl.style.display = 'none';
+    warningEl.classList.add('hidden');
     return;
   }
   loadedRepos = result.repos || [];
   loadedWatchedRepos = result.selected || watchedRepos || [];
-  document.getElementById('sorting-notice').style.display = result.sortingAvailable ? 'none' : 'block';
+  document.getElementById('sorting-notice').classList.toggle('hidden', result.sortingAvailable);
   renderRepoList();
   const failedAccounts = result.failedAccounts || [];
   if (failedAccounts.length) {
     warningEl.textContent = `Couldn't load repos for: ${failedAccounts.join(', ')} — the installation may have been removed.`;
-    warningEl.style.display = 'block';
+    warningEl.classList.remove('hidden');
   } else {
-    warningEl.style.display = 'none';
+    warningEl.classList.add('hidden');
   }
 }
 
@@ -1923,6 +1923,7 @@ function pollActivePane() {
   if (pane === 'review') loadReview();
   else if (pane === 'shelf') loadShelf();
   else if (pane === 'queue') loadQueue();
+  else if (pane === 'audit') loadAudit();
 }
 
 function startPolling() {
