@@ -109,6 +109,7 @@
      full-bleed stack-card and modals stay at the generous --space-5/--space-6. */
   @media (max-width: 480px) {
     .list-card, .queue-entry, .audit-entry { padding: var(--space-4); }
+    .queue-entry.card, .audit-entry.card { padding: var(--space-4); }
     .btn, .btn-icon, select { min-height: 44px; }
     /* .btn-icon is otherwise a fixed var(--space-8) (32px) square — bump the other
        axis too so the tap target is ~44x44, not just tall. Native <button>/<select>
@@ -119,6 +120,26 @@
     a.btn { display: inline-flex; align-items: center; justify-content: center; }
   }
 
+  /* These rows render as `.card` combined with the shared `.queue-entry`/
+     `.audit-entry` rule in components.css. That shared rule carries desktop's
+     tighter box model (radius-md, space-3/4 padding) and, being declared after
+     `.card` there, would otherwise clobber `.card`'s radius-lg/space-5 look at
+     equal specificity. Restore the original card appearance here. */
+  .queue-entry.card, .audit-entry.card { border-radius: var(--radius-lg); padding: var(--space-5); }
+  .audit-entry.card { gap: var(--space-2); }
+
+  .repo-entry { justify-content: space-between; }
+
+  /* Touch targets get the taller, uniform padding; desktop's shared rule uses
+     a shorter space-2/space-3 split sized for pointer input. */
+  .account-panel input, .account-panel select,
+  .modal-backdrop input, .modal-backdrop select {
+    max-width: none;
+    padding: var(--space-3);
+  }
+
+  .drift-signals { padding: var(--space-3); }
+
   .account-panel .btn, .settings-section .btn { margin-top: var(--space-3); width: 100%; text-align: center; }
   .settings-btn-row { margin-top: var(--space-3); }
   .settings-btn-row .btn { width: auto; margin-top: 0; }
@@ -128,6 +149,8 @@
      row's button (e.g. installation Disconnect, member Remove) to fill the row. */
   .repo-entry .btn { width: auto; margin-top: 0; padding: var(--space-2) var(--space-5); flex: 0 0 auto; }
   .repo-entry select { width: auto; margin-bottom: 0; flex: 0 0 auto; }
+
+  .queue-entry-actions .btn { width: auto; margin-top: 0; }
 
   .audit-list { display: flex; flex-direction: column; gap: var(--space-3); overflow-y: auto; }
 
