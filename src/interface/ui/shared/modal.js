@@ -44,7 +44,9 @@ class ModalStack {
 		};
 		this.stack.push(modalEntry);
 
-		// Show the backdrop
+		// Show the backdrop. `.hidden` carries `display: none !important`, which would
+		// otherwise beat this inline style, so it must come off too.
+		backdropEl.classList.remove('hidden');
 		backdropEl.style.display = 'flex';
 
 		// Lock body scroll if this is the first modal
@@ -91,6 +93,7 @@ class ModalStack {
 
 		// Hide the backdrop
 		backdropEl.style.display = 'none';
+		backdropEl.classList.add('hidden');
 
 		// Call onClose callback if provided
 		if (modalEntry.onClose) {
