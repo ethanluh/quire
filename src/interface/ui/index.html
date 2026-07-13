@@ -140,6 +140,21 @@
 
   .queue-list { display: flex; flex-direction: column; gap: var(--space-2); }
   .audit-list { display: flex; flex-direction: column; gap: var(--space-2); }
+
+  /* Groups the queue's filter rows and action buttons into a single row instead of
+     three stacked blocks — the filter controls and the "process" actions read as one
+     toolbar rather than unrelated page sections. */
+  .queue-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+  }
+  .queue-toolbar .queue-filter-bar,
+  .queue-toolbar .queue-age-filter {
+    margin: 0;
+  }
 </style>
 </head>
 <body>
@@ -198,14 +213,16 @@
 </div>
 
 <div id="pane-queue" class="pane">
-  <div class="tabs queue-filter-bar hidden" id="queue-filter-bar"></div>
-  <div class="queue-age-filter hidden" id="queue-age-filter">
-    <label>Landed at least <input type="number" min="0" id="queue-age-min" placeholder="0"> day(s) ago</label>
-    <label>at most <input type="number" min="0" id="queue-age-max" placeholder="&infin;"> day(s) ago</label>
-    <button class="btn btn-defer" id="btn-queue-age-clear">Clear</button>
+  <div class="queue-toolbar" id="queue-toolbar">
+    <div class="tabs queue-filter-bar hidden" id="queue-filter-bar"></div>
+    <div class="queue-age-filter hidden" id="queue-age-filter">
+      <label>Landed at least <input type="number" min="0" id="queue-age-min" placeholder="0"> day(s) ago</label>
+      <label>at most <input type="number" min="0" id="queue-age-max" placeholder="&infin;"> day(s) ago</label>
+      <button class="btn btn-defer" id="btn-queue-age-clear">Clear</button>
+    </div>
+    <button class="btn btn-accept" id="btn-process">Process next</button>
+    <button class="btn" id="btn-process-all">Process all</button>
   </div>
-  <button class="btn btn-accept" style="margin-bottom:var(--space-4)" id="btn-process">Process next</button>
-  <button class="btn btn-accept" style="margin-bottom:var(--space-4)" id="btn-process-all">Process all</button>
   <div class="queue-list" id="queue-list">
     <div class="empty">Bundle status is empty.</div>
   </div>
@@ -360,7 +377,17 @@
 <script src="shared/api.js"></script>
 <script src="shared/render.js"></script>
 <script src="shared/modal.js"></script>
+<script src="shared/theme.js"></script>
+<script src="shared/polling.js"></script>
+<script src="shared/team.js"></script>
+<script src="shared/account.js"></script>
 <script>
+// Desktop-only extras for the shared loadAccount()/loadLlmAccount() in shared/account.js:
+// an automation-status line, the "connect an already-installed app" shortcut list, and
+// inline-block button spacing (mobile's settings sheet has no room/need for the former two
+// and uses full-width block buttons for the latter).
+accountHooks = { onConnected: renderAutomationStatus, afterRender: loadConnectableInstallations };
+
 function showTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
@@ -727,9 +754,7 @@ function showQueueDetail(bundleId) {
 
 document.getElementById('btn-detail-modal-close').addEventListener('click', closeDetailModal);
 
-// Cache of the last-rendered JSON per pane so polling can skip a DOM rebuild
-// when nothing actually changed (avoids flicker/lost hover state on idle ticks).
-const lastRenderedJson = {};
+// lastRenderedJson lives in shared/polling.js.
 
 // Inline repo filter for the review queue, scoped to that pane only (shelf/merge
 // queue/audit are unaffected). Single-select: "All" or exactly one repo. Persisted so
@@ -846,36 +871,7 @@ async function loadReview() {
   renderReviewCardList();
 }
 
-// Pulls the selected repo's current PRs from GitHub before rendering, so a fresh page
-// load/reload reflects reality instead of whatever's been cached in server memory since
-// the last webhook or reconcile tick. Best-effort: a failed refresh still falls back to
-// rendering whatever's already there.
-async function refreshAndLoadReview() {
-  try {
-    await api('POST', '/account/github/repos/refresh', undefined);
-  } catch (err) {
-    console.error('PR refresh failed', err);
-  }
-  loadReview();
-}
-
-// Team switch/create/leave changes which tenant's data is active — every pane and settings
-// panel needs to re-fetch, but (unlike sign-out) the user is still mid-session, so do it in
-// place instead of location.reload()ing and blowing away "Settings is open" / which settings
-// section is active / an open modal in general (the header team switcher is reachable while
-// Settings is open too).
-async function refreshAfterTeamChange() {
-  delete lastRenderedJson.review;
-  delete lastRenderedJson.shelf;
-  delete lastRenderedJson.queue;
-  await refreshAndLoadReview();
-  await loadShelf();
-  await loadQueue();
-  await loadAudit();
-  await loadAccount();
-  await loadLlmAccount();
-  await loadTeam();
-}
+// refreshAndLoadReview and refreshAfterTeamChange live in shared/polling.js.
 
 async function loadShelf() {
   const cards = await api('GET', '/shelf');
@@ -1236,10 +1232,9 @@ signoutBtn.addEventListener('click', async () => {
   location.reload();
 });
 
-const repoPanel = document.getElementById('repo-panel');
-const installBtn = document.getElementById('btn-account-install');
-const accountDisconnectAllBtn = document.getElementById('btn-account-disconnect-all');
-let loadedInstallations = [];
+// repoPanel/installBtn/accountDisconnectAllBtn/loadedInstallations, loadAccount,
+// loadHeaderRepo, showAccountResult, and the install/disconnect-all/watched-repos-list
+// listeners live in shared/account.js.
 
 function connectableInstallationHtml(installation) {
   return `<div class="repo-entry">
@@ -1283,12 +1278,6 @@ async function loadConnectableInstallations() {
   }
 }
 
-accountDisconnectAllBtn.addEventListener('click', async () => {
-  if (!(await confirmAction('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.', { danger: true }))) return;
-  await api('POST', '/account/github/disconnect-all', undefined);
-  loadAccount();
-});
-
 function renderAutomationStatus(repos) {
   const el = document.getElementById('automation-status');
   if (!repos || !repos.length) {
@@ -1299,80 +1288,8 @@ function renderAutomationStatus(repos) {
   el.textContent = 'Watching for new and updated PRs (via webhook, falling back to periodic polling).';
 }
 
-// A team can watch several repos at once, each with its own auto-merge/flag-conflicts/
-// deep-investigation settings — one row per repo instead of one global checkbox row.
-document.getElementById('watched-repos-list').addEventListener('change', (e) => {
-  if (!e.target.classList.contains('chk-repo-setting')) return;
-  updateRepoSetting(e.target.closest('.watched-repo-row'));
-});
-
-document.getElementById('watched-repos-list').addEventListener('click', (e) => {
-  if (!e.target.classList.contains('btn-remove-repo')) return;
-  const row = e.target.closest('.watched-repo-row');
-  removeRepo(row.dataset.owner, row.dataset.name, e.target);
-});
-
-async function loadAccount() {
-  const statusEl = document.getElementById('account-status');
-  const resultEl = document.getElementById('account-result');
-  const listEl = document.getElementById('installations-list');
-  const copyEl = document.getElementById('account-connect-copy');
-  resultEl.classList.add('hidden');
-  const status = await api('GET', '/account/github/status');
-  loadedInstallations = status.installations || [];
-  const watchedRepos = status.repos || [];
-  installBtn.disabled = false;
-  if (status.connected) {
-    statusEl.textContent = `Connected to ${loadedInstallations.length} installation${loadedInstallations.length === 1 ? '' : 's'}:`;
-    listEl.innerHTML = loadedInstallations.map(installationHtml).join('');
-    copyEl.textContent = 'Install on another organization or account.';
-    accountDisconnectAllBtn.classList.remove('hidden');
-    repoPanel.classList.remove('hidden');
-    renderAutomationStatus(watchedRepos);
-    renderWatchedRepos(watchedRepos);
-    loadRepos(watchedRepos);
-  } else {
-    statusEl.textContent = watchedRepos.length
-      ? `Not connected. Will resume watching ${watchedRepos.map((r) => `${r.owner}/${r.name}`).join(', ')} once reconnected.`
-      : 'Not connected.';
-    listEl.innerHTML = '';
-    copyEl.textContent = 'Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.';
-    accountDisconnectAllBtn.classList.add('hidden');
-    repoPanel.classList.add('hidden');
-  }
-  loadConnectableInstallations();
-  renderHeaderRepo(status.selectedRepo);
-}
-
-// A lighter-weight sibling of loadAccount() for the header: just the selected repo, on
-// every page load, without also paying for loadAccount()'s installations/repo-list/
-// connectable-installations fetches (those only matter once Settings is actually open).
-async function loadHeaderRepo() {
-  const status = await api('GET', '/account/github/status');
-  renderHeaderRepo(status.selectedRepo);
-}
-
-function showAccountResult(message, isError) {
-  const resultEl = document.getElementById('account-result');
-  resultEl.textContent = message;
-  resultEl.className = isError ? 'result-msg error' : 'result-msg';
-  resultEl.classList.remove('hidden');
-}
-
-installBtn.addEventListener('click', async () => {
-  if (!(await confirmAction("Install the Quire GitHub App? You'll choose which repos to grant access to on GitHub's side.", { confirmLabel: 'Continue to GitHub' }))) return;
-  // Disabled for the round trip to /install/start so a fast double-click can't fire it
-  // twice before location.href navigates away — the server is idempotent either way,
-  // but there's no reason to rely on that alone.
-  installBtn.disabled = true;
-  const result = await api('POST', '/account/github/install/start', undefined);
-  if (result.error) {
-    showAccountResult('Error: ' + result.error, true);
-    installBtn.disabled = false;
-    return;
-  }
-  location.href = result.installUrl;
-});
+// loadAccount, loadHeaderRepo, showAccountResult, and the install/watched-repos-list
+// listeners live in shared/account.js.
 
 // Both the sign-in OAuth callback and the App install callback redirect back here with
 // ?account=connected|error, since each is a top-level navigation away and back (not a
@@ -1401,21 +1318,7 @@ const llmModalBackdrop = document.getElementById('llm-modal-backdrop');
 const llmModalCancelBtn = document.getElementById('btn-llm-modal-cancel');
 const llmModalConnectBtn = document.getElementById('btn-llm-modal-connect');
 
-async function loadLlmAccount() {
-  const statusEl = document.getElementById('llm-account-status');
-  const resultEl = document.getElementById('llm-account-result');
-  resultEl.classList.add('hidden');
-  const status = await api('GET', '/account/llm/status');
-  if (status.connected) {
-    statusEl.textContent = `Connected to ${status.provider}`;
-    document.getElementById('llm-connect-form').classList.add('hidden');
-    llmDisconnectBtn.classList.remove('hidden');
-  } else {
-    statusEl.textContent = 'Not connected. Falling back to environment configuration.';
-    document.getElementById('llm-connect-form').classList.remove('hidden');
-    llmDisconnectBtn.classList.add('hidden');
-  }
-}
+// loadLlmAccount lives in shared/account.js.
 
 function openLlmModal() {
   document.getElementById('llm-api-key').value = '';
@@ -1455,121 +1358,8 @@ llmDisconnectBtn.addEventListener('click', async () => {
   loadLlmAccount();
 });
 
-let loadedTeamId = null;
-let myRole = null;
-
-// Client-side hiding is UX only — requireRole on the server is the real enforcement, so
-// getting this wrong just means a disabled-looking button, not a security hole.
-function canManageMembers() { return myRole === 'owner' || myRole === 'admin'; }
-function isOwner() { return myRole === 'owner'; }
-
-// Owner-only controls live outside the Team panel too (queue processing, auto-merge) —
-// applied here so every loadTeam() call keeps them in sync with the caller's current role.
-// Rename/invite are gated to owner+admin server-side (PATCH /account/team, POST
-// /account/team/invite) — kept in sync with canManageMembers() for the same reason.
-function applyRoleVisibility() {
-  document.getElementById('btn-process').classList.toggle('hidden', !isOwner());
-  document.querySelectorAll('.chk-repo-setting').forEach((el) => { el.disabled = !isOwner(); });
-  document.querySelectorAll('.btn-remove-repo').forEach((el) => { el.disabled = !canManageMembers(); });
-  document.getElementById('team-name-input').disabled = !canManageMembers();
-  document.getElementById('btn-team-rename').classList.toggle('hidden', !canManageMembers());
-  document.getElementById('btn-team-invite').classList.toggle('hidden', !canManageMembers());
-}
-
-async function loadTeam() {
-  const statusEl = document.getElementById('team-status');
-  const resultEl = document.getElementById('team-result');
-  resultEl.classList.add('hidden');
-
-  const status = await api('GET', '/account/team');
-  if (status.error) {
-    statusEl.textContent = 'Error: ' + status.error;
-    return;
-  }
-  loadedTeamId = status.teamId;
-  myRole = status.role;
-  statusEl.innerHTML = `On <span class="login">${escapeHtml(status.name)}</span> as ${escapeHtml(status.role)}`;
-  document.getElementById('team-name-input').value = status.name;
-  document.getElementById('team-members-list').innerHTML = status.members.map(memberRowHtml).join('');
-  applyRoleVisibility();
-
-  const { teams } = await api('GET', '/account/team/list');
-  document.getElementById('team-switcher').innerHTML = (teams || [])
-    .map((t) => `<option value="${escapeHtml(t.teamId)}" ${t.active ? 'selected' : ''}>${escapeHtml(t.name)}</option>`)
-    .join('');
-  renderHeaderTeam(status.name, teams || []);
-}
-
-// Shows a plain team-name badge when the login belongs to only one team, or a select
-// (its currently active/default team, changed immediately on pick) once it belongs to
-// more than one — no point cluttering the header with a dropdown that only ever offers
-// one choice.
-document.getElementById('header-team-switcher').addEventListener('change', async (e) => {
-  const result = await api('POST', '/account/team/switch', { teamId: e.target.value });
-  if (result.error) {
-    showError('Error: ' + result.error);
-    return;
-  }
-  await refreshAfterTeamChange();
-});
-
-document.getElementById('team-switcher').addEventListener('change', async (e) => {
-  const result = await api('POST', '/account/team/switch', { teamId: e.target.value });
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-    return;
-  }
-  await refreshAfterTeamChange();
-});
-
-document.getElementById('btn-team-rename').addEventListener('click', async () => {
-  const name = document.getElementById('team-name-input').value.trim();
-  if (!name) return;
-  const result = await api('PATCH', '/account/team', { name });
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-    return;
-  }
-  showTeamResult('Team renamed.', false);
-  loadTeam();
-});
-
-document.getElementById('btn-team-invite').addEventListener('click', async () => {
-  const result = await api('POST', '/account/team/invite', undefined);
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-    return;
-  }
-  try {
-    await navigator.clipboard.writeText(result.inviteUrl);
-    showTeamResult('Invite link copied to clipboard (valid for 7 days).', false);
-  } catch {
-    showTeamResult('Invite link: ' + result.inviteUrl, false);
-  }
-});
-
-document.getElementById('btn-team-create').addEventListener('click', async () => {
-  const input = document.getElementById('team-create-input');
-  const name = input.value.trim();
-  if (!name) return;
-  const result = await api('POST', '/account/team/create', { name });
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-    return;
-  }
-  input.value = '';
-  await refreshAfterTeamChange();
-});
-
-document.getElementById('btn-team-leave').addEventListener('click', async () => {
-  if (!loadedTeamId || !(await confirmAction('Leave this team?'))) return;
-  const result = await api('POST', '/account/team/leave', { teamId: loadedTeamId });
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-    return;
-  }
-  await refreshAfterTeamChange();
-});
+// loadedTeamId/myRole, canManageMembers/isOwner, applyRoleVisibility, loadTeam, and the
+// header/settings team-switcher + rename/invite/create/leave listeners live in shared/team.js.
 
 // An invite link is a top-level navigation from wherever it was shared, carrying
 // ?joinTeam=<token> — same redirect-callback shape as handleAccountRedirect above.
@@ -1711,30 +1501,7 @@ async function selectRepo(owner, name, installationId) {
   }
 }
 
-// Theme: "paper" (light, default) and "ink" (dark) — same tokens, see styles/tokens.css.
-const THEME_KEY = 'quire-theme';
-const themeBtn = document.getElementById('btn-theme');
-const themeColorTag = document.getElementById('theme-color-tag');
-const THEME_COLORS = { paper: '#fbf6ec', ink: '#26201a' };
-
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  themeBtn.textContent = theme === 'ink' ? 'Light' : 'Dark';
-  themeColorTag.setAttribute('content', THEME_COLORS[theme]);
-}
-
-// Seed: explicit localStorage, then prefers-color-scheme, else default to 'paper'.
-const savedTheme = localStorage.getItem(THEME_KEY);
-const systemPrefersDark = matchMedia('(prefers-color-scheme: dark)').matches;
-const initialTheme = savedTheme || (systemPrefersDark ? 'ink' : 'paper');
-applyTheme(initialTheme);
-
-themeBtn.addEventListener('click', () => {
-  const next = document.documentElement.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
-  localStorage.setItem(THEME_KEY, next);
-  applyTheme(next);
-});
-
+// applyTheme + the theme-toggle button wiring live in shared/theme.js.
 // Narrow viewports get the touch-gesture mobile view by default; ?desktop=1 opts out,
 // and the opt-out is remembered so a later reload/bookmark doesn't bounce back to mobile.
 // Checked before the initial load so a redirecting visit never fires a wasted fetch/render first.
@@ -1758,54 +1525,9 @@ if (window.innerWidth <= 700 && localStorage.getItem(VIEW_PREF_KEY) !== 'desktop
   });
 }
 
-// Server state is already kept fresh by the GitHub webhook + reconciliation poll
-// (see routes/webhook.ts); these endpoints just read that in-memory state, so
-// polling them here is cheap and never itself calls the GitHub API.
-const POLL_INTERVAL_MS = 10000;
-let pollTimer = null;
-
-function pollActivePane() {
-  if (document.hidden) return;
-  const activeTab = document.querySelector('.tab.active');
-  if (!activeTab) return;
-  const pane = activeTab.dataset.tab;
-  if (pane === 'review') loadReview();
-  else if (pane === 'shelf') loadShelf();
-  else if (pane === 'queue') loadQueue();
-  else if (pane === 'audit') loadAudit();
-}
-
-function startPolling() {
-  if (pollTimer) return;
-  pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
-}
-
-// Independent of the cheap poll above and the SSE push below — this is the fallback for when
-// neither a webhook nor the reconciliation timer has run yet (a missed/misconfigured webhook
-// delivery, or a stretch with no push connection). Calls the real refresh endpoint on a slow
-// cadence so new/closed PRs surface within about a minute even with no push at all, instead of
-// waiting on the server's own (much longer) reconciliation interval.
-const BACKGROUND_REFRESH_INTERVAL_MS = 60000;
-let backgroundRefreshTimer = null;
-
-function backgroundRefresh() {
-  if (document.hidden) return;
-  refreshAndLoadReview();
-}
-
-function startBackgroundRefresh() {
-  if (backgroundRefreshTimer) return;
-  backgroundRefreshTimer = setInterval(backgroundRefresh, BACKGROUND_REFRESH_INTERVAL_MS);
-}
-
-// Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
-// a webhook or reconciliation pass changes state, so the active pane updates immediately
-// instead of waiting for the next poll tick. The interval above stays
-// running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
-// server's own reconciliation timer is a fallback for a missed webhook delivery.
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) pollActivePane();
-});
+// Polling (pollActivePane/startPolling/backgroundRefresh/startBackgroundRefresh) and the
+// visibilitychange re-poll listener live in shared/polling.js — desktop's plain card list
+// needs no per-pane guard, so it just uses the shared defaults.
 document.getElementById('link-mobile').addEventListener('click', () => {
   localStorage.removeItem(VIEW_PREF_KEY);
 });
