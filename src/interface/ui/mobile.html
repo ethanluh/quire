@@ -222,11 +222,13 @@
   }
   nav.tabbar .tab {
     flex: 1; text-align: center; padding: var(--space-3) 0 var(--space-2); font-size: var(--text-xs);
-    color: var(--color-text-muted); border-top: 2px solid transparent; cursor: pointer;
+    font-family: var(--font-body); color: var(--color-text-muted); border: none; border-top: 2px solid transparent;
+    background: transparent; cursor: pointer;
   }
   nav.tabbar .tab .icon { display: block; margin-bottom: var(--space-1); position: relative; }
   nav.tabbar .tab .icon svg { width: var(--text-lg); height: var(--text-lg); }
   nav.tabbar .tab.active { color: var(--color-brand); border-top-color: var(--color-brand); }
+  nav.tabbar .tab:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
   .tab-badge {
     position: absolute; top: calc(-1 * var(--space-1)); right: calc(-1 * var(--space-2));
@@ -419,7 +421,7 @@
 
       <div class="settings-section account-panel">
         <h4>LLM provider</h4>
-        <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
+        <div class="account-status" id="llm-account-status" aria-live="polite">Checking connection&hellip;</div>
         <div id="llm-connect-form">
           <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles.</p>
           <select id="llm-provider-select" aria-label="LLM provider">
@@ -496,11 +498,49 @@ function selectMobileTab(tab) {
   if (tab.dataset.tab === 'audit') loadAudit();
 }
 
-tabs.forEach(tab => {
+tabs.forEach((tab, index) => {
   tab.addEventListener('click', () => selectMobileTab(tab));
+
+  // Arrow key navigation for the bottom tab bar
+  tab.addEventListener('keydown', (event) => {
+    const tabList = Array.from(tabs);
+    let nextTab = null;
+
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      nextTab = tabList[(index + 1) % tabList.length];
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      nextTab = tabList[(index - 1 + tabList.length) % tabList.length];
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      nextTab = tabList[0];
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      nextTab = tabList[tabList.length - 1];
+    }
+
+    if (nextTab) {
+      selectMobileTab(nextTab);
+      nextTab.focus();
+    }
+  });
 });
 
 const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
+
+// Scrolls .settings-body directly instead of relying on scrollIntoView, which walks
+// every scrollable ancestor (including body) — now that body scroll is locked while the
+// modal is open (see shared/modal.js), that walk is dead weight at best and at worst
+// fights the lock. This only ever touches the modal's own internal scroll container.
+function scrollSettingsContentTo(el) {
+  const container = document.querySelector('.settings-body');
+  if (!container || !el) return;
+  const containerRect = container.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
+  container.scrollTop += elRect.top - containerRect.top;
+}
+
 function openSettingsModal() {
   modalManager.open(settingsModalBackdrop);
   loadAccount();
@@ -615,12 +655,6 @@ function showQueueDetail(bundleId) {
 }
 
 document.getElementById('btn-detail-modal-close').addEventListener('click', closeDetailModal);
-detailModalBackdrop.addEventListener('click', (event) => {
-  if (event.target === detailModalBackdrop) closeDetailModal();
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && detailModalBackdrop.style.display !== 'none') closeDetailModal();
-});
 
 // --- Review: swipeable stack ---
 const stackEl = document.getElementById('stack');
@@ -860,12 +894,12 @@ function confirmAction(message, opts) {
   confirmModalConfirmBtn.className = 'btn ' + (opts.danger ? 'btn-reject' : 'btn-accept');
   confirmModalConfirmBtn.textContent = opts.confirmLabel || (opts.danger ? 'Yes, proceed' : 'Confirm');
   confirmModalCancelBtn.textContent = opts.cancelLabel || 'Cancel';
-  confirmModalBackdrop.style.display = 'flex';
+  modalManager.open(confirmModalBackdrop);
   return new Promise((resolve) => { confirmModalResolve = resolve; });
 }
 
 function closeConfirmModal(result) {
-  confirmModalBackdrop.style.display = 'none';
+  modalManager.close(confirmModalBackdrop);
   if (confirmModalResolve) {
     const resolve = confirmModalResolve;
     confirmModalResolve = null;
@@ -875,12 +909,6 @@ function closeConfirmModal(result) {
 
 confirmModalConfirmBtn.addEventListener('click', () => closeConfirmModal(true));
 confirmModalCancelBtn.addEventListener('click', () => closeConfirmModal(false));
-confirmModalBackdrop.addEventListener('click', (event) => {
-  if (event.target === confirmModalBackdrop) closeConfirmModal(false);
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && confirmModalBackdrop.style.display !== 'none') closeConfirmModal(false);
-});
 
 function commit(el, card, action, flyTransform, confirmed) {
   if (gestureInFlight) return; // already acted on this card via another input path
@@ -1156,7 +1184,7 @@ installBtn.addEventListener('click', async () => {
   // A fresh page load always scrolls the modal to its top ("Preferences") — pull the
   // GitHub connection section into view so the user lands on the result of what they
   // just did instead of the section they weren't even looking at.
-  document.getElementById('account-status').scrollIntoView({ block: 'start' });
+  scrollSettingsContentTo(document.getElementById('account-status'));
   if (result === 'error') {
     const resultEl = document.getElementById('account-result');
     resultEl.textContent = 'GitHub connection failed: ' + (params.get('reason') || 'unknown error');
@@ -1335,7 +1363,7 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
   const result = await api('POST', '/account/team/join', { token });
   openSettingsModal();
   await loadTeam();
-  document.getElementById('team-status').scrollIntoView({ block: 'start' });
+  scrollSettingsContentTo(document.getElementById('team-status'));
   showTeamResult(result.error ? 'Could not join team: ' + result.error : `Joined ${result.name}.`, Boolean(result.error));
 })();
 
