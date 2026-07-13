@@ -328,23 +328,23 @@
       <span class="subtitle">Direction triage for swarm PRs</span>
     </div>
   </div>
-  <span class="header-status" id="header-status" class="hidden">
+  <span class="header-status hidden" id="header-status">
     <span class="badge badge-neutral" id="header-team-badge"></span>
-    <select class="header-team-switcher" id="header-team-switcher" class="hidden" title="Switch team"></select>
-    <span class="badge badge-neutral header-repo-badge" id="header-repo-badge" class="hidden"></span>
+    <select class="header-team-switcher hidden" id="header-team-switcher" title="Switch team"></select>
+    <span class="badge badge-neutral header-repo-badge hidden" id="header-repo-badge"></span>
   </span>
   <div class="header-identity">
-    <img class="header-avatar" id="header-avatar" class="hidden" alt="" onerror="this.classList.add('hidden')">
-    <span class="subtitle" id="signed-in-as" class="hidden"></span>
-    <button class="btn btn-icon" id="btn-settings" title="Settings" aria-label="Settings" class="hidden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <img class="header-avatar hidden" id="header-avatar" alt="" onerror="this.classList.add('hidden')">
+    <span class="subtitle hidden" id="signed-in-as"></span>
+    <button class="btn btn-icon hidden" id="btn-settings" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
   </div>
 </header>
 
-<div class="modal-backdrop" id="signin-gate" class="hidden">
+<div class="modal-backdrop hidden" id="signin-gate">
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="signin-title">
     <h3 class="modal-title" id="signin-title">Sign in to Quire</h3>
     <p>Sign in with your GitHub account to continue.</p>
-    <div id="signin-result" class="result-msg error" class="hidden"></div>
+    <div id="signin-result" class="result-msg error hidden"></div>
     <div class="modal-actions">
       <button class="btn btn-accept" id="btn-signin">Sign in with GitHub</button>
     </div>
@@ -359,7 +359,7 @@
 </div>
 
 <div id="pane-review" class="pane active">
-  <div class="tabs review-filter-bar" id="review-filter-bar" class="hidden"></div>
+  <div class="tabs review-filter-bar hidden" id="review-filter-bar"></div>
   <div class="card-list" id="card-list">
     <div class="empty">No bundles in review queue.</div>
   </div>
@@ -375,8 +375,8 @@
 </div>
 
 <div id="pane-queue" class="pane">
-  <div class="tabs queue-filter-bar" id="queue-filter-bar" class="hidden"></div>
-  <div class="queue-age-filter" id="queue-age-filter" class="hidden">
+  <div class="tabs queue-filter-bar hidden" id="queue-filter-bar"></div>
+  <div class="queue-age-filter hidden" id="queue-age-filter">
     <label>Landed at least <input type="number" min="0" id="queue-age-min" placeholder="0"> day(s) ago</label>
     <label>at most <input type="number" min="0" id="queue-age-max" placeholder="&infin;"> day(s) ago</label>
     <button class="btn btn-defer" id="btn-queue-age-clear">Clear</button>
@@ -394,7 +394,7 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="settings-modal-backdrop" class="hidden">
+<div class="modal-backdrop hidden" id="settings-modal-backdrop">
   <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
     <div class="settings-header">
       <h3 class="modal-title" id="settings-modal-title">Settings</h3>
@@ -452,7 +452,7 @@
         <div class="settings-panel account-panel" data-section="github">
           <div class="account-status" id="account-status" aria-live="polite">Checking connection&hellip;</div>
           <div id="installations-list"></div>
-          <button class="btn btn-reject" id="btn-account-disconnect-all" class="hidden">Disconnect all</button>
+          <button class="btn btn-reject hidden" id="btn-account-disconnect-all">Disconnect all</button>
           <div id="account-connect-form">
             <div id="connectable-installations" class="hidden"></div>
             <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
@@ -462,9 +462,9 @@
           </div>
           <div id="account-result" class="result-msg hidden" aria-live="polite"></div>
 
-          <div class="repo-panel" id="repo-panel" class="hidden">
+          <div class="repo-panel hidden" id="repo-panel">
             <h3>Repositories to work on</h3>
-            <div class="automation-status" id="automation-status" class="hidden"></div>
+            <div class="automation-status hidden" id="automation-status"></div>
             <div id="watched-repos-list"></div>
             <div id="sorting-notice" class="result-msg hidden" aria-live="polite">
               Starred/pinned sorting is unavailable — reconnect GitHub to restore it.
@@ -487,14 +487,14 @@
         </div>
 
         <div class="settings-panel" data-section="danger">
-          <button class="btn btn-reject btn-clear-all" id="btn-clear-all" class="hidden" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
+          <button class="btn btn-reject btn-clear-all hidden" id="btn-clear-all" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
         </div>
       </div>
     </div>
   </div>
 </div>
 
-<div class="modal-backdrop" id="llm-modal-backdrop" class="hidden">
+<div class="modal-backdrop hidden" id="llm-modal-backdrop">
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="llm-modal-title">
     <h3 class="modal-title" id="llm-modal-title">Connect an LLM API key</h3>
     <p>Stored locally in Quire's data directory; used only for calls to the provider you choose.</p>
@@ -511,7 +511,7 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="detail-modal-backdrop" class="hidden">
+<div class="modal-backdrop hidden" id="detail-modal-backdrop">
   <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
     <h3 class="modal-title" id="detail-modal-title">Bundle detail</h3>
     <div id="detail-modal-body"><div class="empty">Loading&hellip;</div></div>
@@ -521,7 +521,7 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="confirm-modal-backdrop" class="hidden">
+<div class="modal-backdrop hidden" id="confirm-modal-backdrop">
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
     <h3 class="modal-title" id="confirm-modal-title">Confirm</h3>
     <p id="confirm-modal-message"></p>
@@ -1003,12 +1003,22 @@ function renderReviewCardList() {
 async function loadReview() {
   const status = await api('GET', '/account/github/status');
   const el = document.getElementById('card-list');
+  if (status.error) {
+    document.getElementById('review-filter-bar').classList.add('hidden');
+    el.innerHTML = paneErrorHtml(status.error, 'loadReview()');
+    return;
+  }
   if (!status.connected) {
     document.getElementById('review-filter-bar').classList.add('hidden');
     el.innerHTML = '<div class="empty">Connect a GitHub account to see the review queue.</div>';
     return;
   }
-  latestReviewCards = await api('GET', '/bundles');
+  const cards = await api('GET', '/bundles');
+  if (cards.error) {
+    el.innerHTML = paneErrorHtml(cards.error, 'loadReview()');
+    return;
+  }
+  latestReviewCards = cards;
   renderReviewFilterBar(latestReviewCards);
   renderReviewCardList();
 }
@@ -1046,6 +1056,10 @@ async function refreshAfterTeamChange() {
 
 async function loadShelf() {
   const cards = await api('GET', '/shelf');
+  if (cards.error) {
+    document.getElementById('shelf-list').innerHTML = paneErrorHtml(cards.error, 'loadShelf()');
+    return;
+  }
   const json = JSON.stringify(cards);
   if (json === lastRenderedJson.shelf) return;
   lastRenderedJson.shelf = json;
@@ -1221,6 +1235,10 @@ function renderQueueEntryList() {
 
 async function loadQueue() {
   const entries = await api('GET', '/queue');
+  if (entries.error) {
+    document.getElementById('queue-list').innerHTML = paneErrorHtml(entries.error, 'loadQueue()');
+    return;
+  }
   queueEntries = entries;
   // Keyed on the filters too, same reasoning as loadReview: a filter change alone must
   // still force a re-render, while an unchanged filter on an unchanged fetch still no-ops.
@@ -1250,12 +1268,20 @@ function auditEntryHtml(entry) {
 async function loadAudit() {
   const entries = await api('GET', '/audit');
   const el = document.getElementById('audit-list');
+  if (entries.error) {
+    el.innerHTML = paneErrorHtml(entries.error, 'loadAudit()');
+    return;
+  }
   el.innerHTML = entries.length ? entries.map(auditEntryHtml).join('') : '<div class="empty">No shadow-mode audit entries.</div>';
 }
 
-async function removeFromQueue(bundleId) {
+async function removeFromQueue(bundleId, btn) {
   if (!(await confirmAction('Remove this bundle from bundle status tracking?'))) return;
-  await api('DELETE', `/queue/${bundleId}`);
+  const result = await withPending(btn, 'Removing…', () => api('DELETE', `/queue/${bundleId}`));
+  if (result.error) {
+    showError('Could not remove bundle: ' + result.error);
+    return;
+  }
   loadQueue();
   loadReview();
 }

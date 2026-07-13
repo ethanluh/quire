@@ -65,11 +65,12 @@ function showError(message) {
 }
 
 // Inline error state for a pane list that failed to load, replacing a "Loading…"
-// placeholder that would otherwise sit there forever. `retryFnName` must be a global
-// zero-arg loader (e.g. 'loadQueue') since this renders through innerHTML.
-function paneErrorHtml(message, retryFnName, className) {
+// placeholder that would otherwise sit there forever. `retryCall` must be a complete,
+// global, zero-side-effect-on-parse call expression (e.g. 'loadQueue()' or
+// "showBundleDetail('abc')") since this renders through innerHTML/onclick.
+function paneErrorHtml(message, retryCall, className) {
   return `<div class="${className || 'empty'}">Could not load — ${escapeHtml(message)}<br>
-    <button class="btn" style="margin-top:var(--space-2)" onclick="${retryFnName}()">Retry</button></div>`;
+    <button class="btn" style="margin-top:var(--space-2)" onclick="${retryCall}">Retry</button></div>`;
 }
 
 async function withPending(btn, pendingLabel, fn) {

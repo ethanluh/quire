@@ -302,22 +302,22 @@
     <h1>Quire</h1>
   </div>
   <div class="header-identity">
-    <img class="header-avatar" id="header-avatar" class="hidden" alt="" onerror="this.classList.add('hidden')">
-    <span class="subtitle" id="signed-in-as" class="hidden"></span>
-    <button class="btn btn-icon" id="btn-settings" title="Settings" aria-label="Settings" class="hidden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+    <img class="header-avatar hidden" id="header-avatar" alt="" onerror="this.classList.add('hidden')">
+    <span class="subtitle hidden" id="signed-in-as"></span>
+    <button class="btn btn-icon hidden" id="btn-settings" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
   </div>
 </header>
-<div class="header-status-bar" id="header-status-bar" class="hidden">
+<div class="header-status-bar hidden" id="header-status-bar">
   <span class="badge badge-neutral" id="header-team-badge"></span>
-  <select class="header-team-switcher" id="header-team-switcher" class="hidden" title="Switch team"></select>
-  <span class="badge badge-neutral header-repo-badge" id="header-repo-badge" class="hidden"></span>
+  <select class="header-team-switcher hidden" id="header-team-switcher" title="Switch team"></select>
+  <span class="badge badge-neutral header-repo-badge hidden" id="header-repo-badge"></span>
 </div>
 
-<div class="modal-backdrop" id="signin-gate" class="hidden">
+<div class="modal-backdrop hidden" id="signin-gate">
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="signin-title">
     <h3 class="modal-title" id="signin-title">Sign in to Quire</h3>
     <p>Sign in with your GitHub account to continue.</p>
-    <div id="signin-result" class="result-msg error" class="hidden"></div>
+    <div id="signin-result" class="result-msg error hidden"></div>
     <div class="modal-actions">
       <button class="btn btn-accept" id="btn-signin">Sign in with GitHub</button>
     </div>
@@ -334,7 +334,7 @@
     </div>
     <div class="tap-gestures">
       <button class="btn" id="btn-tap-details">Details</button>
-      <button class="btn btn-accept" id="btn-tap-accept" class="hidden">Accept</button>
+      <button class="btn btn-accept hidden" id="btn-tap-accept">Accept</button>
     </div>
   </div>
 
@@ -360,7 +360,7 @@
   <button class="tab" role="tab" aria-selected="false" aria-controls="pane-audit" data-tab="audit"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>Audit</button>
 </nav>
 
-<div class="modal-backdrop" id="settings-modal-backdrop" class="hidden">
+<div class="modal-backdrop hidden" id="settings-modal-backdrop">
   <div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
     <div class="settings-header">
       <button class="btn btn-defer btn-icon" id="btn-settings-modal-close" title="Close" aria-label="Close settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
@@ -400,14 +400,14 @@
         <h4>GitHub connection</h4>
         <div class="account-status" id="account-status" aria-live="polite">Checking connection&hellip;</div>
         <div id="installations-list"></div>
-        <button class="btn btn-reject" id="btn-account-disconnect-all" class="hidden">Disconnect all</button>
+        <button class="btn btn-reject hidden" id="btn-account-disconnect-all">Disconnect all</button>
         <div id="account-connect-form">
           <p id="account-connect-copy">Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.</p>
           <button class="btn btn-accept" id="btn-account-install">Install GitHub App</button>
         </div>
         <div id="account-result" class="result-msg hidden" aria-live="polite"></div>
 
-        <div class="repo-panel" id="repo-panel" class="hidden">
+        <div class="repo-panel hidden" id="repo-panel">
           <h3>Repositories to work on</h3>
           <div id="watched-repos-list"></div>
           <div id="sorting-notice" class="result-msg hidden" aria-live="polite">
@@ -437,7 +437,7 @@
 
       <div class="settings-section">
         <h4>Danger zone</h4>
-        <button class="btn btn-reject btn-clear-all" id="btn-clear-all" class="hidden" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
+        <button class="btn btn-reject btn-clear-all hidden" id="btn-clear-all" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
       </div>
     </div>
   </div>
@@ -445,7 +445,7 @@
 
 <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
-<div class="modal-backdrop" id="detail-modal-backdrop" class="hidden">
+<div class="modal-backdrop hidden" id="detail-modal-backdrop">
   <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
     <h3 class="modal-title" id="detail-modal-title">Bundle detail</h3>
     <div id="detail-modal-body"><div class="empty">Loading&hellip;</div></div>
@@ -455,7 +455,7 @@
   </div>
 </div>
 
-<div class="modal-backdrop" id="confirm-modal-backdrop" class="hidden">
+<div class="modal-backdrop hidden" id="confirm-modal-backdrop">
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
     <h3 class="modal-title" id="confirm-modal-title">Confirm</h3>
     <p id="confirm-modal-message"></p>
@@ -676,6 +676,10 @@ const lastRenderedJson = {};
 
 async function loadReview() {
   const status = await api('GET', '/account/github/status');
+  if (status.error) {
+    stackEl.innerHTML = paneErrorHtml(status.error, 'loadReview()', 'stack-empty');
+    return;
+  }
   if (!status.connected) {
     reviewCards = [];
     stackEl.innerHTML = '<div class="stack-empty">Connect a GitHub account to see the review queue.</div>';
@@ -683,6 +687,10 @@ async function loadReview() {
     return;
   }
   const cards = await api('GET', '/bundles');
+  if (cards.error) {
+    stackEl.innerHTML = paneErrorHtml(cards.error, 'loadReview()', 'stack-empty');
+    return;
+  }
   const json = JSON.stringify(cards);
   if (json === lastRenderedJson.review) return;
   lastRenderedJson.review = json;
@@ -952,6 +960,10 @@ document.getElementById('btn-tap-accept').addEventListener('click', async () => 
 // --- Shelf ---
 async function loadShelf() {
   const cards = await api('GET', '/shelf');
+  if (cards.error) {
+    document.getElementById('shelf-list').innerHTML = paneErrorHtml(cards.error, 'loadShelf()');
+    return;
+  }
   const json = JSON.stringify(cards);
   if (json === lastRenderedJson.shelf) return;
   lastRenderedJson.shelf = json;
@@ -968,6 +980,10 @@ async function loadShelf() {
 // --- Queue ---
 async function loadQueue() {
   const entries = await api('GET', '/queue');
+  if (entries.error) {
+    document.getElementById('queue-list').innerHTML = paneErrorHtml(entries.error, 'loadQueue()');
+    return;
+  }
   queueEntries = entries;
   const json = JSON.stringify(entries);
   if (json === lastRenderedJson.queue) return;
@@ -994,9 +1010,13 @@ async function loadQueue() {
   }).join('');
 }
 
-async function removeFromQueue(bundleId) {
+async function removeFromQueue(bundleId, btn) {
   if (!(await confirmAction('Remove this bundle from bundle status tracking?'))) return;
-  await api('DELETE', `/queue/${bundleId}`);
+  const result = await withPending(btn, 'Removing…', () => api('DELETE', `/queue/${bundleId}`));
+  if (result.error) {
+    showError('Could not remove bundle: ' + result.error);
+    return;
+  }
   loadQueue();
 }
 
@@ -1041,6 +1061,10 @@ function auditEntryHtml(entry) {
 async function loadAudit() {
   const entries = await api('GET', '/audit');
   const el = document.getElementById('audit-list');
+  if (entries.error) {
+    el.innerHTML = paneErrorHtml(entries.error, 'loadAudit()');
+    return;
+  }
   el.innerHTML = entries.length ? entries.map(auditEntryHtml).join('') : '<div class="empty">No shadow-mode audit entries.</div>';
 }
 
@@ -1113,7 +1137,7 @@ document.getElementById('watched-repos-list').addEventListener('change', (e) => 
 document.getElementById('watched-repos-list').addEventListener('click', (e) => {
   if (!e.target.classList.contains('btn-remove-repo')) return;
   const row = e.target.closest('.watched-repo-row');
-  removeRepo(row.dataset.owner, row.dataset.name);
+  removeRepo(row.dataset.owner, row.dataset.name, e.target);
 });
 
 async function loadAccount() {
@@ -1481,7 +1505,7 @@ document.addEventListener('click', async (event) => {
   const promoteBtn = event.target.closest('.btn-promote');
   if (promoteBtn) {
     const bundleId = promoteBtn.dataset.bundleId;
-    await promote(bundleId);
+    await promote(bundleId, promoteBtn);
     return;
   }
 
@@ -1497,14 +1521,14 @@ document.addEventListener('click', async (event) => {
   const removeQueueBtn = event.target.closest('.btn-remove-from-queue');
   if (removeQueueBtn) {
     const bundleId = removeQueueBtn.dataset.bundleId;
-    await removeFromQueue(bundleId);
+    await removeFromQueue(bundleId, removeQueueBtn);
     return;
   }
 
   const reattemptBtn = event.target.closest('.btn-reattempt-queue-entry');
   if (reattemptBtn) {
     const bundleId = reattemptBtn.dataset.bundleId;
-    await reattemptQueueEntry(bundleId);
+    await reattemptQueueEntry(bundleId, reattemptBtn);
     return;
   }
 
@@ -1513,7 +1537,7 @@ document.addEventListener('click', async (event) => {
     const bundleId = abortBtn.dataset.bundleId;
     const mergedPrCount = parseInt(abortBtn.dataset.mergedPrCount, 10);
     const memberCount = parseInt(abortBtn.dataset.memberCount, 10);
-    await abortQueueEntry(bundleId, mergedPrCount, memberCount);
+    await abortQueueEntry(bundleId, mergedPrCount, memberCount, abortBtn);
     return;
   }
 
@@ -1521,7 +1545,7 @@ document.addEventListener('click', async (event) => {
   const auditBtn = event.target.closest('.btn-overturn-audit');
   if (auditBtn) {
     const auditId = auditBtn.dataset.auditId;
-    await overturnAudit(auditId);
+    await overturnAudit(auditId, auditBtn);
     return;
   }
 
@@ -1578,6 +1602,8 @@ function pollActivePane() {
     loadShelf();
   } else if (pane === 'queue') {
     loadQueue();
+  } else if (pane === 'audit') {
+    loadAudit();
   }
 }
 
