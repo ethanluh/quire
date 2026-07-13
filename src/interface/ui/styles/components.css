@@ -145,9 +145,11 @@ body.modal-open {
    currentColor would resolve against the *new* color, not the button's
    original one, collapsing background/text/border to one indistinguishable
    value. --btn-color holds the original so the two can change independently. */
+/* Specificity (0,2,0) beats .btn-accept/.btn-defer/.btn-reject (0,1,0) on
+   their own, so this text color wins on hover without needing !important. */
 .btn:hover {
 	background: var(--btn-color);
-	color: var(--color-surface-card) !important;
+	color: var(--color-surface-card);
 }
 
 .btn:active {

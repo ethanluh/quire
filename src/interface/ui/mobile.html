@@ -409,7 +409,16 @@
 <script src="shared/api.js"></script>
 <script src="shared/render.js"></script>
 <script src="shared/modal.js"></script>
+<script src="shared/theme.js"></script>
+<script src="shared/polling.js"></script>
+<script src="shared/team.js"></script>
+<script src="shared/account.js"></script>
 <script>
+// Mobile has no automation-status line or "connect an already-installed app" shortcut
+// (no room/need for either in the settings sheet) — accountHooks stays at shared/account.js's
+// default (no-op) since mobile needs neither hook. Full-width vs. desktop's inline-block
+// button spacing is handled by page-scoped CSS (see `.settings-section .btn` above), not JS.
+
 // Only shelf/queue get a placeholder — review is the swipeable card stack (#stack),
 // whose own render path shouldn't be touched here.
 const TAB_LIST_IDS = { shelf: 'shelf-list', queue: 'queue-list' };
@@ -619,11 +628,15 @@ const SWIPE_VELOCITY_THRESHOLD = 0.5; // px/ms: fast flicks commit even below di
 const SLOP_PX = 10; // minimum distance before entering drag mode
 const STAMP_DEADZONE = 24;
 
-// Cache of the last-rendered JSON per pane so polling can skip a DOM rebuild
-// when nothing actually changed — important for the review stack, which
-// re-attaches pointer listeners and resets stamp/transform state on every
-// renderStack() call.
-const lastRenderedJson = {};
+// lastRenderedJson (in shared/polling.js) is important for the review stack in particular,
+// which re-attaches pointer listeners and resets stamp/transform state on every
+// renderStack() call — skipping a rebuild when nothing changed avoids losing that state.
+
+// Don't let the shared poll/background-refresh helpers rebuild the swipeable stack out
+// from under an in-progress gesture — the current drag/commit will finish and the next
+// tick will pick up whatever changed. Desktop's plain card list has no such interaction
+// to protect and leaves the shared default (always refresh) in place.
+canRefreshReviewPane = () => !(gestureInFlight || (topCardEl && topCardEl.classList.contains('dragging')));
 
 async function loadReview() {
   const status = await api('GET', '/account/github/status');
@@ -656,35 +669,7 @@ function updateReviewBadge() {
   badge.classList.toggle('hidden', count === 0);
 }
 
-// Pulls the selected repo's current PRs from GitHub before rendering, so a fresh page
-// load/reload reflects reality instead of whatever's been cached in server memory since
-// the last webhook or reconcile tick. Best-effort: a failed refresh still falls back to
-// rendering whatever's already there.
-async function refreshAndLoadReview() {
-  try {
-    await api('POST', '/account/github/repos/refresh', undefined);
-  } catch (err) {
-    console.error('PR refresh failed', err);
-  }
-  loadReview();
-}
-
-// Team switch/create/leave changes which tenant's data is active — every pane and settings
-// panel needs to re-fetch, but (unlike sign-out) the user is still mid-session, so do it in
-// place instead of location.reload()ing and blowing away "Settings is open" / an open modal
-// in general (the header team switcher is reachable while Settings is open too).
-async function refreshAfterTeamChange() {
-  delete lastRenderedJson.review;
-  delete lastRenderedJson.shelf;
-  delete lastRenderedJson.queue;
-  await refreshAndLoadReview();
-  await loadShelf();
-  await loadQueue();
-  await loadAudit();
-  await loadAccount();
-  await loadLlmAccount();
-  await loadTeam();
-}
+// refreshAndLoadReview and refreshAfterTeamChange live in shared/polling.js.
 
 function renderStack() {
   updateReviewBadge();
@@ -1146,82 +1131,9 @@ signoutBtn.addEventListener('click', async () => {
 });
 
 // --- Account ---
-const repoPanel = document.getElementById('repo-panel');
-const installBtn = document.getElementById('btn-account-install');
-const accountDisconnectAllBtn = document.getElementById('btn-account-disconnect-all');
-let loadedInstallations = [];
-
-accountDisconnectAllBtn.addEventListener('click', async () => {
-  if (!(await confirmAction('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.', { danger: true }))) return;
-  await api('POST', '/account/github/disconnect-all', undefined);
-  loadAccount();
-});
-
-// A team can watch several repos at once, each with its own auto-merge/flag-conflicts/
-// deep-investigation settings — one row per repo instead of one global checkbox row.
-document.getElementById('watched-repos-list').addEventListener('change', (e) => {
-  if (!e.target.classList.contains('chk-repo-setting')) return;
-  updateRepoSetting(e.target.closest('.watched-repo-row'));
-});
-
-document.getElementById('watched-repos-list').addEventListener('click', (e) => {
-  if (!e.target.classList.contains('btn-remove-repo')) return;
-  const row = e.target.closest('.watched-repo-row');
-  removeRepo(row.dataset.owner, row.dataset.name, e.target);
-});
-
-async function loadAccount() {
-  const statusEl = document.getElementById('account-status');
-  const resultEl = document.getElementById('account-result');
-  const listEl = document.getElementById('installations-list');
-  const copyEl = document.getElementById('account-connect-copy');
-  resultEl.classList.add('hidden');
-  const status = await api('GET', '/account/github/status');
-  loadedInstallations = status.installations || [];
-  const watchedRepos = status.repos || [];
-  installBtn.disabled = false;
-  if (status.connected) {
-    statusEl.textContent = `Connected to ${loadedInstallations.length} installation${loadedInstallations.length === 1 ? '' : 's'}:`;
-    listEl.innerHTML = loadedInstallations.map(installationHtml).join('');
-    copyEl.textContent = 'Install on another organization or account.';
-    accountDisconnectAllBtn.classList.remove('hidden');
-    repoPanel.classList.remove('hidden');
-    renderWatchedRepos(watchedRepos);
-    loadRepos(watchedRepos);
-  } else {
-    statusEl.textContent = watchedRepos.length
-      ? `Not connected. Will resume watching ${watchedRepos.map((r) => `${r.owner}/${r.name}`).join(', ')} once reconnected.`
-      : 'Not connected.';
-    listEl.innerHTML = '';
-    copyEl.textContent = 'Install the Quire GitHub App on an organization or repository so Quire can merge and revert PRs on its behalf.';
-    accountDisconnectAllBtn.classList.add('hidden');
-    repoPanel.classList.add('hidden');
-  }
-  renderHeaderRepo(status.selectedRepo);
-}
-
-// A lighter-weight sibling of loadAccount() for the header: just the selected repo, on
-// every page load, without also paying for loadAccount()'s installations/repo-list fetches
-// (those only matter once Settings is actually open).
-async function loadHeaderRepo() {
-  const status = await api('GET', '/account/github/status');
-  renderHeaderRepo(status.selectedRepo);
-}
-
-installBtn.addEventListener('click', async () => {
-  if (!(await confirmAction("Install the Quire GitHub App? You'll choose which repos to grant access to on GitHub's side.", { confirmLabel: 'Continue to GitHub' }))) return;
-  installBtn.disabled = true;
-  const resultEl = document.getElementById('account-result');
-  const result = await api('POST', '/account/github/install/start', undefined);
-  if (result.error) {
-    resultEl.textContent = 'Error: ' + result.error;
-    resultEl.className = 'result-msg error';
-    resultEl.classList.remove('hidden');
-    installBtn.disabled = false;
-    return;
-  }
-  location.href = result.installUrl;
-});
+// repoPanel/installBtn/accountDisconnectAllBtn/loadedInstallations, loadAccount,
+// loadHeaderRepo, and the install/disconnect-all/watched-repos-list listeners live in
+// shared/account.js.
 
 // Both the sign-in OAuth callback and the App install callback redirect back here with
 // ?account=connected|error, since each is a top-level navigation away and back.
@@ -1246,24 +1158,9 @@ installBtn.addEventListener('click', async () => {
   }
 })();
 
-const llmConnectForm = document.getElementById('llm-connect-form');
 const llmDisconnectBtn = document.getElementById('btn-llm-disconnect');
 
-async function loadLlmAccount() {
-  const statusEl = document.getElementById('llm-account-status');
-  const resultEl = document.getElementById('llm-account-result');
-  resultEl.classList.add('hidden');
-  const status = await api('GET', '/account/llm/status');
-  if (status.connected) {
-    statusEl.textContent = `Connected to ${status.provider}`;
-    llmConnectForm.classList.add('hidden');
-    llmDisconnectBtn.classList.remove('hidden');
-  } else {
-    statusEl.textContent = 'Not connected. Falling back to environment configuration.';
-    llmConnectForm.classList.remove('hidden');
-    llmDisconnectBtn.classList.add('hidden');
-  }
-}
+// loadLlmAccount lives in shared/account.js.
 
 document.getElementById('btn-llm-connect').addEventListener('click', async (e) => {
   const provider = document.getElementById('llm-provider-select').value;
@@ -1288,121 +1185,8 @@ llmDisconnectBtn.addEventListener('click', async () => {
   loadLlmAccount();
 });
 
-let loadedTeamId = null;
-let myRole = null;
-
-// Client-side hiding is UX only — requireRole on the server is the real enforcement, so
-// getting this wrong just means a disabled-looking button, not a security hole.
-function canManageMembers() { return myRole === 'owner' || myRole === 'admin'; }
-function isOwner() { return myRole === 'owner'; }
-
-// Owner-only controls live outside the Team panel too (queue processing, auto-merge) —
-// applied here so every loadTeam() call keeps them in sync with the caller's current role.
-// Rename/invite are gated to owner+admin server-side (PATCH /account/team, POST
-// /account/team/invite) — kept in sync with canManageMembers() for the same reason.
-function applyRoleVisibility() {
-  document.getElementById('btn-process').classList.toggle('hidden', !isOwner());
-  document.querySelectorAll('.chk-repo-setting').forEach((el) => { el.disabled = !isOwner(); });
-  document.querySelectorAll('.btn-remove-repo').forEach((el) => { el.disabled = !canManageMembers(); });
-  document.getElementById('team-name-input').disabled = !canManageMembers();
-  document.getElementById('btn-team-rename').classList.toggle('hidden', !canManageMembers());
-  document.getElementById('btn-team-invite').classList.toggle('hidden', !canManageMembers());
-}
-
-async function loadTeam() {
-  const statusEl = document.getElementById('team-status');
-  const resultEl = document.getElementById('team-result');
-  resultEl.classList.add('hidden');
-
-  const status = await api('GET', '/account/team');
-  if (status.error) {
-    statusEl.textContent = 'Error: ' + status.error;
-    return;
-  }
-  loadedTeamId = status.teamId;
-  myRole = status.role;
-  statusEl.innerHTML = `On <span class="login">${escapeHtml(status.name)}</span> as ${escapeHtml(status.role)}`;
-  document.getElementById('team-name-input').value = status.name;
-  document.getElementById('team-members-list').innerHTML = status.members.map(memberRowHtml).join('');
-  applyRoleVisibility();
-
-  const { teams } = await api('GET', '/account/team/list');
-  document.getElementById('team-switcher').innerHTML = (teams || [])
-    .map((t) => `<option value="${escapeHtml(t.teamId)}" ${t.active ? 'selected' : ''}>${escapeHtml(t.name)}</option>`)
-    .join('');
-  renderHeaderTeam(status.name, teams || []);
-}
-
-// Shows a plain team-name badge when the login belongs to only one team, or a select
-// (its currently active/default team, changed immediately on pick) once it belongs to
-// more than one — no point cluttering the header with a dropdown that only ever offers
-// one choice.
-document.getElementById('header-team-switcher').addEventListener('change', async (e) => {
-  const result = await api('POST', '/account/team/switch', { teamId: e.target.value });
-  if (result.error) {
-    showError('Error: ' + result.error);
-    return;
-  }
-  await refreshAfterTeamChange();
-});
-
-document.getElementById('team-switcher').addEventListener('change', async (e) => {
-  const result = await api('POST', '/account/team/switch', { teamId: e.target.value });
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-    return;
-  }
-  await refreshAfterTeamChange();
-});
-
-document.getElementById('btn-team-rename').addEventListener('click', async () => {
-  const name = document.getElementById('team-name-input').value.trim();
-  if (!name) return;
-  const result = await api('PATCH', '/account/team', { name });
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-    return;
-  }
-  showTeamResult('Team renamed.', false);
-  loadTeam();
-});
-
-document.getElementById('btn-team-invite').addEventListener('click', async () => {
-  const result = await api('POST', '/account/team/invite', undefined);
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-    return;
-  }
-  try {
-    await navigator.clipboard.writeText(result.inviteUrl);
-    showTeamResult('Invite link copied to clipboard (valid for 7 days).', false);
-  } catch {
-    showTeamResult('Invite link: ' + result.inviteUrl, false);
-  }
-});
-
-document.getElementById('btn-team-create').addEventListener('click', async () => {
-  const input = document.getElementById('team-create-input');
-  const name = input.value.trim();
-  if (!name) return;
-  const result = await api('POST', '/account/team/create', { name });
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-    return;
-  }
-  input.value = '';
-  await refreshAfterTeamChange();
-});
-
-document.getElementById('btn-team-leave').addEventListener('click', async () => {
-  if (!loadedTeamId || !(await confirmAction('Leave this team?'))) return;
-  const result = await api('POST', '/account/team/leave', { teamId: loadedTeamId });
-  if (result.error) {
-    showTeamResult('Error: ' + result.error, true);
-    return;
-  }
-  await refreshAfterTeamChange();
-});
+// loadedTeamId/myRole, canManageMembers/isOwner, applyRoleVisibility, loadTeam, and the
+// header/settings team-switcher + rename/invite/create/leave listeners live in shared/team.js.
 
 // An invite link is a top-level navigation from wherever it was shared, carrying
 // ?joinTeam=<token> — same redirect-callback shape as handleAccountRedirect above.
@@ -1497,29 +1281,7 @@ async function selectRepo(owner, name, installationId) {
   }
 }
 
-// Theme: "paper" (light, default) and "ink" (dark) — kept in sync with the desktop view.
-const THEME_KEY = 'quire-theme';
-const themeBtn = document.getElementById('btn-theme');
-const themeColorTag = document.getElementById('theme-color-tag');
-const THEME_COLORS = { paper: '#fbf6ec', ink: '#26201a' };
-
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  themeBtn.textContent = theme === 'ink' ? 'Light' : 'Dark';
-  themeColorTag.setAttribute('content', THEME_COLORS[theme]);
-}
-
-// Seed: explicit localStorage, then prefers-color-scheme, else default to 'paper'.
-const savedTheme = localStorage.getItem(THEME_KEY);
-const systemPrefersDark = matchMedia('(prefers-color-scheme: dark)').matches;
-const initialTheme = savedTheme || (systemPrefersDark ? 'ink' : 'paper');
-applyTheme(initialTheme);
-
-themeBtn.addEventListener('click', () => {
-  const next = document.documentElement.getAttribute('data-theme') === 'ink' ? 'paper' : 'ink';
-  localStorage.setItem(THEME_KEY, next);
-  applyTheme(next);
-});
+// applyTheme + the theme-toggle button wiring live in shared/theme.js.
 
 // Delegated listeners for button actions
 document.addEventListener('click', async (event) => {
@@ -1611,69 +1373,10 @@ checkSignedIn().then((signedIn) => {
   }
 });
 
-// Server state is already kept fresh by the GitHub webhook + reconciliation poll
-// (see routes/webhook.ts); these endpoints just read that in-memory state, so
-// polling them here is cheap and never itself calls the GitHub API.
-const POLL_INTERVAL_MS = 10000;
-let pollTimer = null;
-
-function pollActivePane() {
-  if (document.hidden) return;
-  const activeTab = document.querySelector('.tab.active');
-  if (!activeTab) return;
-  const pane = activeTab.dataset.tab;
-  if (pane === 'review') {
-    // Don't rebuild the swipeable stack out from under an in-progress
-    // gesture — the current drag/commit will finish and the next tick
-    // will pick up whatever changed.
-    if (gestureInFlight || (topCardEl && topCardEl.classList.contains('dragging'))) return;
-    loadReview();
-  } else if (pane === 'shelf') {
-    loadShelf();
-  } else if (pane === 'queue') {
-    loadQueue();
-  } else if (pane === 'audit') {
-    loadAudit();
-  }
-}
-
-function startPolling() {
-  if (pollTimer) return;
-  pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
-}
-
-// Independent of the cheap poll above and the SSE push below — this is the fallback for when
-// neither a webhook nor the reconciliation timer has run yet (a missed/misconfigured webhook
-// delivery, or a stretch with no push connection). Calls the real refresh endpoint on a slow
-// cadence so new/closed PRs surface within about a minute even with no push at all, instead of
-// waiting on the server's own (much longer) reconciliation interval.
-const BACKGROUND_REFRESH_INTERVAL_MS = 60000;
-let backgroundRefreshTimer = null;
-
-function backgroundRefresh() {
-  if (document.hidden) return;
-  // Same guard as pollActivePane: don't rebuild the swipeable stack out from under an
-  // in-progress gesture — the current drag/commit will finish and the next tick will pick
-  // up whatever changed.
-  if (gestureInFlight || (topCardEl && topCardEl.classList.contains('dragging'))) return;
-  refreshAndLoadReview();
-}
-
-function startBackgroundRefresh() {
-  if (backgroundRefreshTimer) return;
-  backgroundRefreshTimer = setInterval(backgroundRefresh, BACKGROUND_REFRESH_INTERVAL_MS);
-}
-
-// Push path: the server emits a "refresh" event on /events (see routes/events.ts) the moment
-// a webhook or reconciliation pass changes state, so the active pane updates immediately
-// instead of waiting for the next poll tick. The interval above stays
-// running regardless — it's the fallback for a dropped/unsupported EventSource, same as the
-// server's own reconciliation timer is a fallback for a missed webhook delivery. Reuses
-// pollActivePane's own gesture-in-flight/dragging guard, so a push can't yank the stack out
-// from under an active swipe either.
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) pollActivePane();
-});
+// Polling (pollActivePane/startPolling/backgroundRefresh/startBackgroundRefresh) and the
+// visibilitychange re-poll listener live in shared/polling.js — this page's
+// canRefreshReviewPane override (set above, near gestureInFlight/topCardEl) is what makes
+// the shared pollActivePane/backgroundRefresh skip a rebuild during an in-progress gesture.
 </script>
 </body>
 </html>
