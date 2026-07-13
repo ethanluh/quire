@@ -21,7 +21,21 @@ import { errorHandler } from "../../src/interface/server/middleware/errors.js";
 import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
-import { WORKFLOW_CONTENT } from "../../src/engine/github/repoSetup.js";
+import {
+	WORKFLOW_CONTENT,
+	CLAUDE_HOOK_SCRIPT_CONTENT,
+	CLAUDE_SETTINGS_CONTENT,
+	GIT_HOOK_CONTENT,
+} from "../../src/engine/github/repoSetup.js";
+
+function seedFullyConformingRepo(client: StubGitHubClient): void {
+	client.seedFile("acme-corp", "widgets", ".github/pull_request_template.md", "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+	client.seedFile("acme-corp", "widgets", ".github/workflows/quire-declared-direction.yml", WORKFLOW_CONTENT);
+	client.seedFile("acme-corp", "widgets", "CLAUDE.md", "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+	client.seedFile("acme-corp", "widgets", ".claude/hooks/check-declared-direction.sh", CLAUDE_HOOK_SCRIPT_CONTENT);
+	client.seedFile("acme-corp", "widgets", ".claude/settings.json", CLAUDE_SETTINGS_CONTENT);
+	client.seedFile("acme-corp", "widgets", ".githooks/pre-push", GIT_HOOK_CONTENT);
+}
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { InstallationAccountState, RepoBinding } from "../../src/engine/github/installation.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
@@ -1391,13 +1405,7 @@ describe("githubAppRouter", () => {
 		it("reports already-set-up without opening a PR when the conventions are already in place", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 			const client = new StubGitHubClient();
-			client.seedFile(
-				"acme-corp",
-				"widgets",
-				".github/pull_request_template.md",
-				"## Declared direction\n\n<!-- declared-direction: ... -->\n",
-			);
-			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-declared-direction.yml", WORKFLOW_CONTENT);
+			seedFullyConformingRepo(client);
 			setup(async () => [], client, new StubLlmProvider(), {
 				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
 				repos: [],
@@ -1426,13 +1434,7 @@ describe("githubAppRouter", () => {
 		it("reports alreadySetUp: true without touching the repo when the conventions are already in place", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 			const client = new StubGitHubClient();
-			client.seedFile(
-				"acme-corp",
-				"widgets",
-				".github/pull_request_template.md",
-				"## Declared direction\n\n<!-- declared-direction: ... -->\n",
-			);
-			client.seedFile("acme-corp", "widgets", ".github/workflows/quire-declared-direction.yml", WORKFLOW_CONTENT);
+			seedFullyConformingRepo(client);
 			setup(async () => [], client, new StubLlmProvider(), {
 				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
 				repos: [],
