@@ -1637,7 +1637,7 @@ async function selectRepo(owner, name, installationId) {
     loadReview();
 
     const setupStatus = await api('POST', '/account/github/repos/setup-status', { owner, name });
-    if (!setupStatus.alreadySetUp && await confirmAction(`Set up Quire's PR convention in ${owner}/${name}? This opens a pull request documenting the declared-direction marker in the repo's PR template and adding a CI check that enforces it.`)) {
+    if (!setupStatus.alreadySetUp && await confirmAction(`Set up Quire's PR convention in ${owner}/${name}? This opens a pull request documenting the declared-direction marker in the repo's PR template and CLAUDE.md, adding a CI check and a Claude Code hook that enforce it, and a local git pre-push reminder.`)) {
       const setup = await api('POST', '/account/github/repos/setup', { owner, name });
       if (setup.error) {
         showAccountResult('Setup PR failed: ' + setup.error, true);
