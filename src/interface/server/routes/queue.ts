@@ -17,7 +17,13 @@ import { notifyStateChanged } from "../changeEvents.js";
 // slashes, which a URL param can't carry reliably under Express 4's default path matching.
 const InvestigationPathSchema = z.object({ path: z.string().min(1) });
 
-export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore: DecidedPrStore, accountState: AccountState): Router {
+export function queueRouter(
+	queue: MergeQueue,
+	state: ServerState,
+	decidedStore: DecidedPrStore,
+	accountState: AccountState,
+	teamId: string,
+): Router {
 	const router = Router();
 
 	router.get("/", async (_req, res, next) => {
@@ -149,7 +155,7 @@ export function queueRouter(queue: MergeQueue, state: ServerState, decidedStore:
 				res.json({ status: "removed" }); // not found, or already past "queued" — same no-op as today
 				return;
 			}
-			notifyStateChanged();
+			notifyStateChanged(teamId);
 			if (removed.card !== undefined) {
 				// Restore to the review queue (INV-5: an accept must stay reversible until the
 				// queue lands it), with the exact card the human already saw.

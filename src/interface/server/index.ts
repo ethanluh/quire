@@ -19,7 +19,6 @@ import { createAllowlist } from "./allowlist.js";
 import { requireSession } from "./middleware/requireSession.js";
 import { resolveMembership } from "./middleware/resolveMembership.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
-import { eventsRouter } from "./routes/events.js";
 import { accountRouter } from "./routes/account.js";
 import { createSessionEpochStore } from "./sessionEpoch.js";
 import { teamRouter } from "./routes/team.js";
@@ -240,12 +239,6 @@ async function main(): Promise<void> {
 	);
 
 	app.use(session);
-
-	// Push-side companion to the per-tenant polling routes below: a global "refresh" bus,
-	// not tenant data itself, so it's fine to share across every signed-in team the same
-	// way the session gate above is — each client only re-polls its own tenant-scoped
-	// endpoints when it fires (see routes/events.ts).
-	app.use("/events", eventsRouter());
 
 	app.use(resolveMembership(teamStore));
 

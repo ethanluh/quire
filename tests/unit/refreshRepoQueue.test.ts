@@ -299,7 +299,7 @@ describe("enqueueRefresh", () => {
 			queue: new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
 		};
 		let notifyCount = 0;
-		const unsubscribe = onStateChanged(() => { notifyCount += 1; });
+		const unsubscribe = onStateChanged("", () => { notifyCount += 1; });
 
 		await enqueueRefresh("octocat", "hello-world", deps);
 		await enqueueRefresh("octocat", "hello-world", deps);

@@ -45,6 +45,7 @@ export function gesturesRouter(
 	decidedStore: DecidedPrStore,
 	accountState: AccountState,
 	shelfPath: string,
+	teamId: string,
 ): Router {
 	const router = Router({ mergeParams: true });
 
@@ -132,7 +133,7 @@ export function gesturesRouter(
 					// enqueue() already notifies via MergeQueue's own onChanged hook (see mergeQueue.ts),
 					// but this route also removes the bundle/card from the review queue — a ServerState
 					// change the hook has no visibility into — so it still needs its own signal.
-					notifyStateChanged();
+					notifyStateChanged(teamId);
 				// autoMergeOnAccept is itself owner-gated (POST /account/github/repos/:owner/:name/settings
 				// requires requireRole("owner")) — turning it on IS the authorization decision for
 				// every accept that follows to drain the queue, deliberately, regardless of which
@@ -167,7 +168,7 @@ export function gesturesRouter(
 					state.cards.delete(bundleId);
 					await decidedStore.markDecided(memberPrIds, action, decisionContext);
 					postCardToMembers(github, action, assignedBundle, card);
-					notifyStateChanged();
+					notifyStateChanged(teamId);
 					res.json({ status: "rejected", bundleId });
 				} else {
 					// defer
@@ -182,7 +183,7 @@ export function gesturesRouter(
 					await saveShelf(state.shelf, shelfPath);
 					await logDefer(deferLogPath, bundleId, card);
 					postCardToMembers(github, action, assignedBundle, card);
-					notifyStateChanged();
+					notifyStateChanged(teamId);
 					res.json({ status: "deferred", bundleId, shelfPosition: state.shelf.size });
 				}
 			} catch (err) {
