@@ -478,7 +478,7 @@
 
         <div class="settings-panel account-panel" data-section="llm">
           <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles. Falls back to <code>.env</code> configuration (or a stub with no real extraction) when disconnected.</p>
-          <div class="account-status" id="llm-account-status">Checking connection&hellip;</div>
+          <div class="account-status" id="llm-account-status" aria-live="polite">Checking connection&hellip;</div>
           <div id="llm-connect-form">
             <button class="btn btn-accept" id="btn-llm-connect">Add API key</button>
           </div>
@@ -600,13 +600,26 @@ document.querySelectorAll('.tabs [role="tab"]').forEach((tab, index) => {
 const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
 const settingsNavItems = document.querySelectorAll('.settings-nav-item');
 const settingsPanels = document.querySelectorAll('.settings-panel');
+
+// Scrolls .settings-content directly instead of relying on scrollIntoView, which walks
+// every scrollable ancestor (including body) — now that body scroll is locked while the
+// modal is open (see shared/modal.js), that walk is dead weight at best and at worst
+// fights the lock. This only ever touches the modal's own internal scroll container.
+function scrollSettingsContentTo(el) {
+  const container = document.querySelector('.settings-content');
+  if (!container || !el) return;
+  const containerRect = container.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
+  container.scrollTop += elRect.top - containerRect.top;
+}
+
 function activateSettingsSection(section) {
   settingsNavItems.forEach((item) => item.classList.toggle('active', item.dataset.section === section));
   settingsPanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.section === section));
   // Scroll the active panel into view
   const activePanel = document.querySelector('.settings-panel.active');
   if (activePanel) {
-    activePanel.scrollIntoView({ block: 'start' });
+    scrollSettingsContentTo(activePanel);
   }
 }
 settingsNavItems.forEach((item) => {
@@ -891,12 +904,6 @@ function showQueueDetail(bundleId) {
 }
 
 document.getElementById('btn-detail-modal-close').addEventListener('click', closeDetailModal);
-detailModalBackdrop.addEventListener('click', (event) => {
-  if (event.target === detailModalBackdrop) closeDetailModal();
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && detailModalBackdrop.style.display !== 'none') closeDetailModal();
-});
 
 // Cache of the last-rendered JSON per pane so polling can skip a DOM rebuild
 // when nothing actually changed (avoids flicker/lost hover state on idle ticks).
@@ -1534,7 +1541,7 @@ installBtn.addEventListener('click', async () => {
   // A fresh page load always scrolls the modal to its top ("Preferences") — pull the
   // GitHub connection section into view so the user lands on the result of what they
   // just did instead of the section they weren't even looking at.
-  document.getElementById('account-status').scrollIntoView({ block: 'start' });
+  scrollSettingsContentTo(document.getElementById('account-status'));
   if (result === 'error') {
     showAccountResult('GitHub connection failed: ' + (params.get('reason') || 'unknown error'), true);
   }
@@ -1728,7 +1735,7 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
   openSettingsModal();
   activateSettingsSection('team');
   await loadTeam();
-  document.getElementById('team-status').scrollIntoView({ block: 'start' });
+  scrollSettingsContentTo(document.getElementById('team-status'));
   showTeamResult(result.error ? 'Could not join team: ' + result.error : `Joined ${result.name}.`, Boolean(result.error));
 })();
 
