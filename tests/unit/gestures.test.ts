@@ -193,7 +193,7 @@ describe("gesturesRouter — review queue removal", () => {
 		app.use("/bundles", bundlesRouter(state));
 		app.use(
 			"/bundles",
-			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json")),
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json"), "team-a"),
 		);
 		app.use("/bundles", assignmentsRouter(state));
 
@@ -383,7 +383,7 @@ describe("gesturesRouter — review queue removal", () => {
 		state.bundles.set(bundleId, makeBundle(bundleId));
 		state.cards.set(bundleId, makeCard(bundleId));
 		const listener = jest.fn();
-		const unsubscribe = onStateChanged(listener);
+		const unsubscribe = onStateChanged("team-a", listener);
 
 		try {
 			await gesture(bundleId, action);
@@ -683,7 +683,7 @@ describe("gesturesRouter — review card comment posting failures", () => {
 		app.use(actorMiddleware(() => ({ login: "actor", role: "owner" })));
 		app.use(
 			"/bundles",
-			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json")),
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json"), "team-a"),
 		);
 
 		await new Promise<void>((resolve) => {
@@ -748,7 +748,7 @@ describe("gesturesRouter — reject GitHub close failures", () => {
 		app.use("/bundles", bundlesRouter(state));
 		app.use(
 			"/bundles",
-			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json")),
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json"), "team-a"),
 		);
 		app.use(errorHandler);
 
@@ -808,7 +808,7 @@ describe("gesturesRouter — defer decidedStore failures", () => {
 		app.use("/bundles", bundlesRouter(state));
 		app.use(
 			"/bundles",
-			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json")),
+			gesturesRouter(state, queue, join(dataDir, "defers.ndjson"), github, decidedStore, accountState, join(dataDir, "shelf.json"), "team-a"),
 		);
 		app.use(errorHandler);
 

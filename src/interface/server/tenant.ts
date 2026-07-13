@@ -52,6 +52,7 @@ import { auditRouter } from "./routes/audit.js";
 import { adminRouter } from "./routes/admin.js";
 import { githubAppRouter } from "./routes/githubApp.js";
 import { llmAccountRouter } from "./routes/llmAccount.js";
+import { eventsRouter } from "./routes/events.js";
 
 // A teamId is always one this process minted itself (see teamStore.ts's randomBytes hex
 // id), but it's joined straight into a filesystem path below, so it's validated
@@ -214,7 +215,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		DEFAULT_MERGEABILITY_POLL_DELAYS_MS,
 		(owner, name) => repoBinding(accountState.current, owner, name)?.flagConflictsForFleet === true,
 		deepInvestigation,
-		notifyStateChanged,
+		() => notifyStateChanged(teamId),
 	);
 	await queue.load();
 
@@ -245,10 +246,11 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	const router = Router();
 	router.use("/prs", prsRouter(state, pipelineDeps, queue));
 	router.use("/bundles", bundlesRouter(state));
-	router.use("/bundles", gesturesRouter(state, queue, deferLogPath, clientHolder, decidedStore, accountState, shelfPath));
+	router.use("/bundles", gesturesRouter(state, queue, deferLogPath, clientHolder, decidedStore, accountState, shelfPath, teamId));
 	router.use("/bundles", assignmentsRouter(state));
-	router.use("/queue", queueRouter(queue, state, decidedStore, accountState));
+	router.use("/queue", queueRouter(queue, state, decidedStore, accountState, teamId));
 	router.use("/shelf", shelfRouter(state, decidedStore, shelfPath));
+	router.use("/events", eventsRouter(teamId));
 	router.use("/audit", auditRouter(auditStore));
 	router.use(
 		"/admin",
