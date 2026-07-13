@@ -243,12 +243,30 @@ textarea:focus-visible {
    own margin-bottom — this only needs to cover .detail-modal now. */
 .detail-modal .modal-title {
 	margin-bottom: var(--space-5);
+	flex: 0 0 auto;
 }
 
+/* Flex column so the title and Close button stay pinned and only the body
+   scrolls — a centered flex item taller than the viewport (85vh can exceed
+   the visual viewport on mobile browsers with a collapsing address bar)
+   otherwise clips off both the top and bottom with no way to reach either. */
 .modal-backdrop .detail-modal {
 	max-width: 640px;
-	max-height: 85vh;
+	max-height: min(85vh, 85dvh);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+#detail-modal-body {
+	flex: 1 1 auto;
+	min-height: 0;
 	overflow-y: auto;
+	-webkit-overflow-scrolling: touch;
+}
+
+.detail-modal .modal-actions {
+	flex: 0 0 auto;
 }
 
 @media (min-width: 700px) {
