@@ -128,6 +128,13 @@
   @media (max-width: 480px) {
     .list-card, .queue-entry, .audit-entry { padding: var(--space-4); }
     .btn, .btn-icon, select { min-height: 44px; }
+    /* .btn-icon is otherwise a fixed var(--space-8) (32px) square — bump the other
+       axis too so the tap target is ~44x44, not just tall. Native <button>/<select>
+       elements center their content internally even as min-height grows, but <a class="btn">
+       (e.g. the desktop-view link) is a plain inline-block with no such behavior, so it
+       needs explicit centering or its label would sit at the top of the taller box. */
+    .btn-icon { min-width: 44px; }
+    a.btn { display: inline-flex; align-items: center; justify-content: center; }
   }
   .decision-packet {
     margin-top: var(--space-3);
@@ -557,11 +564,15 @@ document.getElementById('btn-settings-modal-close').addEventListener('click', cl
 
 function cardBodyHtml(card) {
   const flags = card.flags.map(f => `<span class="badge badge-neutral">${escapeHtml(f)}</span>`).join('');
-  const uniqueRepos = card.members ? [...new Set(card.members.map(m => `${m.repoOwner}/${m.repoName}`))] : [];
-  const repoBadges = uniqueRepos.map(r => `<span class="badge badge-neutral">${escapeHtml(r)}</span>`).join('');
+  // ReviewCard carries only the anchor member's repo (see repoOwner/repoName on the type) —
+  // it has no `members` array, unlike the bundle detail payload below. A bundle that spans
+  // multiple repos still shows the "spans multiple repos" flag; the full repo list lives in Details.
+  const repoBadge = card.repoOwner && card.repoName
+    ? `<span class="badge badge-neutral">${escapeHtml(`${card.repoOwner}/${card.repoName}`)}</span>`
+    : '';
   return `<div class="card-direction">${escapeHtml(card.directionSummary)} ${directionInferredBadge(card.directionInferred)}</div>
     <div class="card-meta">
-      ${repoBadges}
+      ${repoBadge}
       <span class="badge badge-neutral">${card.memberCount} PR${card.memberCount === 1 ? '' : 's'}</span>
       <span class="badge badge-neutral">Blast radius: ${card.blastRadius} files</span>
       ${driftBadge(card.drift)} ${flags}
@@ -983,11 +994,25 @@ function commit(el, card, action, flyTransform, confirmed) {
 
   // Wait for the fly animation (--duration-slow token) to complete before re-rendering,
   // instead of using a fixed setTimeout. This keeps timing coupled to the design system.
-  function onTransitionEnd() {
+  // A fallback timer (derived from the same computed duration, not a hardcoded guess)
+  // covers the case transitionend never fires — e.g. `el` gets removed/replaced by a
+  // concurrent render before the animation ends, or a 0s transition (duration zeroed by
+  // a reduced-motion override) never dispatches the event at all.
+  let flyFinished = false;
+  function finishFly() {
+    if (flyFinished) return;
+    flyFinished = true;
     el.removeEventListener('transitionend', onTransitionEnd);
+    clearTimeout(fallbackTimer);
     renderStack();
   }
+  function onTransitionEnd(e) {
+    if (e.target !== el) return;
+    finishFly();
+  }
   el.addEventListener('transitionend', onTransitionEnd);
+  const flyDurationMs = parseFloat(getComputedStyle(el).transitionDuration) * 1000 || 0;
+  const fallbackTimer = setTimeout(finishFly, flyDurationMs + 100);
 
   fetch(`/bundles/${card.bundleId}/gesture`, {
     method: 'POST',
