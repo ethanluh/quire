@@ -111,6 +111,14 @@
     .list-card, .queue-entry, .audit-entry { padding: var(--space-4); }
     .queue-entry.card, .audit-entry.card { padding: var(--space-4); }
     .btn, .btn-icon, select { min-height: 44px; }
+    /* Detail modal: reclaim space-6's generous padding on narrow screens so
+       there's more room for content before the header/footer squeeze it out,
+       and keep the modal comfortably clear of the viewport's true edges. */
+    .modal-backdrop .detail-modal {
+      max-height: min(80vh, 80dvh);
+      padding: var(--space-4);
+    }
+    .detail-modal .modal-title { margin-bottom: var(--space-3); }
     /* .btn-icon is otherwise a fixed var(--space-8) (32px) square — bump the other
        axis too so the tap target is ~44x44, not just tall. Native <button>/<select>
        elements center their content internally even as min-height grows, but <a class="btn">
