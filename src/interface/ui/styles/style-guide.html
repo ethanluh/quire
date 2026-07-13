@@ -264,20 +264,11 @@
 				</div>
 			</div>
 
-			<div style="margin-top:var(--space-6)">
-				<span class="label" style="display:block; margin-bottom:var(--space-3)">Settings navigation</span>
-				<div style="max-width:220px">
-					<div class="settings-nav">
-						<button class="settings-nav-item active">Account</button>
-						<button class="settings-nav-item">Team</button>
-						<button class="settings-nav-item">Repositories</button>
-					</div>
-				</div>
-			</div>
-
 			<div class="row" style="margin-top:var(--space-6)">
 				<button class="btn btn-defer" id="btn-open-modal-demo">Open modal</button>
 				<button class="btn btn-reject" id="btn-open-danger-modal-demo">Open danger modal</button>
+				<button class="btn btn-defer" id="btn-open-settings-modal-demo">Open settings modal</button>
+				<button class="btn btn-defer" id="btn-open-detail-modal-demo">Open detail modal</button>
 			</div>
 		</div>
 	</section>
@@ -306,6 +297,59 @@
 	</div>
 </div>
 
+<div class="modal-backdrop" id="settings-modal-demo-backdrop" style="display:none">
+	<div class="card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-demo-title">
+		<div class="settings-header">
+			<h3 class="modal-title" id="settings-modal-demo-title">Settings</h3>
+			<button class="btn btn-defer btn-icon" id="btn-close-settings-modal-demo" title="Close" aria-label="Close settings">
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+			</button>
+		</div>
+		<div class="settings-shell">
+			<div class="settings-nav">
+				<button class="settings-nav-item active" data-section="preferences">Preferences</button>
+				<button class="settings-nav-item" data-section="team">Team</button>
+				<button class="settings-nav-item" data-section="danger">Danger zone</button>
+			</div>
+			<div class="settings-content">
+				<div class="settings-panel active" data-section="preferences">
+					<p class="note" style="margin:0">Larger, denser than a base .card confirm — more sections and longer-running content, so it gets more breathing room than the space-5 every other card uses.</p>
+				</div>
+				<div class="settings-panel" data-section="team">
+					<p class="note" style="margin:0">Teammates on the same team share this GitHub connection, repo, LLM key, and bundle status.</p>
+				</div>
+				<div class="settings-panel" data-section="danger">
+					<p class="note" style="margin:0">Irreversible actions live here, gated behind .modal-danger's confirm.</p>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+<div class="modal-backdrop" id="detail-modal-demo-backdrop" style="display:none">
+	<div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-demo-title">
+		<h3 class="modal-title" id="detail-modal-demo-title">Bundle detail</h3>
+		<div>
+			<p class="note" style="margin:0 0 var(--space-3)">Direction, member PRs, and drift signals for a single bundle render here — same .card shape, wider and scrollable for longer content.</p>
+			<div class="pr-member-list">
+				<div class="pr-member-row">
+					<div class="pr-member-info">
+						<a href="#" target="_blank">ethanluh/quire#123</a>
+						<span class="pr-member-direction">Add dark mode toggle</span>
+					</div>
+					<div class="pr-member-tags">
+						<span class="badge badge-clean">Clean</span>
+						<span class="badge badge-neutral">2 files</span>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="modal-actions">
+			<button class="btn btn-defer" id="btn-close-detail-modal-demo">Close</button>
+		</div>
+	</div>
+</div>
+
 <script>
 const PAPER_SURFACES = [
 	'--color-surface-page',
@@ -325,7 +369,6 @@ const STATE_TOKENS = [
 	['--color-accept', 'accept'],
 	['--color-accept-wash', 'accept-wash'],
 	['--color-defer', 'defer'],
-	['--color-defer-wash', 'defer-wash'],
 	['--color-reject', 'reject'],
 	['--color-reject-wash', 'reject-wash'],
 	['--color-flagged', 'flagged'],
@@ -404,17 +447,6 @@ document.getElementById('theme-toggle').addEventListener('click', (e) => {
 
 // Motion demo replay
 const demoCard = document.getElementById('demo-card');
-document.querySelectorAll('.replay-btn[data-anim]').forEach(btn => {
-	btn.addEventListener('click', () => {
-		demoCard.className = 'demo-card card';
-		requestAnimationFrame(() => {
-			demoCard.classList.add(btn.dataset.anim);
-			demoCard.addEventListener('animationend', () => {
-				demoCard.className = 'demo-card card';
-			}, { once: true });
-		});
-	});
-});
 document.getElementById('replay-settle').addEventListener('click', () => {
 	demoCard.className = 'demo-card';
 	requestAnimationFrame(() => demoCard.classList.add('card'));
@@ -442,10 +474,43 @@ modalDemoBackdrop.addEventListener('click', (e) => {
 modalDangerDemoBackdrop.addEventListener('click', (e) => {
 	if (e.target === modalDangerDemoBackdrop) modalDangerDemoBackdrop.style.display = 'none';
 });
+
+const settingsModalDemoBackdrop = document.getElementById('settings-modal-demo-backdrop');
+document.getElementById('btn-open-settings-modal-demo').addEventListener('click', () => {
+	settingsModalDemoBackdrop.style.display = 'flex';
+});
+document.getElementById('btn-close-settings-modal-demo').addEventListener('click', () => {
+	settingsModalDemoBackdrop.style.display = 'none';
+});
+settingsModalDemoBackdrop.addEventListener('click', (e) => {
+	if (e.target === settingsModalDemoBackdrop) settingsModalDemoBackdrop.style.display = 'none';
+});
+settingsModalDemoBackdrop.querySelectorAll('.settings-nav-item').forEach((item) => {
+	item.addEventListener('click', () => {
+		settingsModalDemoBackdrop.querySelectorAll('.settings-nav-item').forEach((i) => i.classList.toggle('active', i === item));
+		settingsModalDemoBackdrop.querySelectorAll('.settings-panel').forEach((panel) => {
+			panel.classList.toggle('active', panel.dataset.section === item.dataset.section);
+		});
+	});
+});
+
+const detailModalDemoBackdrop = document.getElementById('detail-modal-demo-backdrop');
+document.getElementById('btn-open-detail-modal-demo').addEventListener('click', () => {
+	detailModalDemoBackdrop.style.display = 'flex';
+});
+document.getElementById('btn-close-detail-modal-demo').addEventListener('click', () => {
+	detailModalDemoBackdrop.style.display = 'none';
+});
+detailModalDemoBackdrop.addEventListener('click', (e) => {
+	if (e.target === detailModalDemoBackdrop) detailModalDemoBackdrop.style.display = 'none';
+});
+
 document.addEventListener('keydown', (e) => {
 	if (e.key === 'Escape') {
 		if (modalDemoBackdrop.style.display !== 'none') modalDemoBackdrop.style.display = 'none';
 		if (modalDangerDemoBackdrop.style.display !== 'none') modalDangerDemoBackdrop.style.display = 'none';
+		if (settingsModalDemoBackdrop.style.display !== 'none') settingsModalDemoBackdrop.style.display = 'none';
+		if (detailModalDemoBackdrop.style.display !== 'none') detailModalDemoBackdrop.style.display = 'none';
 	}
 });
 </script>
