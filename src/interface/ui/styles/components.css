@@ -986,22 +986,58 @@ a.btn {
 	color: var(--color-text-secondary);
 }
 
-#toast {
+/* Unified bottom dock — holds the per-bundle/aggregate ring stack above the
+   generic toast, one fixed-position anchor for both instead of two. */
+.notification-dock {
 	position: fixed;
 	left: var(--space-4);
 	right: var(--space-4);
 	bottom: var(--space-4);
-	border-radius: var(--radius-md);
-	padding: var(--space-3);
-	font-size: var(--text-sm);
-	text-align: center;
-	opacity: 0;
-	pointer-events: none;
-	transition: opacity var(--duration-base) var(--ease-standard);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
 	z-index: 100;
 }
 
+#toast {
+	border-radius: var(--radius-md);
+	padding: var(--space-3);
+	font-size: var(--text-sm);
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity var(--duration-base) var(--ease-standard);
+}
+
 #toast.visible {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+#toast .toast-message {
+	flex: 1;
+	text-align: left;
+}
+
+#toast.toast-clickable {
+	cursor: pointer;
+}
+
+.toast-dismiss {
+	flex: 0 0 auto;
+	background: none;
+	border: none;
+	cursor: pointer;
+	font-size: var(--text-base);
+	line-height: 1;
+	color: inherit;
+	opacity: 0.7;
+	padding: 0;
+}
+
+.toast-dismiss:hover {
 	opacity: 1;
 }
 
@@ -1025,14 +1061,9 @@ a.btn {
 }
 
 .queue-notification-stack {
-	position: fixed;
-	top: var(--space-4);
-	right: var(--space-4);
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
-	max-width: 320px;
-	z-index: 90;
 }
 
 .queue-notification {
@@ -1047,7 +1078,18 @@ a.btn {
 	font-size: var(--text-sm);
 }
 
-.queue-notification-conflict {
+/* Matches the tone classes queueNotificationCardHtml() actually renders
+   (neutral/flagged/clean/critical) — .queue-notification-conflict never
+   matched anything and silently dropped the critical-tone border tint. */
+.queue-notification-flagged {
+	border-color: var(--color-flagged);
+}
+
+.queue-notification-clean {
+	border-color: var(--color-accept);
+}
+
+.queue-notification-critical {
 	border-color: var(--color-reject);
 }
 
