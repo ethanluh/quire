@@ -309,6 +309,43 @@ describe("OctokitGitHubClient", () => {
 			const payload = await client.getPullRequest("org", "repo", 7);
 			expect(payload.ciStatus).toBe("pending");
 		});
+
+		it("summarizes completed/total check runs while some are still running", async () => {
+			const { octokit } = makeFakeOctokit({
+				checkRuns: [
+					{ status: "completed", conclusion: "success" },
+					{ status: "in_progress", conclusion: null },
+					{ status: "queued", conclusion: null },
+				],
+			});
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.ciStatus).toBe("pending");
+			expect(payload.ciChecksSummary).toEqual({ completed: 1, total: 3 });
+		});
+
+		it("summarizes check runs as all-complete once every run has finished", async () => {
+			const { octokit } = makeFakeOctokit({
+				checkRuns: [
+					{ status: "completed", conclusion: "success" },
+					{ status: "completed", conclusion: "success" },
+				],
+			});
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.ciStatus).toBe("success");
+			expect(payload.ciChecksSummary).toEqual({ completed: 2, total: 2 });
+		});
+
+		it("omits ciChecksSummary when only the legacy commit status API has data", async () => {
+			const { octokit } = makeFakeOctokit({
+				checkRuns: [],
+				combinedStatus: { state: "pending", statuses: [{ state: "pending" }] },
+			});
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.ciChecksSummary).toBeUndefined();
+		});
 	});
 
 	describe("listOpenPullRequests", () => {

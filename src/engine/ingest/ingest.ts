@@ -39,6 +39,7 @@ export function normalizePR(incoming: IncomingPR): PullRequest {
 		symbolsTouched: incoming.symbolsTouched ?? [],
 		testNamesChanged: filteredTestNames,
 		ciStatus: incoming.ciStatus,
+		...(incoming.ciChecksSummary !== undefined ? { ciChecksSummary: incoming.ciChecksSummary } : {}),
 	};
 }
 

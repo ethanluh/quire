@@ -18,9 +18,22 @@ const CONFLICT_KIND_COPY = {
 
 const QUEUE_STATUS_TIER = { queued: 'neutral', landing: 'flagged', landed: 'clean', closed: 'neutral', conflict: 'critical', aborted: 'critical', investigating: 'flagged', reverted: 'critical' };
 
-function ciStatusBadge(status) {
+function ciStatusBadge(status, checksSummary) {
   const cls = status === 'success' ? 'badge-clean' : status === 'failure' ? 'badge-flagged' : 'badge-neutral';
-  return `<span class="badge ${cls}">CI: ${escapeHtml(status)}</span>`;
+  const counts = status === 'pending' && checksSummary ? ` (${checksSummary.completed}/${checksSummary.total})` : '';
+  return `<span class="badge ${cls}">CI: ${escapeHtml(status)}${counts}</span>`;
+}
+
+// GitHub's mergeable_state reports "unstable" for both "required checks are failing" and
+// "required checks are still running" — it can't tell the two apart. Quire's own ciStatus
+// (from the real Checks API) can, so use it to pick the accurate badge instead of always
+// showing "Checks failing" while CI is still in flight.
+function unstableConflictBadge(ciStatus, ciChecksSummary) {
+  if (ciStatus === 'pending') {
+    const counts = ciChecksSummary ? ` (${ciChecksSummary.completed}/${ciChecksSummary.total})` : '';
+    return { cls: 'badge-neutral', label: `Checks in progress${counts}` };
+  }
+  return CONFLICT_KIND_BADGE.unstable;
 }
 
 function conflictResidualHtml(conflict) {
@@ -126,7 +139,7 @@ function prMemberListHtml(members, drift, mergeStatus) {
       <div class="pr-member-tags">
         ${prMergeStatusBadge(pr, mergeStatus)}
         ${prDriftBadges(pr.id, drift)}
-        ${ciStatusBadge(pr.ciStatus)}
+        ${ciStatusBadge(pr.ciStatus, pr.ciChecksSummary)}
         <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
       </div>
     </div>`;
@@ -138,7 +151,9 @@ function prMergeStatusBadge(pr, mergeStatus) {
   if (mergeStatus.revertedPrIds.includes(pr.id)) return `<span class="badge badge-${PR_MERGE_STATUS_TIER.reverted}">Merge: reverted</span>`;
   if (mergeStatus.mergedPrIds.includes(pr.id)) return `<span class="badge badge-${PR_MERGE_STATUS_TIER.merged}">Merge: merged</span>`;
   if (mergeStatus.conflict && mergeStatus.conflict.prId === pr.id) {
-    const { cls, label } = CONFLICT_KIND_BADGE[mergeStatus.conflict.kind] || CONFLICT_KIND_BADGE.mergeConflict;
+    const { cls, label } = mergeStatus.conflict.kind === 'unstable'
+      ? unstableConflictBadge(pr.ciStatus, pr.ciChecksSummary)
+      : (CONFLICT_KIND_BADGE[mergeStatus.conflict.kind] || CONFLICT_KIND_BADGE.mergeConflict);
     return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
   }
   return `<span class="badge badge-${PR_MERGE_STATUS_TIER.pending}">Merge: pending</span>`;
@@ -146,6 +161,11 @@ function prMergeStatusBadge(pr, mergeStatus) {
 
 function queueStatusBadge(e) {
   if (e.status === 'conflict' && e.conflict && e.conflict.kind) {
+    if (e.conflict.kind === 'unstable') {
+      const member = e.bundle && e.bundle.members && e.bundle.members.find(m => m.id === e.conflict.prId);
+      const { cls, label } = member ? unstableConflictBadge(member.ciStatus, member.ciChecksSummary) : CONFLICT_KIND_BADGE.unstable;
+      return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
+    }
     const { cls, label } = CONFLICT_KIND_BADGE[e.conflict.kind] || CONFLICT_KIND_BADGE.mergeConflict;
     return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
   }
