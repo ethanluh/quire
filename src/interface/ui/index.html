@@ -398,31 +398,32 @@
           <div class="settings-block">
             <div class="settings-block-heading"><span class="dot"></span>Auto-reject gate</div>
             <p class="settings-block-lede"><strong>Shadow</strong> logs a would-be rejection to the audit view without blocking the PR; <strong>off</strong> skips the check entirely.</p>
+            <div id="gate-config-result" class="result-msg hidden" aria-live="polite"></div>
             <div class="settings-row">
               <div>
-                <div class="settings-row-label">Build failure <span class="badge-soon" title="Mode selection not implemented yet">Coming soon</span></div>
+                <div class="settings-row-label">Build failure</div>
                 <p class="settings-row-help">Reject PRs whose CI status is failing.</p>
               </div>
-              <select disabled aria-label="Build failure mode">
-                <option>Enforce</option><option>Shadow</option><option>Off</option>
+              <select class="gate-mode-select" data-criterion="buildFailure" aria-label="Build failure mode">
+                <option value="enforce">Enforce</option><option value="shadow">Shadow</option><option value="off">Off</option>
               </select>
             </div>
             <div class="settings-row">
               <div>
-                <div class="settings-row-label">Out of scope <span class="badge-soon" title="Mode selection not implemented yet">Coming soon</span></div>
+                <div class="settings-row-label">Out of scope <span class="badge-soon" title="Keyword editing not implemented yet">Keywords coming soon</span></div>
                 <p class="settings-row-help">Reject PRs whose declared direction falls outside configured scope keywords. <a href="#" onclick="return false;" aria-disabled="true">Edit keywords</a></p>
               </div>
-              <select disabled aria-label="Out of scope mode">
-                <option>Enforce</option><option>Shadow</option><option>Off</option>
+              <select class="gate-mode-select" data-criterion="outOfScope" aria-label="Out of scope mode">
+                <option value="enforce">Enforce</option><option value="shadow">Shadow</option><option value="off">Off</option>
               </select>
             </div>
             <div class="settings-row">
               <div>
-                <div class="settings-row-label">Duplicate <span class="badge-soon" title="Mode selection not implemented yet">Coming soon</span></div>
+                <div class="settings-row-label">Duplicate</div>
                 <p class="settings-row-help">Reject PRs that duplicate another PR already in the queue.</p>
               </div>
-              <select disabled aria-label="Duplicate mode">
-                <option>Enforce</option><option>Shadow</option><option>Off</option>
+              <select class="gate-mode-select" data-criterion="duplicate" aria-label="Duplicate mode">
+                <option value="enforce">Enforce</option><option value="shadow">Shadow</option><option value="off">Off</option>
               </select>
             </div>
           </div>
@@ -618,6 +619,7 @@ function openSettingsModal() {
   loadAccount();
   loadLlmAccount();
   loadTeam();
+  loadGateConfig();
 }
 function closeSettingsModal() {
   modalManager.close(settingsModalBackdrop);

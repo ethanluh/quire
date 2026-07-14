@@ -17,6 +17,7 @@ function applyRoleVisibility() {
 	document.getElementById('team-name-input').disabled = !canManageMembers();
 	document.getElementById('btn-team-rename').classList.toggle('hidden', !canManageMembers());
 	document.getElementById('btn-team-invite').classList.toggle('hidden', !canManageMembers());
+	document.querySelectorAll('.gate-mode-select').forEach((el) => { el.disabled = !canManageMembers(); });
 }
 
 async function loadTeam() {
@@ -112,4 +113,40 @@ document.getElementById('btn-team-leave').addEventListener('click', async () => 
 		return;
 	}
 	await refreshAfterTeamChange();
+});
+
+// --- Auto-reject gate mode (Pipeline settings tab) ------------------------
+function showGateConfigResult(message, isError) {
+	const el = document.getElementById('gate-config-result');
+	el.textContent = message;
+	el.className = 'result-msg' + (isError ? ' error' : '') + ' visible';
+	el.classList.remove('hidden');
+}
+
+async function loadGateConfig() {
+	const result = await api('GET', '/admin/gate-config');
+	if (result.error) {
+		showGateConfigResult('Error: ' + result.error, true);
+		return;
+	}
+	document.querySelectorAll('.gate-mode-select').forEach((select) => {
+		const criterion = result.effective.find((c) => c.name === select.dataset.criterion);
+		if (criterion) select.value = criterion.mode;
+	});
+}
+
+document.querySelectorAll('.gate-mode-select').forEach((select) => {
+	select.addEventListener('change', async () => {
+		const criteria = [...document.querySelectorAll('.gate-mode-select')].map((el) => ({
+			name: el.dataset.criterion,
+			mode: el.value,
+		}));
+		const result = await api('PATCH', '/admin/gate-config', { criteria });
+		if (result.error) {
+			showGateConfigResult('Error: ' + result.error, true);
+			await loadGateConfig();
+			return;
+		}
+		showGateConfigResult('Saved.', false);
+	});
 });
