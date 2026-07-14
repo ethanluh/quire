@@ -125,6 +125,13 @@ export interface TenantContext {
 	// Exposed so index.ts's per-tenant timers and webhookRouter can log to the right
 	// team's instrumentation file instead of a single global one.
 	conflictLogPath: string;
+	// Recomputes this tenant's effective gate config from the current platform default
+	// (shared.pipelineConfig.gate.criteria) layered with its own GateConfigStore override.
+	// The team's own /admin/gate-config PATCH already calls this internally (see below);
+	// exposed here so index.ts can also call it on every already-loaded tenant right after
+	// a platform-wide default change (PATCH /platform-admin/gate-config), instead of that
+	// change only taking effect on a tenant's next cold start.
+	refreshGateConfig: () => void;
 	// Every route mounted behind a session, composed once per tenant from the exact same
 	// router factories index.ts used to call once at startup — building N independent
 	// instances (one per tenant) instead of one shared instance is what gives each tenant
@@ -246,6 +253,15 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		instrumentationSink,
 	};
 
+	// Same object every pipelineDeps-consuming closure (prsRouter, refreshRepoQueue, ...)
+	// already captured by reference — reassigning .config here is what makes a saved
+	// override (team-level, via adminRouter's onChange below) or a platform-wide default
+	// change (via index.ts calling this on every loaded tenant) visible to the very next
+	// pipeline run without re-wiring any of those closures.
+	function refreshGateConfig(): void {
+		pipelineDeps.config = { gate: computeGateConfig(), bundle: shared.pipelineConfig.bundle };
+	}
+
 	// tenantKey scopes enqueueRefresh's per-repo coalescing lock so two tenants who happen
 	// to select the same owner/name can never short-circuit each other's refresh.
 	const refreshDeps: RefreshDeps = {
@@ -273,13 +289,14 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		"/admin",
 		adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath, conflictLogPath], decidedStore, shelfPath, {
 			store: gateConfigStore,
-			platformDefault: shared.pipelineConfig.gate.criteria,
-			// Same object pipelineDeps' every closure (prsRouter, refreshRepoQueue, ...) already
-			// captured by reference — reassigning .config here is what makes a saved override
-			// visible to the very next pipeline run without re-wiring any of those closures.
-			onChange: () => {
-				pipelineDeps.config = { gate: computeGateConfig(), bundle: shared.pipelineConfig.bundle };
+			// A getter, not a snapshot: index.ts can reassign shared.pipelineConfig wholesale
+			// when the platform-wide default changes (PATCH /platform-admin/gate-config), and
+			// this must reflect that on the very next GET/PATCH here rather than showing the
+			// value that was current when this tenant first loaded.
+			get platformDefault() {
+				return shared.pipelineConfig.gate.criteria;
 			},
+			onChange: refreshGateConfig,
 		}),
 	);
 	router.use(
@@ -328,6 +345,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		auditStore,
 		refreshDeps,
 		conflictLogPath,
+		refreshGateConfig,
 		router,
 	};
 }

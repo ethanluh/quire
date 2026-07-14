@@ -18,6 +18,12 @@
   .empty { color: var(--color-text-muted); padding: var(--space-4) 0; }
   #detail { display: none; margin-top: var(--space-6); border-top: 1px solid var(--color-border); padding-top: var(--space-6); }
   .back-link { display: inline-block; margin-bottom: var(--space-4); cursor: pointer; }
+  section.settings-block { margin-bottom: var(--space-6); }
+  .settings-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-2) 0; }
+  .result-msg { margin-top: var(--space-2); font-size: var(--text-sm); }
+  .result-msg.error { color: var(--color-danger, #b3261e); }
+  textarea#access-control-input { width: 100%; min-height: 4em; font-family: var(--font-mono, monospace); }
+  .hint { color: var(--color-text-muted); font-size: var(--text-sm); }
 </style>
 </head>
 <body>
@@ -51,6 +57,27 @@
     <thead><tr><th>Team</th><th>Criterion</th><th>Reason</th><th>Added</th><th>Overturned</th></tr></thead>
     <tbody id="audit-body"></tbody>
   </table>
+
+  <section class="settings-block">
+    <h2>Access control</h2>
+    <p class="hint" id="access-control-env-note"></p>
+    <p class="hint">Comma-separated GitHub logins, supplementing (never replacing) the <code>QUIRE_PLATFORM_ADMIN_LOGINS</code> env var.</p>
+    <textarea id="access-control-input" aria-label="Supplemental platform admin logins"></textarea>
+    <div>
+      <button class="btn" id="btn-save-access-control">Save</button>
+    </div>
+    <div id="access-control-result" class="result-msg" style="display:none"></div>
+  </section>
+
+  <section class="settings-block">
+    <h2>Platform-wide gate defaults</h2>
+    <p class="hint">What every team inherits unless it sets its own override in its own Settings → Pipeline tab.</p>
+    <div id="gate-defaults-rows"></div>
+    <div>
+      <button class="btn" id="btn-save-gate-defaults">Save</button>
+    </div>
+    <div id="gate-defaults-result" class="result-msg" style="display:none"></div>
+  </section>
 </div>
 
 <script>
@@ -60,6 +87,21 @@ async function get(path) {
   const r = await fetch(path);
   if (!r.ok) return { error: true, status: r.status };
   return r.json();
+}
+
+async function patch(path, body) {
+  const r = await fetch(path, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  let parsed;
+  try { parsed = await r.json(); } catch { parsed = {}; }
+  if (!r.ok) return { error: true, message: parsed.error || `Request failed (${r.status})` };
+  return parsed;
+}
+
+function showResult(id, message, isError) {
+  const el = document.getElementById(id);
+  el.textContent = message;
+  el.className = 'result-msg' + (isError ? ' error' : '');
+  el.style.display = 'block';
 }
 
 async function loadTeams() {
@@ -119,8 +161,58 @@ async function loadAudit() {
     `).join('');
 }
 
+async function loadAccessControl() {
+  const result = await get('/platform-admin/access-control');
+  if (result.error) return;
+  document.getElementById('access-control-env-note').textContent = result.envConfigured
+    ? 'QUIRE_PLATFORM_ADMIN_LOGINS is set — those logins always have access regardless of this list.'
+    : 'QUIRE_PLATFORM_ADMIN_LOGINS is not set — this supplemental list is the only way in right now.';
+  document.getElementById('access-control-input').value = result.supplemental.join(', ');
+}
+
+document.getElementById('btn-save-access-control').addEventListener('click', async () => {
+  const logins = document.getElementById('access-control-input').value.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+  const result = await patch('/platform-admin/access-control', { logins });
+  if (result.error) {
+    showResult('access-control-result', 'Error: ' + result.message, true);
+    return;
+  }
+  showResult('access-control-result', 'Saved.', false);
+  loadAccessControl();
+});
+
+const GATE_CRITERION_LABELS = { buildFailure: 'Build failure', outOfScope: 'Out of scope', duplicate: 'Duplicate' };
+
+async function loadGateDefaults() {
+  const result = await get('/platform-admin/gate-config');
+  if (result.error) return;
+  const rows = document.getElementById('gate-defaults-rows');
+  rows.innerHTML = result.criteria.map((c) => `
+    <div class="settings-row">
+      <div>${esc(GATE_CRITERION_LABELS[c.name] || c.name)}</div>
+      <select class="platform-gate-mode-select" data-criterion="${esc(c.name)}" aria-label="${esc(c.name)} mode">
+        <option value="enforce" ${c.mode === 'enforce' ? 'selected' : ''}>Enforce</option>
+        <option value="shadow" ${c.mode === 'shadow' ? 'selected' : ''}>Shadow</option>
+        <option value="off" ${c.mode === 'off' ? 'selected' : ''}>Off</option>
+      </select>
+    </div>
+  `).join('');
+}
+
+document.getElementById('btn-save-gate-defaults').addEventListener('click', async () => {
+  const criteria = [...document.querySelectorAll('.platform-gate-mode-select')].map((el) => ({ name: el.dataset.criterion, mode: el.value }));
+  const result = await patch('/platform-admin/gate-config', { criteria });
+  if (result.error) {
+    showResult('gate-defaults-result', 'Error: ' + result.message, true);
+    return;
+  }
+  showResult('gate-defaults-result', 'Saved — every team without its own override picks this up immediately.', false);
+});
+
 loadTeams();
 loadAudit();
+loadAccessControl();
+loadGateDefaults();
 </script>
 </body>
 </html>
