@@ -19,6 +19,21 @@ export interface Allowlist {
 // index.ts now throws at boot in production when this var is unset/empty (closing the
 // silent-open-door footgun) — a host that genuinely wants to stay open to any GitHub
 // account needs a non-empty value that still means "allow all" to satisfy that check.
+// The base createAllowlist's "unset/empty -> allow all" convention is right for
+// QUIRE_ALLOWED_GITHUB_LOGINS (a feature you opt into restricting) but wrong for a
+// cross-tenant superadmin gate: an unconfigured platform-admin list must fail CLOSED
+// (no one is a platform admin) rather than open (everyone signed in is). Only the
+// explicit "*" wildcard is honored as an intentional allow-all here, same as the base
+// allowlist — everything else that would otherwise resolve to allow-all resolves to
+// deny-all instead.
+export function createPlatformAdminAllowlist(raw: string | undefined): Allowlist {
+	const parsed = createAllowlist(raw);
+	if (parsed.allowsAll && !parsed.explicitWildcard) {
+		return { isAllowed: () => false, allowsAll: false, explicitWildcard: false };
+	}
+	return parsed;
+}
+
 export function createAllowlist(raw: string | undefined): Allowlist {
 	if (raw !== undefined && raw.trim() === "*") {
 		return { isAllowed: () => true, allowsAll: true, explicitWildcard: true };

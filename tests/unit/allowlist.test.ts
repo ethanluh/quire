@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { createAllowlist } from "../../src/interface/server/allowlist.js";
+import { createAllowlist, createPlatformAdminAllowlist } from "../../src/interface/server/allowlist.js";
 
 describe("createAllowlist", () => {
 	it("allows any login when unset (undefined)", () => {
@@ -66,5 +66,31 @@ describe("createAllowlist", () => {
 			expect(allowlist.allowsAll).toBe(false);
 			expect(allowlist.explicitWildcard).toBe(false);
 		});
+	});
+});
+
+// The platform-admin gate is the highest-privilege surface in the app (cross-tenant), so
+// it must fail CLOSED when unconfigured — the opposite default of the base allowlist above.
+describe("createPlatformAdminAllowlist", () => {
+	it.each([
+		["undefined", undefined],
+		["empty string", ""],
+		["only separators", ", ,"],
+	])("denies everyone when unset (%s), unlike the base allowlist", (_label, raw) => {
+		const allowlist = createPlatformAdminAllowlist(raw);
+		expect(allowlist.isAllowed("anyone")).toBe(false);
+		expect(allowlist.allowsAll).toBe(false);
+	});
+
+	it("allows only logins present in a comma-separated list", () => {
+		const allowlist = createPlatformAdminAllowlist("alice");
+		expect(allowlist.isAllowed("alice")).toBe(true);
+		expect(allowlist.isAllowed("bob")).toBe(false);
+	});
+
+	it("honors the explicit wildcard as an intentional allow-all", () => {
+		const allowlist = createPlatformAdminAllowlist("*");
+		expect(allowlist.isAllowed("anyone")).toBe(true);
+		expect(allowlist.explicitWildcard).toBe(true);
 	});
 });

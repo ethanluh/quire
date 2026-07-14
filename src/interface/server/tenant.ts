@@ -27,11 +27,13 @@ import { DecidedPrStore } from "../../engine/queue/decidedPrStore.js";
 import { notifyStateChanged } from "./changeEvents.js";
 import { PrEffectCache } from "../../engine/cache/prCache.js";
 import { AuditStore, loadAuditStore } from "../../engine/gate/auditStore.js";
+import { GateConfigStore, resolveEffectiveGateConfig } from "../../engine/gate/gateConfigStore.js";
 import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.js";
 import type { StaticAnalyzer } from "../../engine/drift/footprint/analyzer.js";
 import { loadAccount as loadLlmAccount } from "../../engine/llm/account.js";
 import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
+import type { GateConfig } from "../../engine/types/gate.js";
 import { createAccountState, installationForRepo, repoBinding } from "./accountState.js";
 import type { AccountState } from "./accountState.js";
 import { createLlmAccountState } from "./llmAccountState.js";
@@ -147,9 +149,11 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	const driftScreenLogPath = join(dir, "instrumentation/drift-screen.ndjson");
 	const conflictLogPath = join(dir, "instrumentation/conflict-resolution.ndjson");
 	const auditLogPath = join(dir, "instrumentation/audit.ndjson");
+	const gateConfigPath = join(dir, "gate-config.json");
 
 	const decidedStore = new DecidedPrStore(decidedPrsPath);
 	const prCache = new PrEffectCache(prCachePath);
+	const gateConfigStore = new GateConfigStore(gateConfigPath);
 	const state = createServerState();
 
 	// One operator (this tenant) can bind several GitHub App installations — their personal
@@ -169,6 +173,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		decidedStore.load(),
 		prCache.load(),
 		hydrateShelf(state.shelf, shelfPath),
+		gateConfigStore.load(),
 	]);
 	const accountState = createAccountState(installationAccountState);
 
@@ -219,9 +224,21 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	);
 	await queue.load();
 
+	// Resolves this team's effective gate criteria modes: its own GateConfigStore override
+	// (if any) layered onto the platform-wide default (shared.pipelineConfig.gate.criteria).
+	// Recomputed (not just read once) so a PATCH /admin/gate-config takes effect on the very
+	// next pipeline run without needing a restart — see the adminRouter wiring below, which
+	// calls this again after every save.
+	function computeGateConfig(): GateConfig {
+		return {
+			criteria: resolveEffectiveGateConfig(shared.pipelineConfig.gate.criteria, gateConfigStore.get()),
+			...(shared.pipelineConfig.gate.scopeKeywords !== undefined ? { scopeKeywords: shared.pipelineConfig.gate.scopeKeywords } : {}),
+		};
+	}
+
 	const instrumentationSink = createNdjsonInstrumentationSink({ gateLogPath, driftScreenLogPath });
 	const pipelineDeps: PipelineDeps = {
-		config: shared.pipelineConfig,
+		config: { gate: computeGateConfig(), bundle: shared.pipelineConfig.bundle },
 		provider: llmProviderHolder,
 		analyzer: shared.analyzer,
 		auditStore,
@@ -254,7 +271,16 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 	router.use("/audit", auditRouter(auditStore));
 	router.use(
 		"/admin",
-		adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath, conflictLogPath], decidedStore, shelfPath),
+		adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath, conflictLogPath], decidedStore, shelfPath, {
+			store: gateConfigStore,
+			platformDefault: shared.pipelineConfig.gate.criteria,
+			// Same object pipelineDeps' every closure (prsRouter, refreshRepoQueue, ...) already
+			// captured by reference — reassigning .config here is what makes a saved override
+			// visible to the very next pipeline run without re-wiring any of those closures.
+			onChange: () => {
+				pipelineDeps.config = { gate: computeGateConfig(), bundle: shared.pipelineConfig.bundle };
+			},
+		}),
 	);
 	router.use(
 		"/account/github",

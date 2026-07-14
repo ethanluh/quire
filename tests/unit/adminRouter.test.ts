@@ -22,6 +22,21 @@ import { StubLlmProvider } from "../../src/engine/drift/effectList/stubProvider.
 import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 import { DecidedPrStore } from "../../src/engine/queue/decidedPrStore.js";
 import type { PullRequest, Bundle, ReviewCard } from "../../src/engine/types/core.js";
+import type { AdminGateConfigDeps } from "../../src/interface/server/routes/admin.js";
+
+function stubGateConfigDeps(): AdminGateConfigDeps {
+	let override: { criteria: ReadonlyArray<{ name: string; mode: "enforce" | "shadow" | "off" }> } | undefined;
+	return {
+		store: {
+			get: () => override,
+			set: async (next) => {
+				override = next;
+			},
+		} as AdminGateConfigDeps["store"],
+		platformDefault: [],
+		onChange: () => {},
+	};
+}
 
 function makePR(): PullRequest {
 	return {
@@ -109,7 +124,15 @@ describe("adminRouter POST /reset", () => {
 		app.use(stubMembership("owner"));
 		app.use(
 			"/admin",
-			adminRouter(state, auditStore, queue, [deferLogPath, gateLogPath, driftScreenLogPath], decidedStore, join(dir, "shelf.json")),
+			adminRouter(
+				state,
+				auditStore,
+				queue,
+				[deferLogPath, gateLogPath, driftScreenLogPath],
+				decidedStore,
+				join(dir, "shelf.json"),
+				stubGateConfigDeps(),
+			),
 		);
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
@@ -139,11 +162,110 @@ describe("adminRouter POST /reset", () => {
 
 		const app = express();
 		app.use(stubMembership(role));
-		app.use("/admin", adminRouter(state, auditStore, queue, [], decidedStore, join(dir, "shelf.json")));
+		app.use("/admin", adminRouter(state, auditStore, queue, [], decidedStore, join(dir, "shelf.json"), stubGateConfigDeps()));
 		server = app.listen(0);
 		await new Promise((resolve) => server.once("listening", resolve));
 
 		const { status } = await postReset(server);
 		expect(status).toBe(403);
+	});
+});
+
+describe("adminRouter gate-config routes", () => {
+	let dir: string;
+	let server: Server;
+
+	afterEach(async () => {
+		if (server) await new Promise((resolve) => server.close(resolve));
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	async function startApp(role: TeamRole, gateConfig: AdminGateConfigDeps): Promise<Server> {
+		dir = await mkdtemp(join(tmpdir(), "quire-admin-gate-"));
+		const state = createServerState();
+		const auditStore = new AuditStore();
+		const queue = new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson"));
+		await queue.load();
+		const decidedStore = new DecidedPrStore(join(dir, "decided-prs.json"));
+
+		const app = express();
+		app.use(express.json());
+		app.use(stubMembership(role));
+		app.use("/admin", adminRouter(state, auditStore, queue, [], decidedStore, join(dir, "shelf.json"), gateConfig));
+		const srv = app.listen(0);
+		await new Promise((resolve) => srv.once("listening", resolve));
+		return srv;
+	}
+
+	function address(srv: Server) {
+		const addr = srv.address();
+		if (addr === null || typeof addr === "string") throw new Error("no address");
+		return `http://127.0.0.1:${addr.port}`;
+	}
+
+	it("GET reflects the platform default when no override has been saved", async () => {
+		const deps = stubGateConfigDeps();
+		deps.platformDefault = [{ name: "buildFailure", mode: "enforce" }, { name: "duplicate", mode: "shadow" }] as AdminGateConfigDeps["platformDefault"];
+		server = await startApp("admin", deps);
+		const res = await fetch(`${address(server)}/admin/gate-config`);
+		const body = (await res.json()) as { effective: unknown; override: unknown };
+		expect(res.status).toBe(200);
+		expect(body.effective).toEqual(deps.platformDefault);
+		expect(body.override).toBeNull();
+	});
+
+	it("PATCH persists an override, calls onChange, and GET reflects it afterward", async () => {
+		let changed = 0;
+		const deps = stubGateConfigDeps();
+		deps.platformDefault = [{ name: "buildFailure", mode: "enforce" }, { name: "duplicate", mode: "shadow" }] as AdminGateConfigDeps["platformDefault"];
+		deps.onChange = () => {
+			changed++;
+		};
+		server = await startApp("owner", deps);
+
+		const patchRes = await fetch(`${address(server)}/admin/gate-config`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ criteria: [{ name: "duplicate", mode: "off" }] }),
+		});
+		expect(patchRes.status).toBe(200);
+		expect(changed).toBe(1);
+
+		const getRes = await fetch(`${address(server)}/admin/gate-config`);
+		const body = (await getRes.json()) as { effective: Array<{ name: string; mode: string }> };
+		expect(body.effective).toEqual([
+			{ name: "buildFailure", mode: "enforce" },
+			{ name: "duplicate", mode: "off" },
+		]);
+	});
+
+	it("PATCH rejects an unknown criterion name", async () => {
+		server = await startApp("owner", stubGateConfigDeps());
+		const res = await fetch(`${address(server)}/admin/gate-config`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ criteria: [{ name: "notARealCriterion", mode: "off" }] }),
+		});
+		expect(res.status).toBe(400);
+	});
+
+	it("PATCH rejects an unknown mode", async () => {
+		server = await startApp("owner", stubGateConfigDeps());
+		const res = await fetch(`${address(server)}/admin/gate-config`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ criteria: [{ name: "duplicate", mode: "silently-ignore" }] }),
+		});
+		expect(res.status).toBe(400);
+	});
+
+	it.each<TeamRole>(["member"])("rejects %s with 403 on PATCH", async (role) => {
+		server = await startApp(role, stubGateConfigDeps());
+		const res = await fetch(`${address(server)}/admin/gate-config`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ criteria: [] }),
+		});
+		expect(res.status).toBe(403);
 	});
 });

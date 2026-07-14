@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quire — Platform admin</title>
+<link rel="stylesheet" href="styles/tokens.css">
+<link rel="stylesheet" href="styles/components.css">
+<style>
+  body { padding: var(--space-6); max-width: 960px; margin: 0 auto; }
+  h1 { font-family: var(--font-display); margin-bottom: var(--space-1); }
+  .subtitle { color: var(--color-text-muted); margin-bottom: var(--space-6); }
+  table { width: 100%; border-collapse: collapse; margin-bottom: var(--space-6); }
+  th, td { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-border); }
+  th { color: var(--color-text-muted); font-weight: var(--weight-medium); }
+  tr.team-row { cursor: pointer; }
+  tr.team-row:hover { background: var(--color-surface-hover); }
+  .empty { color: var(--color-text-muted); padding: var(--space-4) 0; }
+  #detail { display: none; margin-top: var(--space-6); border-top: 1px solid var(--color-border); padding-top: var(--space-6); }
+  .back-link { display: inline-block; margin-bottom: var(--space-4); cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>Platform admin</h1>
+<p class="subtitle">Cross-team visibility for whoever operates this Quire instance. Not a team's own Settings — see each team's own Settings for that.</p>
+
+<div id="denied" class="empty" style="display:none">You don't have access to the platform admin console.</div>
+
+<div id="content" style="display:none">
+  <h2>Teams</h2>
+  <table id="teams-table">
+    <thead><tr><th>Name</th><th>Members</th><th>Installations</th><th>Watched repos</th><th>Active queue</th></tr></thead>
+    <tbody id="teams-body"></tbody>
+  </table>
+
+  <div id="detail">
+    <span class="back-link" onclick="closeDetail()">&larr; Back to teams</span>
+    <h2 id="detail-name"></h2>
+    <h3>Members</h3>
+    <ul id="detail-members"></ul>
+    <h3>Installations</h3>
+    <ul id="detail-installations"></ul>
+    <h3>Watched repos</h3>
+    <ul id="detail-repos"></ul>
+    <h3>Recent audit entries</h3>
+    <ul id="detail-audit"></ul>
+  </div>
+
+  <h2>Cross-team audit feed</h2>
+  <table id="audit-table">
+    <thead><tr><th>Team</th><th>Criterion</th><th>Reason</th><th>Added</th><th>Overturned</th></tr></thead>
+    <tbody id="audit-body"></tbody>
+  </table>
+</div>
+
+<script>
+function esc(v) { return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+async function get(path) {
+  const r = await fetch(path);
+  if (!r.ok) return { error: true, status: r.status };
+  return r.json();
+}
+
+async function loadTeams() {
+  const result = await get('/platform-admin/teams');
+  if (result.error) {
+    document.getElementById('denied').style.display = 'block';
+    return;
+  }
+  document.getElementById('content').style.display = 'block';
+  const body = document.getElementById('teams-body');
+  if (result.teams.length === 0) {
+    body.innerHTML = '<tr><td colspan="5" class="empty">No teams registered yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = result.teams.map((t) => `
+    <tr class="team-row" onclick="openDetail('${esc(t.teamId)}')">
+      <td>${esc(t.name)}</td>
+      <td>${t.memberCount}</td>
+      <td>${t.installationCount}</td>
+      <td>${t.watchedRepoCount}</td>
+      <td>${t.activeQueueCount}</td>
+    </tr>
+  `).join('');
+}
+
+async function openDetail(teamId) {
+  const t = await get('/platform-admin/teams/' + encodeURIComponent(teamId));
+  if (t.error) return;
+  document.getElementById('detail-name').textContent = t.name;
+  document.getElementById('detail-members').innerHTML = t.members.map((m) => `<li>${esc(m.login)} — ${esc(m.role)}</li>`).join('') || '<li class="empty">None</li>';
+  document.getElementById('detail-installations').innerHTML = t.installations.map((i) => `<li>${esc(i.accountLogin)} (${esc(i.accountType)})</li>`).join('') || '<li class="empty">None connected</li>';
+  document.getElementById('detail-repos').innerHTML = t.repos.map((r) => `<li>${esc(r.owner)}/${esc(r.name)}</li>`).join('') || '<li class="empty">None watched</li>';
+  document.getElementById('detail-audit').innerHTML = t.recentAudit.map((a) => `<li>${esc(a.criterionName)} — ${esc(a.reason)} (${esc(a.addedAt)})</li>`).join('') || '<li class="empty">No audit entries</li>';
+  document.getElementById('detail').style.display = 'block';
+  document.getElementById('detail').scrollIntoView({ behavior: 'smooth' });
+}
+
+function closeDetail() {
+  document.getElementById('detail').style.display = 'none';
+}
+
+async function loadAudit() {
+  const result = await get('/platform-admin/audit');
+  if (result.error) return;
+  const body = document.getElementById('audit-body');
+  const entries = result.entries.slice(0, 200);
+  body.innerHTML = entries.length === 0
+    ? '<tr><td colspan="5" class="empty">No audit entries across any team.</td></tr>'
+    : entries.map((e) => `
+      <tr>
+        <td>${esc(e.teamId)}</td>
+        <td>${esc(e.criterionName)}</td>
+        <td>${esc(e.reason)}</td>
+        <td>${esc(e.addedAt)}</td>
+        <td>${e.overturnedAt ? esc(e.overturnedAt) : '—'}</td>
+      </tr>
+    `).join('');
+}
+
+loadTeams();
+loadAudit();
+</script>
+</body>
+</html>

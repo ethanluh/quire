@@ -15,13 +15,14 @@ import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { TenantRegistry } from "./tenant.js";
 import type { TenantSharedConfig } from "./tenant.js";
 import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
-import { createAllowlist } from "./allowlist.js";
+import { createAllowlist, createPlatformAdminAllowlist } from "./allowlist.js";
 import { requireSession } from "./middleware/requireSession.js";
 import { resolveMembership } from "./middleware/resolveMembership.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { accountRouter } from "./routes/account.js";
 import { createSessionEpochStore } from "./sessionEpoch.js";
 import { teamRouter } from "./routes/team.js";
+import { platformAdminRouter } from "./routes/platformAdmin.js";
 import { migrateLegacyData } from "./migrateLegacyData.js";
 import { TeamStore } from "../../engine/team/teamStore.js";
 import type { WebhookConfig } from "./routes/webhook.js";
@@ -121,6 +122,25 @@ async function main(): Promise<void> {
 			);
 		}
 		console.warn("QUIRE_ALLOWED_GITHUB_LOGINS not set (or empty) — any GitHub account can sign in. Set this before hosting.");
+	}
+
+	// Gates /platform-admin/* — a wholly separate, higher-privilege allowlist from the base
+	// sign-in one above, scoped to whoever operates this Quire instance across every team,
+	// not any one team's owner/admin. Unlike the base allowlist, unset/empty here fails
+	// CLOSED (no one is a platform admin) rather than open — see createPlatformAdminAllowlist.
+	const rawPlatformAdminLogins = process.env["QUIRE_PLATFORM_ADMIN_LOGINS"];
+	const platformAdminAllowlist = createPlatformAdminAllowlist(rawPlatformAdminLogins);
+	if (platformAdminAllowlist.explicitWildcard && isProduction) {
+		throw new Error(
+			'QUIRE_PLATFORM_ADMIN_LOGINS="*" would grant cross-tenant platform-admin access to any signed-in GitHub account — ' +
+				"not allowed when hosting. Set an explicit comma-separated login list instead.",
+		);
+	}
+	if (rawPlatformAdminLogins === undefined || rawPlatformAdminLogins.trim() === "") {
+		console.warn(
+			"QUIRE_PLATFORM_ADMIN_LOGINS not set — the platform admin console is unreachable by anyone. " +
+				"Set it to your GitHub login(s) to use it.",
+		);
 	}
 
 	const appConfig: GitHubAppConfig = {
@@ -266,6 +286,12 @@ async function main(): Promise<void> {
 			DATA_DIR,
 		),
 	);
+
+	// Cross-tenant, read-only for now (Phase 1) — mounted ahead of resolveTenant like
+	// teamRouter above, since it deliberately reads every team's TenantContext at once
+	// rather than the one request's own resolved team. Gated by requirePlatformAdmin
+	// (platformAdminAllowlist), a separate and higher-privilege check than any team's role.
+	app.use("/platform-admin", platformAdminRouter(registry, teamStore, platformAdminAllowlist));
 
 	app.use(resolveTenant(registry));
 
