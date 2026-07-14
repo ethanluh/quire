@@ -891,7 +891,7 @@ function confirmAction(message, opts) {
   confirmModalConfirmBtn.className = 'btn ' + (opts.danger ? 'btn-reject' : 'btn-accept');
   confirmModalConfirmBtn.textContent = opts.confirmLabel || (opts.danger ? 'Yes, proceed' : 'Confirm');
   confirmModalCancelBtn.textContent = opts.cancelLabel || 'Cancel';
-  modalManager.open(confirmModalBackdrop);
+  modalManager.open(confirmModalBackdrop, { onClose: () => closeConfirmModal(false) });
   return new Promise((resolve) => { confirmModalResolve = resolve; });
 }
 
