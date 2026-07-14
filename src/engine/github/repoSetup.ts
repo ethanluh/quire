@@ -7,9 +7,10 @@ const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
 const CLAUDE_HOOK_SCRIPT_PATH = ".claude/hooks/check-declared-direction.sh";
 const GIT_HOOK_PATH = ".githooks/pre-push";
 const SETUP_BRANCH = "quire/setup-declared-direction";
-const DECLARED_DIRECTION_SUBSTRING = "declared-direction";
 
-const DECLARED_DIRECTION_SECTION = `## Declared direction
+// Exported so tests can seed a repo whose committed copy already matches, and so an already
+// content-conforming repo is distinguishable from one carrying a stale, pre-fix version.
+export const DECLARED_DIRECTION_SECTION = `## Declared direction
 
 <!-- declared-direction: one-sentence summary of this PR's product-direction intent -->
 
@@ -38,7 +39,9 @@ jobs:
           fi
 `;
 
-const CLAUDE_MD_SECTION = `## Declared direction
+// Exported so tests can seed a repo whose committed copy already matches, and so an already
+// content-conforming repo is distinguishable from one carrying a stale, pre-fix version.
+export const CLAUDE_MD_SECTION = `## Declared direction
 
 Quire (the PR-triage tool this repo is dogfooded/reviewed through) reads a \`<!-- declared-direction: ... -->\` marker from each PR body to group related PRs into one bundle. When opening a PR here — by hand or as a coding agent — include the marker, e.g.:
 
@@ -117,10 +120,17 @@ interface SetupItem {
 	resolve(existing: RepoFile | undefined): { content: string; conforms: boolean };
 }
 
+// Conforms only on an exact, current-version match — a stale prior version (missing sentences
+// added since) must not be mistaken for "already set up", or a content change here would never
+// reach a repo that was onboarded before it. A stale version is still prepended alongside the
+// fresh one (rather than replacing it in place): reliably locating where a *previous* version's
+// block ends, without a stable end-of-block marker, isn't possible without risking deleting
+// unrelated content that happens to follow it — a duplicate heading is a cosmetic cost, silently
+// destroying part of a repo's file is not.
 function appendSectionResolver(section: string): SetupItem["resolve"] {
 	return (existing) => {
 		if (existing === undefined) return { content: section, conforms: false };
-		if (existing.content.includes(DECLARED_DIRECTION_SUBSTRING)) {
+		if (existing.content.includes(section)) {
 			return { content: existing.content, conforms: true };
 		}
 		return { content: `${section}\n${existing.content}`, conforms: false };
