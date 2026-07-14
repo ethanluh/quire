@@ -2,13 +2,7 @@
 
 <!-- declared-direction: one-sentence summary of this PR's product-direction intent -->
 
-Quire ingests PRs by reading the `declared-direction` marker above. PRs missing it still reach the triage queue, but each lands in its own bundle instead of being grouped with related work.
-
-## Declared direction
-
-<!-- declared-direction: one-sentence summary of this PR's product-direction intent -->
-
-Quire ingests PRs by reading the `declared-direction` marker above. PRs missing it are silently skipped from the triage queue.
+Quire ingests PRs by reading the `declared-direction` marker above. PRs missing it are still triaged, but on their own — as a singleton bundle — instead of grouped with related work.
 
 ## Summary
 
