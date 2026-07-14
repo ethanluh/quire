@@ -514,7 +514,7 @@ export class OctokitGitHubClient implements GitHubClient {
 	}
 
 	private async toRawPRPayload(owner: string, repo: string, pr: PullRequestRef): Promise<RawPRPayload> {
-		const [diffResponse, files, ciStatus] = await Promise.all([
+		const [diffResponse, files, ci] = await Promise.all([
 			// The `pulls.get` response type doesn't vary with `mediaType`, but requesting
 			// the diff format makes `data` a raw unified-diff string at runtime.
 			this.octokit.rest.pulls.get({
@@ -538,7 +538,8 @@ export class OctokitGitHubClient implements GitHubClient {
 			body: pr.body ?? "",
 			headSha: pr.head.sha,
 			diff: diffResponse.data as string,
-			ciStatus,
+			ciStatus: ci.status,
+			...(ci.checksSummary !== undefined ? { ciChecksSummary: ci.checksSummary } : {}),
 			declaredDirection: direction,
 			directionInferred: inferred,
 			...(linkedIssueNumber !== undefined ? { linkedIssueNumber } : {}),
@@ -550,7 +551,7 @@ export class OctokitGitHubClient implements GitHubClient {
 		owner: string,
 		repo: string,
 		ref: string,
-	): Promise<RawPRPayload["ciStatus"]> {
+	): Promise<{ status: RawPRPayload["ciStatus"]; checksSummary?: { completed: number; total: number } }> {
 		// CI can be reported via either the Checks API (GitHub Actions, most modern
 		// integrations) or the legacy Commit Status API (third-party CI predating
 		// Checks) — read both, since trusting only one silently hides the other.
@@ -559,13 +560,21 @@ export class OctokitGitHubClient implements GitHubClient {
 			this.octokit.rest.repos.getCombinedStatusForRef({ owner, repo, ref }).then((r) => r.data),
 		]);
 
-		if (checkRuns.length === 0 && combinedStatus.statuses.length === 0) return "unknown";
-		if (checkRuns.some((run) => run.status !== "completed")) return "pending";
-		if (combinedStatus.state === "pending") return "pending";
+		// Only the Checks API exposes a natural "N of M done" count — the legacy Status API
+		// has no concept of an expected total, so a summary is only ever derived from checkRuns.
+		const checksSummary = checkRuns.length > 0
+			? { completed: checkRuns.filter((run) => run.status === "completed").length, total: checkRuns.length }
+			: undefined;
+		const withSummary = (status: RawPRPayload["ciStatus"]) =>
+			checksSummary !== undefined ? { status, checksSummary } : { status };
+
+		if (checkRuns.length === 0 && combinedStatus.statuses.length === 0) return { status: "unknown" };
+		if (checkRuns.some((run) => run.status !== "completed")) return withSummary("pending");
+		if (combinedStatus.state === "pending") return withSummary("pending");
 
 		const failed = new Set(["failure", "timed_out", "cancelled", "action_required", "stale"]);
-		if (checkRuns.some((run) => run.conclusion !== null && failed.has(run.conclusion))) return "failure";
-		if (combinedStatus.state === "failure") return "failure";
-		return "success";
+		if (checkRuns.some((run) => run.conclusion !== null && failed.has(run.conclusion))) return withSummary("failure");
+		if (combinedStatus.state === "failure") return withSummary("failure");
+		return withSummary("success");
 	}
 }

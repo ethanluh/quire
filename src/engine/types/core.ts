@@ -61,6 +61,9 @@ export interface PullRequest {
 	symbolsTouched: ReadonlyArray<SymbolRef>;
 	testNamesChanged: ReadonlyArray<string>;
 	ciStatus: "success" | "failure" | "pending" | "unknown";
+	// Only set when the Checks API (not just the legacy combined-status API) reported at
+	// least one check run — lets the UI show "pending (2/5)" instead of a bare "pending".
+	ciChecksSummary?: { completed: number; total: number };
 }
 
 export interface Bundle {

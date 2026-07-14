@@ -11,6 +11,9 @@ export interface RawPRPayload {
 	headSha: string;
 	diff: string;
 	ciStatus: "success" | "failure" | "pending" | "unknown";
+	// Only set when the Checks API reported at least one check run — see
+	// PullRequest.ciChecksSummary (types/core.ts).
+	ciChecksSummary?: { completed: number; total: number };
 	declaredDirection: string;
 	// True when declaredDirection was synthesized from title/body rather than an explicit
 	// declared-direction marker — see PullRequest.directionInferred (types/core.ts).
