@@ -280,17 +280,25 @@ async function main(): Promise<void> {
 	const reconcileTimer = setInterval(() => {
 		for (const tenant of registry.all()) {
 			for (const repo of tenant.accountState.current.repos) {
-				enqueueRefresh(repo.owner, repo.name, tenant.refreshDeps).catch((err: unknown) => {
-					if (err instanceof InstallationRevokedError) {
-						console.warn(`Reconciliation poll paused for ${tenant.teamId} (${repo.owner}/${repo.name}): ${err.message}`);
-						return;
-					}
-					if (err instanceof AccountChangedError) {
-						console.warn(`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
-						return;
-					}
-					console.error(`Reconciliation poll failed for ${tenant.teamId} (${repo.owner}/${repo.name}):`, err);
-				});
+				enqueueRefresh(repo.owner, repo.name, tenant.refreshDeps)
+					.then((result) => {
+						if (result.error !== undefined) {
+							console.error(
+								`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) ingested with errors: ${result.error}`,
+							);
+						}
+					})
+					.catch((err: unknown) => {
+						if (err instanceof InstallationRevokedError) {
+							console.warn(`Reconciliation poll paused for ${tenant.teamId} (${repo.owner}/${repo.name}): ${err.message}`);
+							return;
+						}
+						if (err instanceof AccountChangedError) {
+							console.warn(`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
+							return;
+						}
+						console.error(`Reconciliation poll failed for ${tenant.teamId} (${repo.owner}/${repo.name}):`, err);
+					});
 			}
 		}
 	}, reconcileIntervalMs);
