@@ -159,6 +159,58 @@ function prMergeStatusBadge(pr, mergeStatus) {
   return `<span class="badge badge-${PR_MERGE_STATUS_TIER.pending}">Merge: pending</span>`;
 }
 
+const INVESTIGATION_STATUS_TIER = { running: 'neutral', awaitingReview: 'flagged', failed: 'critical', accepted: 'clean', rejected: 'critical' };
+const INVESTIGATION_STATUS_LABEL = { running: 'running', awaitingReview: 'awaiting review', failed: 'failed', accepted: 'accepted', rejected: 'rejected' };
+const INVESTIGATION_STATUS_DOT_CLASS = { running: 'running', awaitingReview: 'awaiting', failed: 'failed', accepted: 'accepted', rejected: 'rejected' };
+
+// Merge progress across the bundle's member PRs — "M/N merged" plus a fill bar, except
+// for the two terminal statuses where a bar reads as still-in-motion when it isn't:
+// aborted (the rest simply stopped retrying, nothing keeps landing) and reverted (the
+// bar's "fullness" metaphor doesn't fit a count that went backwards).
+function queueProgressHtml(e) {
+  const total = e.bundle.members.length;
+  const merged = e.mergedPrIds.length;
+  if (e.status === 'aborted') {
+    const remaining = total - merged;
+    return `<span class="progress-label">${merged}/${total} merged${remaining ? ` &middot; ${remaining} remaining aborted` : ''}</span>`;
+  }
+  if (e.status === 'reverted') {
+    const reverted = e.revertedPrIds.length;
+    return `<span class="progress-label">${merged}/${total} merged${reverted ? ` &middot; ${reverted} reverted` : ''}</span>`;
+  }
+  const pct = total ? Math.round((merged / total) * 100) : 0;
+  const critical = e.status === 'conflict';
+  return `<span class="progress-label">${merged}/${total} merged</span><span class="progress-track"><span class="progress-fill${critical ? ' critical' : ''}" style="width:${pct}%"></span></span>`;
+}
+
+// Compact one-line conflict reason for the collapsed card — headline + when, not the
+// full reason/guidance text (that stays in conflictResidualHtml() inside the modal).
+function queueConflictReasonHtml(conflict) {
+  if (!conflict) return '';
+  const { headline } = CONFLICT_KIND_COPY[conflict.kind] || CONFLICT_KIND_COPY.mergeConflict;
+  return `<span class="status-reason">${escapeHtml(headline)} ${escapeHtml(conflict.detectedAt)}</span>`;
+}
+
+// Tally of in-flight deep investigations by status, for the collapsed card — the full
+// per-file detail (rationale, evidence, accept/reject) stays in investigationsHtml().
+function investigationSummaryHtml(investigations) {
+  if (!investigations || !investigations.length) return '';
+  const counts = {};
+  investigations.forEach((inv) => { counts[inv.status] = (counts[inv.status] || 0) + 1; });
+  const items = Object.keys(INVESTIGATION_STATUS_LABEL)
+    .filter((status) => counts[status])
+    .map((status) => `<span class="dot ${INVESTIGATION_STATUS_DOT_CLASS[status]}">${counts[status]} ${INVESTIGATION_STATUS_LABEL[status]}</span>`);
+  return `<span class="inv-tally">${items.join('')}</span>`;
+}
+
+// The card's secondary status row — whatever's relevant to this bundle's current
+// status, per the reviewed mockup: investigation tally while investigating, otherwise
+// merge progress plus a conflict reason when there is one.
+function queueStatusRowHtml(e) {
+  if (e.status === 'investigating') return investigationSummaryHtml(e.investigations);
+  return queueProgressHtml(e) + (e.status === 'conflict' ? queueConflictReasonHtml(e.conflict) : '');
+}
+
 function queueStatusBadge(e) {
   if (e.status === 'conflict' && e.conflict && e.conflict.kind) {
     if (e.conflict.kind === 'unstable') {

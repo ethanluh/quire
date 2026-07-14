@@ -137,6 +137,33 @@
   .queue-entry.card, .audit-entry.card { border-radius: var(--radius-lg); padding: var(--space-5); }
   .audit-entry.card { gap: var(--space-2); }
 
+  /* Mobile queue cards stack fully instead of packing the badge/Details/action
+     buttons into the same row as the direction text (components.css's shared
+     .queue-entry-header row is desktop-only) — that packing is what forced
+     overflow/wrap at mobile card widths. */
+  .queue-entry.stacked { gap: var(--space-3); }
+  .queue-entry.stacked .entry-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .queue-entry.stacked .entry-actions-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--color-border);
+  }
+  .queue-entry.stacked .entry-actions-row .btn {
+    flex: 1 1 auto;
+    text-align: center;
+    width: auto;
+    margin-top: 0;
+  }
+  .queue-entry.stacked .queue-entry-status { border-top: none; padding-top: 0; }
+
   .repo-entry { justify-content: space-between; }
 
   /* Touch targets get the taller, uniform padding; desktop's shared rule uses
@@ -158,8 +185,6 @@
      row's button (e.g. installation Disconnect, member Remove) to fill the row. */
   .repo-entry .btn { width: auto; margin-top: 0; padding: var(--space-2) var(--space-5); flex: 0 0 auto; }
   .repo-entry select { width: auto; margin-bottom: 0; flex: 0 0 auto; }
-
-  .queue-entry-actions .btn { width: auto; margin-top: 0; }
 
   .audit-list { display: flex; flex-direction: column; gap: var(--space-3); overflow-y: auto; }
 
@@ -1167,15 +1192,17 @@ async function loadQueue() {
       ['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept btn-reattempt-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}">Reattempt</button>` : '',
       ['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject btn-abort-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}" data-merged-pr-count="${e.mergedPrIds.length}" data-member-count="${e.bundle.members.length}">Abort</button>` : '',
     ].filter(Boolean).join('');
-    return `<div class="queue-entry card">
-    <div>
-      <div>${escapeHtml(e.bundle.direction)}</div>
-      <div class="entry-id">${escapeHtml(e.bundleId)}</div>
-    </div>
-    <div class="queue-entry-actions">
+    const statusRow = queueStatusRowHtml(e);
+    return `<div class="queue-entry card stacked">
+    <div>${escapeHtml(e.bundle.direction)}</div>
+    <div class="entry-meta">
+      <span class="entry-id">${escapeHtml(e.bundleId)}</span>
       ${queueStatusBadge(e)}
+    </div>
+    ${statusRow ? `<div class="queue-entry-status">${statusRow}</div>` : ''}
+    <div class="entry-actions-row">
       <button class="btn btn-show-queue-detail" data-bundle-id="${escapeHtml(e.bundleId)}">Details</button>
-      ${actionButtons ? `<span class="btn-group">${actionButtons}</span>` : ''}
+      ${actionButtons}
     </div>
   </div>`;
   }).join('');

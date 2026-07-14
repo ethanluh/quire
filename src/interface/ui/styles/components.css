@@ -764,8 +764,15 @@ a.btn {
 	padding: var(--space-3) var(--space-4);
 	font-size: var(--text-sm);
 	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.queue-entry-header {
+	display: flex;
 	justify-content: space-between;
 	align-items: center;
+	gap: var(--space-3);
 }
 
 .queue-entry .entry-id {
@@ -778,6 +785,7 @@ a.btn {
 	display: flex;
 	align-items: center;
 	gap: var(--space-2);
+	flex-shrink: 0;
 }
 
 .queue-entry-actions .btn {
@@ -794,6 +802,77 @@ a.btn {
 	padding-left: var(--space-2);
 	border-left: 1px solid var(--color-border);
 }
+
+/* Secondary row: whatever's relevant to the bundle's current resolution
+   status — merge progress, a compact conflict reason, or an investigation
+   tally (see queueStatusRowHtml() in shared/render.js). */
+.queue-entry-status {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	flex-wrap: wrap;
+	font-size: var(--text-xs);
+	color: var(--color-text-muted);
+	padding-top: var(--space-2);
+	border-top: 1px solid var(--color-border);
+}
+
+.queue-entry-status .progress-track {
+	width: 64px;
+	height: 5px;
+	border-radius: var(--radius-pill);
+	background: var(--color-surface-sunken);
+	overflow: hidden;
+	flex-shrink: 0;
+}
+
+.queue-entry-status .progress-fill {
+	display: block;
+	height: 100%;
+	background: var(--color-accept);
+	border-radius: var(--radius-pill);
+}
+
+.queue-entry-status .progress-fill.critical {
+	background: var(--color-reject);
+}
+
+.queue-entry-status .progress-label {
+	font-variant-numeric: tabular-nums;
+	color: var(--color-text-secondary);
+}
+
+.queue-entry-status .status-reason {
+	color: var(--color-text-secondary);
+	font-style: italic;
+}
+
+.queue-entry-status .inv-tally {
+	display: inline-flex;
+	gap: var(--space-2);
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.queue-entry-status .inv-tally .dot {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.queue-entry-status .inv-tally .dot::before {
+	content: '';
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	display: inline-block;
+}
+
+.queue-entry-status .inv-tally .dot.running::before { background: var(--color-text-muted); }
+.queue-entry-status .inv-tally .dot.awaiting::before { background: var(--color-flagged); }
+.queue-entry-status .inv-tally .dot.failed::before { background: var(--color-reject); }
+.queue-entry-status .inv-tally .dot.accepted::before { background: var(--color-accept); }
+.queue-entry-status .inv-tally .dot.rejected::before { background: var(--color-reject); }
 
 .audit-entry {
 	background: var(--color-surface-card);
