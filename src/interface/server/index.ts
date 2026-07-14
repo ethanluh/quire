@@ -19,7 +19,6 @@ import { createAllowlist } from "./allowlist.js";
 import { requireSession } from "./middleware/requireSession.js";
 import { resolveMembership } from "./middleware/resolveMembership.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
-import { eventsRouter } from "./routes/events.js";
 import { accountRouter } from "./routes/account.js";
 import { createSessionEpochStore } from "./sessionEpoch.js";
 import { teamRouter } from "./routes/team.js";
@@ -30,6 +29,7 @@ import { webhookRouter } from "./routes/webhook.js";
 import { verifyGithubSignature } from "./middleware/webhookSignature.js";
 import { errorHandler } from "./middleware/errors.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
+import { setUpDeclaredDirectionConvention } from "../../engine/github/repoSetup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Not derived from __dirname: the compiled dist/ output nests one level deeper than the
@@ -42,6 +42,15 @@ const DATA_DIR = process.env.QUIRE_DATA_DIR ?? join(process.cwd(), "data");
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const QUEUE_REFRESH_INTERVAL_MS =
 	parseInt(process.env["QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES"] ?? "5", 10) * 60 * 1000;
+
+// Opening/updating a setup PR is more visible (and more GitHub-API-call-heavy — 6 file reads per
+// repo) than a plain refresh, so this defaults to once a day rather than reusing the tighter
+// refresh cadences. An explicit QUIRE_SETUP_RECONCILE_INTERVAL_MINUTES overrides it; empty or
+// non-numeric values fall back rather than becoming a NaN interval, same defensiveness as
+// QUIRE_RECONCILE_INTERVAL_MINUTES below.
+const parsedSetupReconcileMinutes = parseInt(process.env["QUIRE_SETUP_RECONCILE_INTERVAL_MINUTES"] ?? "", 10);
+const SETUP_RECONCILE_INTERVAL_MS =
+	(Number.isFinite(parsedSetupReconcileMinutes) && parsedSetupReconcileMinutes > 0 ? parsedSetupReconcileMinutes : 1440) * 60 * 1000;
 
 const pipelineConfig: PipelineConfig = {
 	gate: {
@@ -241,12 +250,6 @@ async function main(): Promise<void> {
 
 	app.use(session);
 
-	// Push-side companion to the per-tenant polling routes below: a global "refresh" bus,
-	// not tenant data itself, so it's fine to share across every signed-in team the same
-	// way the session gate above is — each client only re-polls its own tenant-scoped
-	// endpoints when it fires (see routes/events.ts).
-	app.use("/events", eventsRouter());
-
 	app.use(resolveMembership(teamStore));
 
 	// Team management (create/join/switch/invite/leave) operates on the login-level
@@ -287,21 +290,54 @@ async function main(): Promise<void> {
 	const reconcileTimer = setInterval(() => {
 		for (const tenant of registry.all()) {
 			for (const repo of tenant.accountState.current.repos) {
-				enqueueRefresh(repo.owner, repo.name, tenant.refreshDeps).catch((err: unknown) => {
-					if (err instanceof InstallationRevokedError) {
-						console.warn(`Reconciliation poll paused for ${tenant.teamId} (${repo.owner}/${repo.name}): ${err.message}`);
-						return;
-					}
-					if (err instanceof AccountChangedError) {
-						console.warn(`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
-						return;
-					}
-					console.error(`Reconciliation poll failed for ${tenant.teamId} (${repo.owner}/${repo.name}):`, err);
-				});
+				enqueueRefresh(repo.owner, repo.name, tenant.refreshDeps)
+					.then((result) => {
+						if (result.error !== undefined) {
+							console.error(
+								`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) ingested with errors: ${result.error}`,
+							);
+						}
+					})
+					.catch((err: unknown) => {
+						if (err instanceof InstallationRevokedError) {
+							console.warn(`Reconciliation poll paused for ${tenant.teamId} (${repo.owner}/${repo.name}): ${err.message}`);
+							return;
+						}
+						if (err instanceof AccountChangedError) {
+							console.warn(`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
+							return;
+						}
+						console.error(`Reconciliation poll failed for ${tenant.teamId} (${repo.owner}/${repo.name}):`, err);
+					});
 			}
 		}
 	}, reconcileIntervalMs);
 	reconcileTimer.unref();
+
+	// Re-runs Quire's declared-direction setup PR against every repo of every known tenant, so a
+	// change to the convention's own content (PR template, CLAUDE.md section, CI workflow, hooks)
+	// reaches repos that were onboarded before the change — not just newly onboarded ones.
+	// setUpDeclaredDirectionConvention() already short-circuits to "already-set-up" once every
+	// item conforms, so calling it on a schedule is a no-op except when something actually
+	// drifted. Same cross-tenant iteration and per-repo error isolation as the reconcile timer.
+	const setupReconcileTimer = setInterval(() => {
+		for (const tenant of registry.all()) {
+			for (const repo of tenant.accountState.current.repos) {
+				setUpDeclaredDirectionConvention(tenant.clientHolder, repo.owner, repo.name).catch((err: unknown) => {
+					if (err instanceof InstallationRevokedError) {
+						console.warn(`Declared-direction setup rerun paused for ${tenant.teamId} (${repo.owner}/${repo.name}): ${err.message}`);
+						return;
+					}
+					if (err instanceof AccountChangedError) {
+						console.warn(`Declared-direction setup rerun for ${tenant.teamId} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
+						return;
+					}
+					console.error(`Declared-direction setup rerun failed for ${tenant.teamId} (${repo.owner}/${repo.name}):`, err);
+				});
+			}
+		}
+	}, SETUP_RECONCILE_INTERVAL_MS);
+	setupReconcileTimer.unref();
 
 	// Keeps queued PRs from drifting far behind main while they wait their turn — a bundle
 	// stuck behind several others that land ahead of it would otherwise only get checked (and

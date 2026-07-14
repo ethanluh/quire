@@ -39,6 +39,10 @@ export const IncomingPRSchema = z.object({
 		kind: z.enum(["function", "class", "variable", "type", "export"]),
 	})).max(MAX_SYMBOLS).optional(),
 	ciStatus: z.enum(["success", "failure", "pending", "unknown"]).default("unknown"),
+	ciChecksSummary: z.object({
+		completed: z.number().int().nonnegative(),
+		total: z.number().int().nonnegative(),
+	}).optional(),
 });
 
 export type IncomingPR = z.infer<typeof IncomingPRSchema>;

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "@jest/globals";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadInstallation, saveInstallation, clearInstallation } from "../../src/engine/github/installation.js";
@@ -95,18 +95,52 @@ describe("github installation persistence", () => {
 		expect(loaded).toBeUndefined();
 	});
 
-	it("treats the pre-multi-repo shape (selectedRepo/autoMergeOnAccept at the top level) as not connected (no migration path)", async () => {
+	it("migrates the pre-multi-repo shape (selectedRepo/autoMergeOnAccept at the top level) into the repos array, in memory only", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-installation-"));
+		const path = join(dir, "installation.json");
+		const raw = JSON.stringify({
+			installations: [BINDING_A],
+			selectedRepo: { owner: "octocat", name: "widgets", installationId: 42 },
+			autoMergeOnAccept: true,
+		});
+		await writeFile(path, raw, "utf8");
+
+		const loaded = await loadInstallation(path);
+
+		expect(loaded).toEqual({
+			installations: [BINDING_A],
+			repos: [
+				{
+					owner: "octocat",
+					name: "widgets",
+					installationId: 42,
+					autoMergeOnAccept: true,
+					addedAt: BINDING_A.boundAt,
+					addedBy: "migration",
+				},
+			],
+		});
+
+		// Not persisted: migration is a load-time convenience, not a disk write, since
+		// loadInstallation is called from unlocked read paths.
+		expect(await readFile(path, "utf8")).toBe(raw);
+	});
+
+	it("drops the legacy selectedRepo instead of fabricating a binding when its installationId has no match in installations", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-installation-"));
 		const path = join(dir, "installation.json");
 		await writeFile(
 			path,
-			JSON.stringify({ installations: [BINDING_A], selectedRepo: { owner: "octocat", name: "widgets", installationId: 42 } }),
+			JSON.stringify({
+				installations: [BINDING_A],
+				selectedRepo: { owner: "octocat", name: "widgets", installationId: 999 },
+			}),
 			"utf8",
 		);
 
 		const loaded = await loadInstallation(path);
 
-		expect(loaded).toBeUndefined();
+		expect(loaded).toEqual({ installations: [BINDING_A], repos: [] });
 	});
 
 	it("clearInstallation removes the file without throwing if it never existed", async () => {

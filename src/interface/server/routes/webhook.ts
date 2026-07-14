@@ -451,7 +451,12 @@ export function webhookRouter(
 						// auto-merge trigger: closing isn't a landing event.
 						await refreshDeps.queue.recordExternalClose(parsed.pullRequestId);
 					}
-					await enqueueRefresh(parsed.repoOwner, parsed.repoName, refreshDeps);
+					const refreshed = await enqueueRefresh(parsed.repoOwner, parsed.repoName, refreshDeps);
+					if (refreshed.error !== undefined) {
+						console.error(
+							`Webhook-triggered refresh for ${parsed.repoOwner}/${parsed.repoName} ingested with errors: ${refreshed.error}`,
+						);
+					}
 				},
 				forgetDelivery(rawDeliveryId),
 			);

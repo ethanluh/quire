@@ -82,6 +82,18 @@ Quire authenticates against GitHub as a GitHub App, not a personal access token.
    - **Webhook secret** — set your own value under "Webhook" → `GITHUB_APP_WEBHOOK_SECRET`.
 6. Fill in the resulting values in your `.env` (copied from `.env.example`), then from the running app's Settings (gear icon in the header) click "Install GitHub App" to bind an installation — this is what's persisted (per team, under `data/teams/<teamId>/installation.json`) and used for API access, distinct from signing in. Every team gets its own installation, repo selection, and PR queue, fully isolated from every other team; teammates on the same team share all of it.
 
+## New-repo setup
+
+The first time you select a repo that isn't already set up for the declared-direction convention, Quire offers to open a setup PR for it (`src/engine/github/repoSetup.ts`). Accepting it adds, in one PR:
+
+- A "Declared direction" section in `.github/pull_request_template.md` so contributors see the marker's expected format.
+- A CI workflow (`.github/workflows/quire-declared-direction.yml`) that fails a PR whose body is missing the marker.
+- A section in the repo's own `CLAUDE.md` documenting the convention for human and coding-agent contributors.
+- A Claude Code hook (`.claude/settings.json` + `.claude/hooks/check-declared-direction.sh`) that blocks `gh pr create`/`gh pr edit` commands missing the marker, so agent-authored PRs carry it by construction.
+- A local git pre-push reminder (`.githooks/pre-push`) — run `git config core.hooksPath .githooks` once after cloning to enable it.
+
+Each item is applied independently and idempotently: re-running setup on a repo that already has some of these (e.g. a hand-written PR template) only adds what's missing, and a fully-conforming repo reports `already-set-up` with no PR opened.
+
 ## Team membership and GitHub collaborator access
 
 When a login joins a Quire team (via an invite link), is removed from one (leaving, or an owner/admin removing them), or has its role changed, Quire best-effort syncs their GitHub collaborator permission on every repo the team currently has bound — `push` for an owner/admin, `pull` for a plain member. Re-redeeming an invite doesn't change an existing member's role or permission, even if the invite itself was minted for a higher role. Unbinding a repo from the team (or disconnecting an installation) also revokes every current member's GitHub collaborator access on that repo, not just future joins/leaves. This requires the "Administration: Read & write" permission above; if it's missing (e.g. an installation that hasn't re-approved it yet) or the team has no repos bound yet, the underlying Quire-side change itself still succeeds — only the GitHub-side sync is skipped or fails. A failed sync is logged server-side and also recorded per team; an owner/admin can read the current unresolved list from `GET /account/team/collaborator-sync-issues`, which clears an entry automatically once a later sync for that same login/repo succeeds.
@@ -99,6 +111,7 @@ Merge-queue entries also normally flip to merged/closed via the `pull_request` w
 - [`docs/engineering-handoff.md`](docs/engineering-handoff.md) — full build spec: architecture, design invariants, drift-detection design, data model, phases, prior art, and success metrics.
 - [`docs/design-feel.md`](docs/design-feel.md) — the intended visual/interaction tone, inferred from the product's stated values; the UI is styled to it.
 - [`src/interface/ui/styles/tokens.css`](src/interface/ui/styles/tokens.css) + [`components.css`](src/interface/ui/styles/components.css) — the design-feel tone translated into design tokens and reference components; open [`src/interface/ui/styles/style-guide.html`](src/interface/ui/styles/style-guide.html) in a browser to see them.
+- [`docs/graph-theory-math-notes.md`](docs/graph-theory-math-notes.md) — research notes on where graph theory/combinatorics could sharpen specific gaps in bundling, symbol-coherence checking, and merge-queue scheduling (issues [#247](https://github.com/ethanluh/quire/issues/247)–[#250](https://github.com/ethanluh/quire/issues/250)); not yet implemented.
 - [`CLAUDE.md`](CLAUDE.md) — guidance for Claude Code agents working in this repo.
 
 ## Contributing

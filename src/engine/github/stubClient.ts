@@ -182,6 +182,13 @@ export class StubGitHubClient implements GitHubClient {
 		return this.filesFor(owner, repo, this.defaultBranch).get(path);
 	}
 
+	// Test helper: unlike getFileContent (which only reads the default branch, mirroring what a
+	// real caller sees), this lets a test inspect what actually got committed to a non-default
+	// branch — e.g. a setup PR's branch — without needing a real GitHub-hosted diff view.
+	getFileContentOnBranch(owner: string, repo: string, branch: string, path: string): RepoFile | undefined {
+		return this.filesFor(owner, repo, branch).get(path);
+	}
+
 	async getDefaultBranch(_owner: string, _repo: string): Promise<string> {
 		return this.defaultBranch;
 	}

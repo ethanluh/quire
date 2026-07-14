@@ -1,7 +1,9 @@
 import { describe, it, expect } from "@jest/globals";
 import { StubGitHubClient } from "../../src/engine/github/stubClient.js";
 import {
+	DECLARED_DIRECTION_SECTION,
 	WORKFLOW_CONTENT,
+	CLAUDE_MD_SECTION,
 	CLAUDE_HOOK_SCRIPT_CONTENT,
 	CLAUDE_SETTINGS_CONTENT,
 	GIT_HOOK_CONTENT,
@@ -17,9 +19,9 @@ const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
 const GIT_HOOK_PATH = ".githooks/pre-push";
 
 function seedFullyConformingRepo(client: StubGitHubClient): void {
-	client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+	client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, DECLARED_DIRECTION_SECTION);
 	client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, WORKFLOW_CONTENT);
-	client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+	client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, CLAUDE_MD_SECTION);
 	client.seedFile("acme-corp", "widgets", CLAUDE_HOOK_SCRIPT_PATH, CLAUDE_HOOK_SCRIPT_CONTENT);
 	client.seedFile("acme-corp", "widgets", CLAUDE_SETTINGS_PATH, CLAUDE_SETTINGS_CONTENT);
 	client.seedFile("acme-corp", "widgets", GIT_HOOK_PATH, GIT_HOOK_CONTENT);
@@ -78,7 +80,7 @@ describe("setUpDeclaredDirectionConvention", () => {
 
 	it("still creates a PR when only the CLAUDE.md section is missing", async () => {
 		const client = new StubGitHubClient();
-		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, DECLARED_DIRECTION_SECTION);
 		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, WORKFLOW_CONTENT);
 		client.seedFile("acme-corp", "widgets", CLAUDE_HOOK_SCRIPT_PATH, CLAUDE_HOOK_SCRIPT_CONTENT);
 		client.seedFile("acme-corp", "widgets", CLAUDE_SETTINGS_PATH, CLAUDE_SETTINGS_CONTENT);
@@ -93,9 +95,9 @@ describe("setUpDeclaredDirectionConvention", () => {
 
 	it("still creates a PR when only the Claude Code hook (script + settings) is missing", async () => {
 		const client = new StubGitHubClient();
-		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, DECLARED_DIRECTION_SECTION);
 		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, WORKFLOW_CONTENT);
-		client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, CLAUDE_MD_SECTION);
 		client.seedFile("acme-corp", "widgets", GIT_HOOK_PATH, GIT_HOOK_CONTENT);
 
 		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
@@ -133,6 +135,22 @@ describe("setUpDeclaredDirectionConvention", () => {
 		client.seedFile("acme-corp", "widgets", CLAUDE_SETTINGS_PATH, `${JSON.stringify(mergedWithExtras, null, "\t")}\n`);
 
 		await expect(checkDeclaredDirectionConvention(client, "acme-corp", "widgets")).resolves.toBe(true);
+	});
+
+	it("treats a stale CLAUDE.md section as non-conforming instead of silently as already set up", async () => {
+		const client = new StubGitHubClient();
+		seedFullyConformingRepo(client);
+		const staleSection = "## Declared direction\n\n<!-- declared-direction: ... -->\n";
+		client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, `${staleSection}\n# widgets\n\nExisting project doc.\n`);
+
+		await expect(checkDeclaredDirectionConvention(client, "acme-corp", "widgets")).resolves.toBe(false);
+
+		const result = await setUpDeclaredDirectionConvention(client, "acme-corp", "widgets");
+
+		expect(result.status).toBe("created");
+		const claudeMd = await client.getFileContentOnBranch("acme-corp", "widgets", "quire/setup-declared-direction", CLAUDE_MD_PATH);
+		// Prepended rather than replaced in place — see appendSectionResolver's comment on why.
+		expect(claudeMd?.content).toBe(`${CLAUDE_MD_SECTION}\n${staleSection}\n# widgets\n\nExisting project doc.\n`);
 	});
 
 	it("returns the already-open setup PR instead of opening a duplicate on a second call", async () => {
@@ -173,9 +191,9 @@ describe("checkDeclaredDirectionConvention", () => {
 
 	it("returns false when the Claude Code hook script is missing", async () => {
 		const client = new StubGitHubClient();
-		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", TEMPLATE_PATH, DECLARED_DIRECTION_SECTION);
 		client.seedFile("acme-corp", "widgets", WORKFLOW_PATH, WORKFLOW_CONTENT);
-		client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, "## Declared direction\n\n<!-- declared-direction: ... -->\n");
+		client.seedFile("acme-corp", "widgets", CLAUDE_MD_PATH, CLAUDE_MD_SECTION);
 		client.seedFile("acme-corp", "widgets", CLAUDE_SETTINGS_PATH, CLAUDE_SETTINGS_CONTENT);
 		client.seedFile("acme-corp", "widgets", GIT_HOOK_PATH, GIT_HOOK_CONTENT);
 

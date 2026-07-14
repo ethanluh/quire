@@ -23,6 +23,7 @@ import { MergeQueue } from "../../src/engine/queue/mergeQueue.js";
 import { LlmProviderHolder } from "../../src/engine/drift/effectList/providerHolder.js";
 import type { Bundle, PullRequest } from "../../src/engine/types/core.js";
 import type { MergeabilityResult } from "../../src/engine/types/mergeability.js";
+import type { MergeQueueEntry, MergeQueueEntryStatus } from "../../src/engine/types/queue.js";
 
 const PIPELINE_CONFIG: PipelineConfig = {
 	gate: { criteria: [{ name: "buildFailure", mode: "enforce" }] },
@@ -101,6 +102,27 @@ function makeMergeability(overrides: Partial<MergeabilityResult> = {}): Mergeabi
 		baseSha: "base-sha",
 		...overrides,
 	};
+}
+
+// The auto-merge-on-approval path (see gestures.ts) runs as a fire-and-forget background call
+// after the webhook responds 202, so a fixed sleep before asserting the landed status is a race
+// against however long that background call actually takes under CI load. Poll instead, same
+// pattern as gestures.test.ts's waitForEntryStatus.
+async function waitForEntryStatus(
+	queue: MergeQueue,
+	bundleId: string,
+	status: MergeQueueEntryStatus,
+	timeoutMs = 1000,
+): Promise<MergeQueueEntry> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const entry = await queue.getEntry(bundleId);
+		if (entry?.status === status) return entry;
+		if (Date.now() > deadline) {
+			throw new Error(`Timed out waiting for bundle ${bundleId} to reach status "${status}" (last: ${entry?.status})`);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
 }
 
 describe("webhookRouter", () => {
@@ -648,8 +670,7 @@ describe("webhookRouter", () => {
 		const { status } = await post(pullRequestReviewEventPayload("octocat", "hello-world", "submitted", "approved"), "pull_request_review");
 
 		expect(status).toBe(202);
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("landed");
+		await waitForEntryStatus(queue, makeBundleFor(pr).id, "landed");
 		expect(client.mergedPrs).toEqual([`${pr.repoOwner}/${pr.repoName}/${pr.number}`]);
 	});
 

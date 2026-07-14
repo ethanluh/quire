@@ -629,6 +629,39 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 		}
 	});
 
+	// Manual override for the automatic cross-tenant setup-rerun timer (index.ts) — lets an owner
+	// force every repo this team currently watches to rerun setup right now, without waiting for
+	// the next tick. setUpDeclaredDirectionConvention() is a no-op per repo unless something
+	// actually drifted, so this is safe to call repeatedly. Settled independently per repo (not
+	// Promise.all), same reasoning as /repos/refresh below.
+	router.post("/repos/setup-all", requireRole("owner", "admin"), async (_req, res, next) => {
+		try {
+			if (accountState.current.installations.length === 0) {
+				res.status(400).json({ error: "Install the GitHub App first" });
+				return;
+			}
+			const repos = accountState.current.repos;
+			if (repos.length === 0) {
+				res.json({ ranSetup: false });
+				return;
+			}
+			const results = await Promise.allSettled(repos.map((repo) => setUpDeclaredDirectionConvention(clientHolder, repo.owner, repo.name)));
+			res.json({
+				ranSetup: true,
+				repos: repos.map((repo, i) => {
+					const result = results[i];
+					if (result?.status === "fulfilled") {
+						return { owner: repo.owner, name: repo.name, ok: true, result: result.value };
+					}
+					console.error(`Declared-direction setup rerun failed for team ${teamId} (${repo.owner}/${repo.name}):`, result?.reason);
+					return { owner: repo.owner, name: repo.name, ok: false };
+				}),
+			});
+		} catch (err) {
+			next(err);
+		}
+	});
+
 	// A cheap, no-bookkeeping refresh — with a body, refreshes just that one repo; with none
 	// (the frontend's every-page-load/reload call, from before a team could watch more than
 	// one), refreshes every repo the team currently watches. Settled independently per repo

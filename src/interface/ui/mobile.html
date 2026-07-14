@@ -4,8 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta id="theme-color-tag" name="theme-color" content="#fbf6ec">
+<meta name="description" content="Quire is a third-party PR triage tool for teams running coding-agent swarms. It groups pull requests into review bundles and connects to your repos via a GitHub App you install and authorize yourself.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzdjM2IzMiIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjZmJmNmVjIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5RPC90ZXh0Pjwvc3ZnPg==">
-<title>Quire</title>
+<title>Quire — PR triage for agent swarms</title>
 <link rel="stylesheet" href="styles/tokens.css">
 <link rel="stylesheet" href="styles/components.css">
 <style>
@@ -111,6 +112,14 @@
     .list-card, .queue-entry, .audit-entry { padding: var(--space-4); }
     .queue-entry.card, .audit-entry.card { padding: var(--space-4); }
     .btn, .btn-icon, select { min-height: 44px; }
+    /* Detail modal: reclaim space-6's generous padding on narrow screens so
+       there's more room for content before the header/footer squeeze it out,
+       and keep the modal comfortably clear of the viewport's true edges. */
+    .modal-backdrop .detail-modal {
+      max-height: min(80vh, 80dvh);
+      padding: var(--space-4);
+    }
+    .detail-modal .modal-title { margin-bottom: var(--space-3); }
     /* .btn-icon is otherwise a fixed var(--space-8) (32px) square — bump the other
        axis too so the tap target is ~44x44, not just tall. Native <button>/<select>
        elements center their content internally even as min-height grows, but <a class="btn">
@@ -194,6 +203,18 @@
   #toast.toast-notice  { background: var(--color-flagged-wash); color: var(--color-flagged); border: 1px solid var(--color-flagged); }
   #toast.toast-neutral { background: var(--color-surface-sunken); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
 
+  /* Header is in-flow (not fixed) but the stack is fixed, so anchor below the
+     safe area instead of below the header's own variable height; the higher
+     z-index (header's is 1) means it floats over the header, same trade-off
+     `#toast` already makes with the tab bar. */
+  .queue-notification-stack {
+    top: calc(env(safe-area-inset-top) + var(--space-2));
+    left: var(--space-3);
+    right: var(--space-3);
+    max-width: none;
+    z-index: 120;
+  }
+
   /* --- Settings: full-screen sheet, not a floating modal --- */
   #settings-modal-backdrop {
     background: transparent;
@@ -256,6 +277,7 @@
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="signin-title">
     <h3 class="modal-title" id="signin-title">Sign in to Quire</h3>
     <p>Sign in with your GitHub account to continue.</p>
+    <p class="signin-disclosure">Quire is a third-party tool, not affiliated with GitHub. You'll be redirected to github.com to authorize access.</p>
     <div id="signin-result" class="result-msg error hidden"></div>
     <div class="modal-actions">
       <button class="btn btn-accept" id="btn-signin">Sign in with GitHub</button>
@@ -310,31 +332,113 @@
     <div class="settings-body">
       <div class="settings-section">
         <h4>Preferences</h4>
-        <div class="settings-btn-row">
-          <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
-          <a class="btn btn-defer" id="link-desktop" href="index.html?desktop=1">Desktop view</a>
+        <div class="settings-block">
+          <div class="settings-block-heading"><span class="dot"></span>Appearance</div>
+          <div class="settings-btn-row">
+            <button class="btn btn-defer btn-theme" id="btn-theme" title="Switch theme">Dark</button>
+            <a class="btn btn-defer" id="link-desktop" href="index.html?desktop=1">Desktop view</a>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Keyboard shortcuts <span class="badge-soon" title="Not implemented yet">Coming soon</span></div>
+              <p class="settings-row-help">Remap the accept / reject / defer gesture keys.</p>
+            </div>
+            <button class="btn btn-defer" disabled>Customize</button>
+          </div>
+        </div>
+
+        <div class="settings-block">
+          <div class="settings-block-heading"><span class="dot"></span>Notifications</div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Notify me on Slack <span class="badge-soon" title="Not implemented yet">Coming soon</span></div>
+              <p class="settings-row-help">Get a Slack message when a bundle needs manual review instead of checking back in the queue.</p>
+            </div>
+            <button class="btn btn-defer" disabled>Connect Slack</button>
+          </div>
+        </div>
+
+        <div class="settings-block">
+          <div class="settings-block-heading"><span class="dot"></span>Account</div>
+          <button class="btn btn-defer" id="btn-signout">Sign out</button>
         </div>
       </div>
 
-      <div class="settings-section">
-        <h4>Session</h4>
-        <button class="btn btn-defer" id="btn-signout">Sign out</button>
-      </div>
+      <div class="settings-section account-panel">
+        <h4>Team</h4>
+        <div class="settings-block">
+          <div class="settings-block-heading"><span class="dot"></span>Team</div>
+          <p class="settings-block-lede">Teammates on the same team share this GitHub connection, repo, LLM key, and bundle status.</p>
+          <div class="account-status" id="team-status" aria-live="polite">Checking team&hellip;</div>
+          <div id="team-members-list"></div>
+          <select id="team-switcher" aria-label="Select team"></select>
+          <input type="text" id="team-name-input" placeholder="Team name" aria-label="Team name">
+          <button class="btn btn-defer" id="btn-team-rename">Save name</button>
+          <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
+          <input type="text" id="team-create-input" placeholder="New team name" aria-label="New team name">
+          <button class="btn btn-defer" id="btn-team-create">Create new team</button>
+          <div id="team-result" class="result-msg hidden" aria-live="polite"></div>
+        </div>
 
-    <div class="settings-section account-panel">
-      <h4>Team</h4>
-      <p>Teammates on the same team share this GitHub connection, repo, LLM key, and bundle status.</p>
-      <div class="account-status" id="team-status" aria-live="polite">Checking team&hellip;</div>
-      <div id="team-members-list"></div>
-      <select id="team-switcher" aria-label="Select team"></select>
-      <input type="text" id="team-name-input" placeholder="Team name" aria-label="Team name">
-      <button class="btn btn-defer" id="btn-team-rename">Save name</button>
-      <button class="btn btn-accept" id="btn-team-invite">Copy invite link</button>
-      <input type="text" id="team-create-input" placeholder="New team name" aria-label="New team name">
-      <button class="btn btn-defer" id="btn-team-create">Create new team</button>
-      <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
-      <div id="team-result" class="result-msg hidden" aria-live="polite"></div>
-    </div>
+        <div class="settings-block">
+          <div class="settings-block-heading"><span class="dot"></span>LLM provider</div>
+          <div class="account-status" id="llm-account-status" aria-live="polite">Checking connection&hellip;</div>
+          <div id="llm-connect-form">
+            <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles.</p>
+            <select id="llm-provider-select" aria-label="LLM provider">
+              <option value="anthropic">Anthropic</option>
+              <option value="gemini">Gemini</option>
+            </select>
+            <input type="password" id="llm-api-key" placeholder="API key" aria-label="API key" autocomplete="off">
+            <button class="btn btn-accept" id="btn-llm-connect">Connect</button>
+          </div>
+          <button class="btn btn-reject hidden" id="btn-llm-disconnect">Disconnect</button>
+          <div id="llm-account-result" class="result-msg hidden" aria-live="polite"></div>
+        </div>
+
+        <div class="settings-block">
+          <div class="settings-block-heading"><span class="dot"></span>Merge queue</div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Require a reason to revert <span class="badge-soon" title="Not implemented yet">Coming soon</span></div>
+              <p class="settings-row-help">Ask for a one-line reason whenever a merged PR is reverted, kept with the audit history.</p>
+            </div>
+            <button class="btn btn-defer" disabled>Off</button>
+          </div>
+        </div>
+
+        <div class="settings-block is-danger">
+          <div class="settings-block-heading"><span class="dot"></span>Danger zone</div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Export team data <span class="badge-soon" title="Not implemented yet">Coming soon</span></div>
+              <p class="settings-row-help">Download bundles, decisions, and audit history as JSON before clearing or pruning anything.</p>
+            </div>
+            <button class="btn btn-defer" disabled>Export</button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Auto-prune instrumentation logs <span class="badge-soon" title="Not implemented yet">Coming soon</span></div>
+              <p class="settings-row-help">Automatically delete instrumentation logs older than a set number of days instead of keeping them indefinitely.</p>
+            </div>
+            <button class="btn btn-defer" disabled>Off</button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Clear all data</div>
+              <p class="settings-row-help">Wipes this team's bundles, shelf, queue, and audit history on this server. Can't be undone.</p>
+            </div>
+            <button class="btn btn-reject btn-clear-all hidden" id="btn-clear-all">Clear all data</button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Leave this team</div>
+              <p class="settings-row-help">You'll lose access to this team's queue and settings until re-invited.</p>
+            </div>
+            <button class="btn btn-reject" id="btn-team-leave">Leave this team</button>
+          </div>
+        </div>
+      </div>
 
       <div class="settings-section account-panel">
         <h4>GitHub connection</h4>
@@ -359,31 +463,79 @@
         </div>
       </div>
 
-      <div class="settings-section account-panel">
-        <h4>LLM provider</h4>
-        <div class="account-status" id="llm-account-status" aria-live="polite">Checking connection&hellip;</div>
-        <div id="llm-connect-form">
-          <p>Connect an Anthropic or Gemini API key so Quire can extract PR effects and cluster bundles.</p>
-          <select id="llm-provider-select" aria-label="LLM provider">
-            <option value="anthropic">Anthropic</option>
-            <option value="gemini">Gemini</option>
-          </select>
-          <input type="password" id="llm-api-key" placeholder="API key" aria-label="API key" autocomplete="off">
-          <button class="btn btn-accept" id="btn-llm-connect">Connect</button>
-        </div>
-        <button class="btn btn-reject hidden" id="btn-llm-disconnect">Disconnect</button>
-        <div id="llm-account-result" class="result-msg hidden" aria-live="polite"></div>
-      </div>
-
       <div class="settings-section">
-        <h4>Danger zone</h4>
-        <button class="btn btn-reject btn-clear-all hidden" id="btn-clear-all" title="Wipe all bundles, shelf, queue, and audit data on this server">Clear all data</button>
+        <h4>Pipeline</h4>
+        <div class="settings-block">
+          <div class="settings-block-heading"><span class="dot"></span>Auto-reject gate</div>
+          <p class="settings-block-lede"><strong>Shadow</strong> logs a would-be rejection to the audit view without blocking the PR; <strong>off</strong> skips the check entirely.</p>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Build failure <span class="badge-soon" title="Mode selection not implemented yet">Coming soon</span></div>
+              <p class="settings-row-help">Reject PRs whose CI status is failing.</p>
+            </div>
+            <select disabled aria-label="Build failure mode">
+              <option>Enforce</option><option>Shadow</option><option>Off</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Out of scope <span class="badge-soon" title="Mode selection not implemented yet">Coming soon</span></div>
+              <p class="settings-row-help">Reject PRs whose declared direction falls outside configured scope keywords. <a href="#" onclick="return false;" aria-disabled="true">Edit keywords</a></p>
+            </div>
+            <select disabled aria-label="Out of scope mode">
+              <option>Enforce</option><option>Shadow</option><option>Off</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Duplicate <span class="badge-soon" title="Mode selection not implemented yet">Coming soon</span></div>
+              <p class="settings-row-help">Reject PRs that duplicate another PR already in the queue.</p>
+            </div>
+            <select disabled aria-label="Duplicate mode">
+              <option>Enforce</option><option>Shadow</option><option>Off</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-block">
+          <div class="settings-block-heading"><span class="dot"></span>Bundling</div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Grouping sensitivity <span class="badge-soon" title="Not implemented yet — issue #247">Coming soon</span></div>
+              <p class="settings-row-help">How similar PRs must be to land in the same bundle. Today it's a hardcoded 0.75 similarity score with no way to tune it.</p>
+            </div>
+            <select disabled aria-label="Bundle grouping sensitivity">
+              <option>Loose</option><option selected>Balanced</option><option>Strict</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-block">
+          <div class="settings-block-heading"><span class="dot"></span>Drift detection</div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Screening sensitivity <span class="badge-soon" title="Not implemented yet">Coming soon</span></div>
+              <p class="settings-row-help">Tunes the cheap-screen checks (effect-list orphans, footprint anomaly, symbol coherence). Higher catches more, flags more.</p>
+            </div>
+            <select disabled aria-label="Drift screening sensitivity">
+              <option>Low</option><option selected>Balanced</option><option>High recall</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-row-label">Behavioral confirm <span class="badge-blocked" title="Blocked on Phase 0 calibration — issues #2, #10">Blocked</span></div>
+              <p class="settings-row-help">Sandboxed differential testing for the flagged tail. Waiting on Phase 0's calibration report before this can start.</p>
+            </div>
+            <button class="btn btn-defer" disabled>Off</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </div>
 
 <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="queue-notifications" class="queue-notification-stack" role="status" aria-live="polite"></div>
 
 <div class="modal-backdrop hidden" id="detail-modal-backdrop">
   <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
@@ -408,6 +560,7 @@
 
 <script src="shared/api.js"></script>
 <script src="shared/render.js"></script>
+<script src="shared/queueNotification.js"></script>
 <script src="shared/modal.js"></script>
 <script src="shared/theme.js"></script>
 <script src="shared/polling.js"></script>
@@ -883,7 +1036,7 @@ function confirmAction(message, opts) {
   confirmModalConfirmBtn.className = 'btn ' + (opts.danger ? 'btn-reject' : 'btn-accept');
   confirmModalConfirmBtn.textContent = opts.confirmLabel || (opts.danger ? 'Yes, proceed' : 'Confirm');
   confirmModalCancelBtn.textContent = opts.cancelLabel || 'Cancel';
-  modalManager.open(confirmModalBackdrop);
+  modalManager.open(confirmModalBackdrop, { onClose: () => closeConfirmModal(false) });
   return new Promise((resolve) => { confirmModalResolve = resolve; });
 }
 
@@ -940,7 +1093,10 @@ function commit(el, card, action, flyTransform, confirmed) {
       throw new Error(body.error || `Request failed (${r.status})`);
     }
     if (action === 'defer') loadShelf();
-    if (action === 'accept') loadQueue();
+    if (action === 'accept') {
+      trackQueueNotification(card.bundleId);
+      loadQueue();
+    }
   }).catch((err) => {
     const at = Math.min(restoreIndex < 0 ? 0 : restoreIndex, reviewCards.length);
     reviewCards.splice(at, 0, card);
@@ -1023,6 +1179,7 @@ async function loadQueue() {
     </div>
   </div>`;
   }).join('');
+  updateQueueNotifications(entries);
 }
 
 async function removeFromQueue(bundleId, btn) {

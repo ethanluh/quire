@@ -104,7 +104,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 		const app = express();
 		app.use(express.json());
 		app.use(stubMembership("owner"));
-		app.use("/queue", queueRouter(queue, state, decidedStore, accountState));
+		app.use("/queue", queueRouter(queue, state, decidedStore, accountState, "team-a"));
 
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, resolve);
@@ -181,7 +181,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const localApp = express();
 			localApp.use(express.json());
 			localApp.use(stubMembership("owner"));
-			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState, "team-a"));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
 			});
@@ -211,7 +211,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 				undefined,
 				undefined,
 				undefined,
-				notifyStateChanged,
+				() => notifyStateChanged("team-a"),
 			);
 			await localQueue.load();
 			await localQueue.enqueue(makeBundle("bundle-notify"));
@@ -219,7 +219,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const localApp = express();
 			localApp.use(express.json());
 			localApp.use(stubMembership("owner"));
-			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState, "team-a"));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
 			});
@@ -227,7 +227,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			if (address === null || typeof address === "string") throw new Error("expected AddressInfo");
 
 			const listener = jest.fn();
-			const unsubscribe = onStateChanged(listener);
+			const unsubscribe = onStateChanged("team-a", listener);
 			try {
 				await fetch(`http://127.0.0.1:${address.port}/queue/process`, { method: "POST" });
 				expect(listener).toHaveBeenCalled();
@@ -264,7 +264,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const localApp = express();
 			localApp.use(express.json());
 			localApp.use(stubMembership("owner"));
-			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState, "team-a"));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
 			});
@@ -308,7 +308,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const localApp = express();
 			localApp.use(express.json());
 			localApp.use(stubMembership("owner"));
-			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState, "team-a"));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
 			});
@@ -355,7 +355,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const localApp = express();
 			localApp.use(express.json());
 			localApp.use(stubMembership("owner"));
-			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, autoMergeAccountState));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, autoMergeAccountState, "team-a"));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
 			});
@@ -410,7 +410,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const localApp = express();
 			localApp.use(express.json());
 			localApp.use(stubMembership("owner"));
-			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState));
+			localApp.use("/queue", queueRouter(localQueue, state, decidedStore, accountState, "team-a"));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = localApp.listen(0, () => resolve(s));
 			});
@@ -435,7 +435,7 @@ describe("queueRouter — DELETE /:bundleId", () => {
 			const app = express();
 			app.use(express.json());
 			app.use(stubMembership(role));
-			app.use("/queue", queueRouter(queue, state, decidedStore, accountState));
+			app.use("/queue", queueRouter(queue, state, decidedStore, accountState, "team-a"));
 			const localServer = await new Promise<Server>((resolve) => {
 				const s = app.listen(0, () => resolve(s));
 			});

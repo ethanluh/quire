@@ -128,8 +128,10 @@ export function enqueueRefresh(owner: string, name: string, deps: RefreshDeps): 
 	return refreshLock(key, async () => {
 		const result = await refreshRepoQueue(owner, name, deps);
 		// Single choke point for both the webhook route and the reconciliation timer —
-		// tells any open SSE connection to re-fetch instead of waiting for its next poll tick.
-		notifyStateChanged();
+		// tells this tenant's open SSE connections to re-fetch instead of waiting for their
+		// next poll tick. Falls back to "" to match the lock key above for callers that omit
+		// tenantKey (pre-multi-tenant tests).
+		notifyStateChanged(deps.tenantKey ?? "");
 		return result;
 	});
 }
