@@ -1164,16 +1164,20 @@ function queueEntryHtml(e) {
     ['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept btn-reattempt-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}">Reattempt</button>` : '',
     ['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject btn-abort-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}" data-merged-pr-count="${e.mergedPrIds.length}" data-member-count="${e.bundle.members.length}">Abort</button>` : '',
   ].filter(Boolean).join('');
+  const statusRow = queueStatusRowHtml(e);
   return `<div class="queue-entry">
-    <div>
-      <div>${escapeHtml(e.bundle.direction)}</div>
-      <div class="entry-id">${escapeHtml(entryRepoLabel(e))} &middot; ${escapeHtml(e.bundleId)}</div>
+    <div class="queue-entry-header">
+      <div>
+        <div>${escapeHtml(e.bundle.direction)}</div>
+        <div class="entry-id">${escapeHtml(entryRepoLabel(e))} &middot; ${escapeHtml(e.bundleId)}</div>
+      </div>
+      <div class="queue-entry-actions">
+        ${queueStatusBadge(e)}
+        <button class="btn btn-show-queue-detail" data-bundle-id="${escapeHtml(e.bundleId)}">Details</button>
+        ${actionButtons ? `<span class="btn-group">${actionButtons}</span>` : ''}
+      </div>
     </div>
-    <div class="queue-entry-actions">
-      ${queueStatusBadge(e)}
-      <button class="btn btn-show-queue-detail" data-bundle-id="${escapeHtml(e.bundleId)}">Details</button>
-      ${actionButtons ? `<span class="btn-group">${actionButtons}</span>` : ''}
-    </div>
+    ${statusRow ? `<div class="queue-entry-status">${statusRow}</div>` : ''}
   </div>`;
 }
 
