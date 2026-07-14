@@ -34,7 +34,15 @@ async function loadAccount() {
 		repoPanel.classList.remove('hidden');
 		if (accountHooks.onConnected) accountHooks.onConnected(watchedRepos);
 		renderWatchedRepos(watchedRepos);
-		loadRepos(watchedRepos);
+		// loadRepos() resolves once it's confirmed live, per-installation whether each watched
+		// repo's GitHub App installation still exists — re-render with that info once it's in,
+		// rather than blocking the first paint on a live GitHub round trip.
+		loadRepos(watchedRepos).then((failedAccounts) => {
+			const revokedInstallationIds = new Set(
+				(failedAccounts || []).filter((f) => f.revoked).map((f) => f.installationId),
+			);
+			if (revokedInstallationIds.size) renderWatchedRepos(watchedRepos, revokedInstallationIds);
+		});
 	} else {
 		statusEl.textContent = watchedRepos.length
 			? `Not connected. Will resume watching ${watchedRepos.map((r) => `${r.owner}/${r.name}`).join(', ')} once reconnected.`

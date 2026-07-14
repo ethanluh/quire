@@ -716,7 +716,7 @@ describe("githubAppRouter", () => {
 	it("reports a failing installation in failedAccounts instead of breaking the whole picker", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 		const listRepos = jest.fn(async (installationId: number, accountLogin: string) => {
-			if (installationId === 999) throw new Error("installation revoked");
+			if (installationId === 999) throw new Error("rate limited");
 			return [repo({ fullName: `${accountLogin}/widgets`, installationId, accountLogin })];
 		});
 		setup(listRepos, new StubGitHubClient(), new StubLlmProvider(), {
@@ -732,7 +732,33 @@ describe("githubAppRouter", () => {
 
 		expect(status).toBe(200);
 		expect(body["repos"]).toEqual([repo({ fullName: "acme-corp/widgets", installationId: 555, accountLogin: "acme-corp" })]);
-		expect(body["failedAccounts"]).toEqual(["dead-org"]);
+		expect(body["failedAccounts"]).toEqual([{ installationId: 999, accountLogin: "dead-org", revoked: false }]);
+	});
+
+	it("flags a failing installation as revoked when GitHub reports it gone (401/404), not just failed", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+		const listRepos = jest.fn(async (installationId: number, accountLogin: string) => {
+			if (installationId === 999) {
+				const err = new Error("installation not found") as Error & { name: string; status: number };
+				err.name = "HttpError";
+				err.status = 404;
+				throw err;
+			}
+			return [repo({ fullName: `${accountLogin}/widgets`, installationId, accountLogin })];
+		});
+		setup(listRepos, new StubGitHubClient(), new StubLlmProvider(), {
+			installations: [
+				{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+				{ installationId: 999, accountLogin: "dead-org", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" },
+			],
+			repos: [],
+		});
+		await new Promise((resolve) => server.once("listening", resolve));
+
+		const { status, body } = await call(server, "GET", "/account/github/repos");
+
+		expect(status).toBe(200);
+		expect(body["failedAccounts"]).toEqual([{ installationId: 999, accountLogin: "dead-org", revoked: true }]);
 	});
 
 	it("dedupes concurrent /repos calls against the same installation into a single upstream fetch", async () => {

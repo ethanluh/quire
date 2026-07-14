@@ -1590,7 +1590,7 @@ async function loadRepos(watchedRepos) {
   if (result.error) {
     listEl.innerHTML = `<div class="empty">${escapeHtml(result.error)}</div>`;
     warningEl.classList.add('hidden');
-    return;
+    return [];
   }
   loadedRepos = result.repos || [];
   loadedWatchedRepos = result.selected || watchedRepos || [];
@@ -1598,11 +1598,12 @@ async function loadRepos(watchedRepos) {
   renderRepoList();
   const failedAccounts = result.failedAccounts || [];
   if (failedAccounts.length) {
-    warningEl.textContent = `Couldn't load repos for: ${failedAccounts.join(', ')} — the installation may have been removed.`;
+    warningEl.textContent = `Couldn't load repos for: ${failedAccounts.map((f) => f.accountLogin).join(', ')} — the installation may have been removed.`;
     warningEl.classList.remove('hidden');
   } else {
     warningEl.classList.add('hidden');
   }
+  return failedAccounts;
 }
 
 document.getElementById('repo-search').addEventListener('input', renderRepoList);

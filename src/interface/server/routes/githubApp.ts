@@ -435,11 +435,20 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 			const results = await settleWithConcurrency(installations, INSTALLATION_LIST_CONCURRENCY, getReposCached);
 
 			const repos: RepoSummary[] = [];
-			const failedAccounts: string[] = [];
+			// `revoked` distinguishes a truly-dead installation (401/404 — uninstalled on
+			// GitHub's side) from a transient fetch error (rate limit, network blip), so the
+			// watched-repos UI can tell a user "this repo's installation is gone, remove it"
+			// instead of treating every fetch failure the same.
+			const failedAccounts: Array<{ installationId: number; accountLogin: string; revoked: boolean }> = [];
 			installations.forEach((installation, i) => {
 				const result = results[i];
 				if (result?.status === "fulfilled") repos.push(...result.value);
-				else failedAccounts.push(installation.accountLogin);
+				else
+					failedAccounts.push({
+						installationId: installation.installationId,
+						accountLogin: installation.accountLogin,
+						revoked: isInstallationRevoked(result?.reason),
+					});
 			});
 
 			// Starred/pinned status is a per-request enrichment, not part of the cached
