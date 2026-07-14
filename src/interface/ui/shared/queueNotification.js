@@ -12,10 +12,22 @@ function queueNotificationStackEl() {
   return document.getElementById('queue-notifications');
 }
 
+// Finds the member PR behind an "unstable" conflict (both "checks failing" and "checks
+// still running" report as this GitHub mergeable_state — see render.js's
+// unstableConflictBadge for the same distinction on the review-queue badge).
+function unstableConflictMember(entry) {
+  if (!entry || !entry.conflict || entry.conflict.kind !== 'unstable') return undefined;
+  return ((entry.bundle && entry.bundle.members) || []).find((m) => m.id === entry.conflict.prId);
+}
+
 function queueNotificationTone(entry) {
   if (!entry) return 'neutral';
   if (entry.status === 'landing') return 'flagged';
   if (entry.status === 'landed') return 'clean';
+  if (entry.status === 'conflict') {
+    const member = unstableConflictMember(entry);
+    if (member && member.ciStatus === 'pending') return 'flagged';
+  }
   if (['conflict', 'aborted', 'investigating'].includes(entry.status)) return 'critical';
   return 'neutral'; // queued
 }
@@ -57,8 +69,15 @@ function queueNotificationCardHtml(bundleId, entry, order) {
       fraction = 1;
       label = 'Landed';
     } else if (['conflict', 'aborted', 'investigating'].includes(entry.status)) {
-      fraction = 1;
-      label = 'Needs attention';
+      const member = unstableConflictMember(entry);
+      if (member && member.ciStatus === 'pending') {
+        const summary = member.ciChecksSummary;
+        fraction = summary ? summary.completed / summary.total : 0;
+        label = summary ? `Checks in progress (${summary.completed}/${summary.total})` : 'Checks in progress';
+      } else {
+        fraction = 1;
+        label = 'Needs attention';
+      }
     } else {
       const position = order.findIndex((e) => e.bundleId === bundleId);
       const total = order.length || 1;
