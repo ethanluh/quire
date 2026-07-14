@@ -111,6 +111,7 @@ Merge-queue entries also normally flip to merged/closed via the `pull_request` w
 - [`docs/engineering-handoff.md`](docs/engineering-handoff.md) — full build spec: architecture, design invariants, drift-detection design, data model, phases, prior art, and success metrics.
 - [`docs/design-feel.md`](docs/design-feel.md) — the intended visual/interaction tone, inferred from the product's stated values; the UI is styled to it.
 - [`src/interface/ui/styles/tokens.css`](src/interface/ui/styles/tokens.css) + [`components.css`](src/interface/ui/styles/components.css) — the design-feel tone translated into design tokens and reference components; open [`src/interface/ui/styles/style-guide.html`](src/interface/ui/styles/style-guide.html) in a browser to see them.
+- [`docs/graph-theory-math-notes.md`](docs/graph-theory-math-notes.md) — research notes on where graph theory/combinatorics could sharpen specific gaps in bundling, symbol-coherence checking, and merge-queue scheduling (issues [#247](https://github.com/ethanluh/quire/issues/247)–[#250](https://github.com/ethanluh/quire/issues/250)); not yet implemented.
 - [`CLAUDE.md`](CLAUDE.md) — guidance for Claude Code agents working in this repo.
 
 ## Contributing
