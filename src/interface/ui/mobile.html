@@ -4,8 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta id="theme-color-tag" name="theme-color" content="#fbf6ec">
+<meta name="description" content="Quire is a third-party PR triage tool for teams running coding-agent swarms. It groups pull requests into review bundles and connects to your repos via a GitHub App you install and authorize yourself.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzdjM2IzMiIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgZm9udC1mYW1pbHk9InN5c3RlbS11aSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjZmJmNmVjIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5RPC90ZXh0Pjwvc3ZnPg==">
-<title>Quire</title>
+<title>Quire — PR triage for agent swarms</title>
 <link rel="stylesheet" href="styles/tokens.css">
 <link rel="stylesheet" href="styles/components.css">
 <style>
@@ -202,6 +203,18 @@
   #toast.toast-notice  { background: var(--color-flagged-wash); color: var(--color-flagged); border: 1px solid var(--color-flagged); }
   #toast.toast-neutral { background: var(--color-surface-sunken); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
 
+  /* Header is in-flow (not fixed) but the stack is fixed, so anchor below the
+     safe area instead of below the header's own variable height; the higher
+     z-index (header's is 1) means it floats over the header, same trade-off
+     `#toast` already makes with the tab bar. */
+  .queue-notification-stack {
+    top: calc(env(safe-area-inset-top) + var(--space-2));
+    left: var(--space-3);
+    right: var(--space-3);
+    max-width: none;
+    z-index: 120;
+  }
+
   /* --- Settings: full-screen sheet, not a floating modal --- */
   #settings-modal-backdrop {
     background: transparent;
@@ -264,6 +277,7 @@
   <div class="card" role="dialog" aria-modal="true" aria-labelledby="signin-title">
     <h3 class="modal-title" id="signin-title">Sign in to Quire</h3>
     <p>Sign in with your GitHub account to continue.</p>
+    <p class="signin-disclosure">Quire is a third-party tool, not affiliated with GitHub. You'll be redirected to github.com to authorize access.</p>
     <div id="signin-result" class="result-msg error hidden"></div>
     <div class="modal-actions">
       <button class="btn btn-accept" id="btn-signin">Sign in with GitHub</button>
@@ -392,6 +406,7 @@
 </div>
 
 <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="queue-notifications" class="queue-notification-stack" role="status" aria-live="polite"></div>
 
 <div class="modal-backdrop hidden" id="detail-modal-backdrop">
   <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
@@ -416,6 +431,7 @@
 
 <script src="shared/api.js"></script>
 <script src="shared/render.js"></script>
+<script src="shared/queueNotification.js"></script>
 <script src="shared/modal.js"></script>
 <script src="shared/theme.js"></script>
 <script src="shared/polling.js"></script>
@@ -948,7 +964,10 @@ function commit(el, card, action, flyTransform, confirmed) {
       throw new Error(body.error || `Request failed (${r.status})`);
     }
     if (action === 'defer') loadShelf();
-    if (action === 'accept') loadQueue();
+    if (action === 'accept') {
+      trackQueueNotification(card.bundleId);
+      loadQueue();
+    }
   }).catch((err) => {
     const at = Math.min(restoreIndex < 0 ? 0 : restoreIndex, reviewCards.length);
     reviewCards.splice(at, 0, card);
@@ -1031,6 +1050,7 @@ async function loadQueue() {
     </div>
   </div>`;
   }).join('');
+  updateQueueNotifications(entries);
 }
 
 async function removeFromQueue(bundleId, btn) {

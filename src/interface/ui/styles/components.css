@@ -790,6 +790,75 @@ a.btn {
 	border: 1px solid var(--color-border);
 }
 
+.queue-notification-stack {
+	position: fixed;
+	top: var(--space-4);
+	right: var(--space-4);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	max-width: 320px;
+	z-index: 90;
+}
+
+.queue-notification {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	background: var(--color-surface-card);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-md);
+	padding: var(--space-3);
+	font-size: var(--text-sm);
+}
+
+.queue-notification-conflict {
+	border-color: var(--color-reject);
+}
+
+.queue-notification-body {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.queue-notification-title {
+	color: var(--color-text-primary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.queue-notification-status {
+	color: var(--color-text-muted);
+	font-size: var(--text-xs);
+}
+
+.queue-ring {
+	flex: 0 0 auto;
+}
+
+.queue-ring circle {
+	fill: none;
+	stroke-width: 3;
+}
+
+.queue-ring-track {
+	stroke: var(--color-border);
+}
+
+.queue-ring-fill {
+	stroke-linecap: round;
+	transform: rotate(-90deg);
+	transform-origin: 50% 50%;
+	transition: stroke-dashoffset var(--duration-base) var(--ease-standard);
+}
+
+.queue-ring-fill.tier-neutral { stroke: var(--color-defer); }
+.queue-ring-fill.tier-flagged { stroke: var(--color-flagged); }
+.queue-ring-fill.tier-clean { stroke: var(--color-accept); }
+.queue-ring-fill.tier-critical { stroke: var(--color-reject); }
+
 /* Shared "titled sub-section" divider — separates a distinct concern (repo
    picker, team settings) from the account controls above it within the same
    panel, the same way top-level settings sections used to divide before the
