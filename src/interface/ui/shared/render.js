@@ -280,10 +280,10 @@ function renderSignals(drift, members) {
   return `<div class="drift-signals"><strong>Drift signals (noted, not an error)</strong><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`;
 }
 
-function renderWatchedRepos(repos) {
+function renderWatchedRepos(repos, revokedInstallationIds) {
   const el = document.getElementById('watched-repos-list');
   el.innerHTML = repos.length
-    ? repos.map(watchedRepoRowHtml).join('')
+    ? repos.map((r) => watchedRepoRowHtml(r, revokedInstallationIds)).join('')
     : '<div class="empty">No repos selected yet — pick one below.</div>';
 }
 
@@ -294,14 +294,16 @@ function showTeamResult(message, isError) {
   resultEl.style.display = 'block';
 }
 
-function watchedRepoRowHtml(repo) {
+function watchedRepoRowHtml(repo, revokedInstallationIds) {
   const settingsDisabled = isOwner() ? '' : 'disabled';
   const removeDisabled = canManageMembers() ? '' : 'disabled';
+  const isRevoked = Boolean(revokedInstallationIds && revokedInstallationIds.has(repo.installationId));
   return `<div class="watched-repo-row" data-owner="${escapeHtml(repo.owner)}" data-name="${escapeHtml(repo.name)}">
     <div class="watched-repo-header">
       <span class="repo-name">${escapeHtml(repo.owner)}/${escapeHtml(repo.name)}</span>
       <button class="btn btn-reject btn-remove-repo" ${removeDisabled}>Remove</button>
     </div>
+    ${isRevoked ? '<div class="result-msg error">⚠ GitHub App installation removed — this repo has stopped refreshing. Remove it below or reinstall the app.</div>' : ''}
     <label class="auto-merge-toggle">
       <input type="checkbox" class="chk-repo-setting" data-setting="autoMergeOnAccept" ${repo.autoMergeOnAccept ? 'checked' : ''} ${settingsDisabled}>
       Automatically merge accepted bundles (skips the manual "Process next" step)
