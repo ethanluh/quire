@@ -404,8 +404,7 @@ describe("webhookRouter", () => {
 		const { status } = await post(pullRequestEventPayload("octocat", "hello-world", "synchronize", 123), "pull_request");
 
 		expect(status).toBe(202);
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("landed");
+		await waitForEntryStatus(queue, makeBundleFor(pr).id, "landed");
 		expect(client.mergedPrs).toEqual([`${pr.repoOwner}/${pr.repoName}/${pr.number}`]);
 	});
 
@@ -582,8 +581,7 @@ describe("webhookRouter", () => {
 		const { status } = await post(checkSuiteEventPayload("octocat", "hello-world", "completed", "success", [123]), "check_suite");
 
 		expect(status).toBe(202);
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("landed");
+		await waitForEntryStatus(queue, makeBundleFor(pr).id, "landed");
 		expect(client.mergedPrs).toEqual([`${pr.repoOwner}/${pr.repoName}/${pr.number}`]);
 	});
 
@@ -705,8 +703,7 @@ describe("webhookRouter", () => {
 		const { status } = await post(pullRequestClosedPayload("octocat", "hello-world", true, 123), "pull_request");
 
 		expect(status).toBe(202);
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("landed");
+		await waitForEntryStatus(queue, makeBundleFor(pr).id, "landed");
 		expect(client.mergedPrs).toEqual([]); // GitHub already merged it; Quire must not merge again
 	});
 
@@ -783,9 +780,7 @@ describe("webhookRouter", () => {
 		const { status } = await post(pullRequestClosedPayload("octocat", "hello-world", true, 456), "pull_request");
 
 		expect(status).toBe(202);
-		await new Promise((resolve) => setTimeout(resolve, 50));
-		const entry = await queue.getEntry("bundle-123");
-		expect(entry?.status).toBe("landed"); // dequeueNext continued and landed pr3 too
+		await waitForEntryStatus(queue, "bundle-123", "landed"); // dequeueNext continued and landed pr3 too
 		expect(client.mergedPrs.sort()).toEqual(
 			[`${pr1.repoOwner}/${pr1.repoName}/${pr1.number}`, `${pr3.repoOwner}/${pr3.repoName}/${pr3.number}`].sort(),
 		);
