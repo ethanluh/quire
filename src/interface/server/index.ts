@@ -16,6 +16,10 @@ import { TenantRegistry } from "./tenant.js";
 import type { TenantSharedConfig } from "./tenant.js";
 import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
 import { createAllowlist, createPlatformAdminAllowlist } from "./allowlist.js";
+import type { Allowlist } from "./allowlist.js";
+import { PlatformAllowlistStore } from "../../engine/platform/platformAllowlistStore.js";
+import { PlatformGateDefaultsStore } from "../../engine/platform/platformGateDefaultsStore.js";
+import type { GateCriterion } from "../../engine/types/gate.js";
 import { requireSession } from "./middleware/requireSession.js";
 import { resolveMembership } from "./middleware/resolveMembership.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
@@ -53,16 +57,15 @@ const parsedSetupReconcileMinutes = parseInt(process.env["QUIRE_SETUP_RECONCILE_
 const SETUP_RECONCILE_INTERVAL_MS =
 	(Number.isFinite(parsedSetupReconcileMinutes) && parsedSetupReconcileMinutes > 0 ? parsedSetupReconcileMinutes : 1440) * 60 * 1000;
 
-const pipelineConfig: PipelineConfig = {
-	gate: {
-		criteria: [
-			{ name: "buildFailure", mode: "enforce" },
-			{ name: "outOfScope", mode: "off" },
-			{ name: "duplicate", mode: "shadow" },
-		],
-	},
-	bundle: { similarityThreshold: 0.75 },
-};
+// The historical hardcoded gate config — now only the SEED for PlatformGateDefaultsStore's
+// first boot (see main()), not the live config. Once that store has ever been written to
+// (by main()'s own seeding, or a platform admin's PATCH /platform-admin/gate-config), its
+// persisted value wins on every subsequent boot.
+const DEFAULT_GATE_CRITERIA: ReadonlyArray<GateCriterion> = [
+	{ name: "buildFailure", mode: "enforce" },
+	{ name: "outOfScope", mode: "off" },
+	{ name: "duplicate", mode: "shadow" },
+];
 
 function requireEnv(name: string): string {
 	const value = process.env[name];
@@ -136,12 +139,29 @@ async function main(): Promise<void> {
 				"not allowed when hosting. Set an explicit comma-separated login list instead.",
 		);
 	}
-	if (rawPlatformAdminLogins === undefined || rawPlatformAdminLogins.trim() === "") {
+	const platformAdminLoginsConfigured = rawPlatformAdminLogins !== undefined && rawPlatformAdminLogins.trim() !== "";
+	if (!platformAdminLoginsConfigured) {
 		console.warn(
 			"QUIRE_PLATFORM_ADMIN_LOGINS not set — the platform admin console is unreachable by anyone. " +
 				"Set it to your GitHub login(s) to use it.",
 		);
 	}
+
+	// A persisted, editable supplement to the env-var allowlist above (see PATCH
+	// /platform-admin/access-control) and the platform-wide gate-criteria defaults every
+	// team inherits unless it sets its own override (see PATCH /platform-admin/gate-config).
+	// Both live under data/platform/, alongside the admin-actions trail every mutation to
+	// either one gets appended to.
+	const platformAllowlistStore = new PlatformAllowlistStore(join(DATA_DIR, "platform", "allowed-logins.json"));
+	await platformAllowlistStore.load();
+	const platformGateDefaultsStore = new PlatformGateDefaultsStore(join(DATA_DIR, "platform", "gate-config.json"));
+	await platformGateDefaultsStore.load();
+	let gateDefaults = platformGateDefaultsStore.get();
+	if (gateDefaults === undefined) {
+		gateDefaults = DEFAULT_GATE_CRITERIA;
+		await platformGateDefaultsStore.set(gateDefaults);
+	}
+	const platformAdminActionLogPath = join(DATA_DIR, "platform", "admin-actions.ndjson");
 
 	const appConfig: GitHubAppConfig = {
 		appId: requireEnv("GITHUB_APP_ID"),
@@ -197,6 +217,11 @@ async function main(): Promise<void> {
 	// needed there to look up a team's current roster when a repo is unbound (see
 	// githubApp.ts's revokeAccessOnUnbind).
 	const teamStore = new TeamStore(DATA_DIR);
+
+	const pipelineConfig: PipelineConfig = {
+		gate: { criteria: gateDefaults },
+		bundle: { similarityThreshold: 0.75 },
+	};
 
 	const sharedConfig: TenantSharedConfig = {
 		dataDir: DATA_DIR,
@@ -287,11 +312,40 @@ async function main(): Promise<void> {
 		),
 	);
 
-	// Cross-tenant, read-only for now (Phase 1) — mounted ahead of resolveTenant like
-	// teamRouter above, since it deliberately reads every team's TenantContext at once
-	// rather than the one request's own resolved team. Gated by requirePlatformAdmin
-	// (platformAdminAllowlist), a separate and higher-privilege check than any team's role.
-	app.use("/platform-admin", platformAdminRouter(registry, teamStore, platformAdminAllowlist));
+	// OR's the env-var floor with the persisted supplemental list — never the other way
+	// around: the env var alone still fully determines the fail-closed-when-unset default
+	// (see createPlatformAdminAllowlist), this only ever adds more logins on top of it.
+	const combinedPlatformAdminAllowlist: Allowlist = {
+		isAllowed: (login) => platformAdminAllowlist.isAllowed(login) || platformAllowlistStore.get().includes(login.toLowerCase()),
+		allowsAll: platformAdminAllowlist.allowsAll,
+		explicitWildcard: platformAdminAllowlist.explicitWildcard,
+	};
+
+	// Persists the new platform-wide default AND pushes it live to every already-loaded
+	// tenant (registry.all() — hydrateExisting() already loaded every team at boot, see
+	// above) via TenantContext.refreshGateConfig, so the change takes effect immediately
+	// rather than only for tenants that cold-start after this call.
+	async function applyGateDefaults(criteria: ReadonlyArray<GateCriterion>): Promise<void> {
+		await platformGateDefaultsStore.set(criteria);
+		sharedConfig.pipelineConfig = { ...sharedConfig.pipelineConfig, gate: { ...sharedConfig.pipelineConfig.gate, criteria } };
+		for (const tenant of registry.all()) tenant.refreshGateConfig();
+	}
+
+	// Cross-tenant — mounted ahead of resolveTenant like teamRouter above, since it
+	// deliberately reads every team's TenantContext at once rather than the one request's
+	// own resolved team. Gated by requirePlatformAdmin (combinedPlatformAdminAllowlist), a
+	// separate and higher-privilege check than any team's role.
+	app.use(
+		"/platform-admin",
+		platformAdminRouter(registry, teamStore, combinedPlatformAdminAllowlist, {
+			envAllowlist: platformAdminAllowlist,
+			envConfigured: platformAdminLoginsConfigured,
+			allowlistStore: platformAllowlistStore,
+			gateDefaultsStore: platformGateDefaultsStore,
+			applyGateDefaults,
+			adminActionLogPath: platformAdminActionLogPath,
+		}),
+	);
 
 	app.use(resolveTenant(registry));
 

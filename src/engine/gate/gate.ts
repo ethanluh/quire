@@ -32,6 +32,11 @@ const CRITERIA: ReadonlyArray<CriterionCheck> = [
 	},
 ];
 
+// Derived (not hand-duplicated) so a request-body validation boundary — e.g. admin.ts's
+// and platformAdmin.ts's PATCH .../gate-config routes — can reject an unknown criterion
+// name without a second, driftable copy of this list.
+export const GATE_CRITERION_NAMES: ReadonlyArray<string> = CRITERIA.map((c) => c.name);
+
 export async function runGate(
 	pr: PullRequest,
 	config: GateConfig,

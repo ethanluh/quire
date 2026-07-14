@@ -9,11 +9,9 @@ import { requireRole } from "../middleware/requireRole.js";
 import type { GateConfigStore } from "../../../engine/gate/gateConfigStore.js";
 import { resolveEffectiveGateConfig } from "../../../engine/gate/gateConfigStore.js";
 import type { GateCriterion, GateMode } from "../../../engine/types/gate.js";
+import { GATE_CRITERION_NAMES } from "../../../engine/gate/gate.js";
 
-// Mirrors gate.ts's own CRITERIA list — kept as a literal here rather than importing gate.ts's
-// (unexported) internal array, since this is a request-body validation boundary, not a
-// re-derivation of what the gate itself runs.
-const KNOWN_CRITERIA_NAMES: ReadonlySet<string> = new Set(["buildFailure", "outOfScope", "duplicate"]);
+const KNOWN_CRITERIA_NAMES: ReadonlySet<string> = new Set(GATE_CRITERION_NAMES);
 const KNOWN_MODES: ReadonlySet<GateMode> = new Set(["enforce", "shadow", "off"]);
 
 function isValidCriterionBody(value: unknown): value is GateCriterion {
