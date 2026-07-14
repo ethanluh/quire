@@ -22,19 +22,21 @@ import { AuditStore } from "../../src/engine/gate/auditStore.js";
 import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import {
+	DECLARED_DIRECTION_SECTION,
 	WORKFLOW_CONTENT,
+	CLAUDE_MD_SECTION,
 	CLAUDE_HOOK_SCRIPT_CONTENT,
 	CLAUDE_SETTINGS_CONTENT,
 	GIT_HOOK_CONTENT,
 } from "../../src/engine/github/repoSetup.js";
 
-function seedFullyConformingRepo(client: StubGitHubClient): void {
-	client.seedFile("acme-corp", "widgets", ".github/pull_request_template.md", "## Declared direction\n\n<!-- declared-direction: ... -->\n");
-	client.seedFile("acme-corp", "widgets", ".github/workflows/quire-declared-direction.yml", WORKFLOW_CONTENT);
-	client.seedFile("acme-corp", "widgets", "CLAUDE.md", "## Declared direction\n\n<!-- declared-direction: ... -->\n");
-	client.seedFile("acme-corp", "widgets", ".claude/hooks/check-declared-direction.sh", CLAUDE_HOOK_SCRIPT_CONTENT);
-	client.seedFile("acme-corp", "widgets", ".claude/settings.json", CLAUDE_SETTINGS_CONTENT);
-	client.seedFile("acme-corp", "widgets", ".githooks/pre-push", GIT_HOOK_CONTENT);
+function seedFullyConformingRepo(client: StubGitHubClient, owner = "acme-corp", name = "widgets"): void {
+	client.seedFile(owner, name, ".github/pull_request_template.md", DECLARED_DIRECTION_SECTION);
+	client.seedFile(owner, name, ".github/workflows/quire-declared-direction.yml", WORKFLOW_CONTENT);
+	client.seedFile(owner, name, "CLAUDE.md", CLAUDE_MD_SECTION);
+	client.seedFile(owner, name, ".claude/hooks/check-declared-direction.sh", CLAUDE_HOOK_SCRIPT_CONTENT);
+	client.seedFile(owner, name, ".claude/settings.json", CLAUDE_SETTINGS_CONTENT);
+	client.seedFile(owner, name, ".githooks/pre-push", GIT_HOOK_CONTENT);
 }
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import type { InstallationAccountState, RepoBinding } from "../../src/engine/github/installation.js";
@@ -1468,6 +1470,94 @@ describe("githubAppRouter", () => {
 			await new Promise((resolve) => server.once("listening", resolve));
 
 			const { status, body } = await call(server, "POST", "/account/github/repos/setup-status", { owner: "acme-corp", name: "widgets" });
+
+			expect(status).toBe(400);
+			expect(body["error"]).toBe("Install the GitHub App first");
+		});
+	});
+
+	describe("POST /repos/setup-all", () => {
+		it("reports ranSetup: false when no repos are watched", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup(async () => [], new StubGitHubClient(), new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/setup-all");
+
+			expect(status).toBe(200);
+			expect(body["ranSetup"]).toBe(false);
+		});
+
+		it("reruns setup for every watched repo, reporting each repo's individual result", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const client = new StubGitHubClient();
+			seedFullyConformingRepo(client, "acme-corp", "widgets");
+			setup(async () => [], client, new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [
+					repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+					repoBindingFixture({ owner: "acme-corp", name: "gadgets", installationId: 555 }),
+				],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/setup-all");
+
+			expect(status).toBe(200);
+			expect(body["ranSetup"]).toBe(true);
+			expect(body["repos"]).toEqual(
+				expect.arrayContaining([
+					{ owner: "acme-corp", name: "widgets", ok: true, result: { status: "already-set-up" } },
+					{
+						owner: "acme-corp",
+						name: "gadgets",
+						ok: true,
+						result: { status: "created", prNumber: expect.any(Number), prUrl: expect.stringContaining("acme-corp/gadgets/pull/") },
+					},
+				]),
+			);
+		});
+
+		it("settles each repo independently — one failing repo doesn't sink the others", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			class PartiallyFailingClient extends StubGitHubClient {
+				override async getFileContent(owner: string, repo: string, path: string) {
+					if (owner === "acme-corp" && repo === "gadgets") throw new Error("GitHub API unavailable");
+					return super.getFileContent(owner, repo, path);
+				}
+			}
+			const client = new PartiallyFailingClient();
+			seedFullyConformingRepo(client, "acme-corp", "widgets");
+			setup(async () => [], client, new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [
+					repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 }),
+					repoBindingFixture({ owner: "acme-corp", name: "gadgets", installationId: 555 }),
+				],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/setup-all");
+
+			expect(status).toBe(200);
+			expect(body["ranSetup"]).toBe(true);
+			expect(body["repos"]).toEqual(
+				expect.arrayContaining([
+					{ owner: "acme-corp", name: "widgets", ok: true, result: { status: "already-set-up" } },
+					{ owner: "acme-corp", name: "gadgets", ok: false },
+				]),
+			);
+		});
+
+		it("returns 400 for setup-all when no installation is bound", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			setup();
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/setup-all");
 
 			expect(status).toBe(400);
 			expect(body["error"]).toBe("Install the GitHub App first");
