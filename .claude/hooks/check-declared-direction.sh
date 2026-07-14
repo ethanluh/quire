@@ -4,13 +4,16 @@
 set -euo pipefail
 
 input="$(cat)"
-command="$(printf '%s' "$input" | grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 || true)"
 
-if ! printf '%s' "$command" | grep -qE 'gh pr (create|edit)'; then
+# Match directly against the raw JSON payload rather than trying to isolate a clean
+# "command" substring first: the command is JSON-escaped, so any quoted argument before
+# the body (e.g. --title "...") truncates a naive `"[^"]*"` extraction at its first
+# embedded quote, well before the body/marker is ever reached.
+if ! printf '%s' "$input" | grep -qE 'gh pr (create|edit)'; then
   exit 0
 fi
 
-if printf '%s' "$command" | grep -qP '<!--\s*declared-direction:\s*\S.*-->'; then
+if printf '%s' "$input" | grep -qE '<!--[[:space:]]*declared-direction:[[:space:]]*[^[:space:]].*-->'; then
   exit 0
 fi
 
