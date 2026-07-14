@@ -212,33 +212,20 @@
     line-height: var(--space-5); text-align: center;
   }
 
-  #toast {
-    /* --mobile-tabbar-height approximates nav.tabbar's rendered height (~70px) rounded
-       to the nearest grid value, so the clearance above it stays token-composed
-       instead of a bare magic number. */
+  /* Both the ring stack and the generic toast now live in one dock, anchored
+     above the tab bar instead of the toast alone docking there and the ring
+     stack separately pinning to the top (below the header). */
+  .notification-dock {
     --mobile-tabbar-height: calc(var(--space-16) + var(--space-2));
-    position: fixed; left: var(--space-4); right: var(--space-4);
+    left: var(--space-3);
+    right: var(--space-3);
     bottom: calc(var(--mobile-tabbar-height) + var(--space-2) + env(safe-area-inset-bottom));
-    border-radius: var(--radius-md); padding: var(--space-3); font-size: var(--text-sm); text-align: center;
-    opacity: 0; pointer-events: none; transition: opacity var(--duration-base) var(--ease-standard); z-index: 110;
+    z-index: 120;
   }
-  #toast.visible { opacity: 1; }
   #toast.toast-error   { background: var(--color-reject-wash);  color: var(--color-reject);  border: 1px solid var(--color-reject); }
   /* "Noted, not a siren" — routine nudges use the same flagged tier as a drift flag. */
   #toast.toast-notice  { background: var(--color-flagged-wash); color: var(--color-flagged); border: 1px solid var(--color-flagged); }
   #toast.toast-neutral { background: var(--color-surface-sunken); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
-
-  /* Header is in-flow (not fixed) but the stack is fixed, so anchor below the
-     safe area instead of below the header's own variable height; the higher
-     z-index (header's is 1) means it floats over the header, same trade-off
-     `#toast` already makes with the tab bar. */
-  .queue-notification-stack {
-    top: calc(env(safe-area-inset-top) + var(--space-2));
-    left: var(--space-3);
-    right: var(--space-3);
-    max-width: none;
-    z-index: 120;
-  }
 
   /* --- Settings: full-screen sheet, not a floating modal --- */
   #settings-modal-backdrop {
@@ -559,8 +546,10 @@
   </div>
 </div>
 
-<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
-<div id="queue-notifications" class="queue-notification-stack" role="status" aria-live="polite"></div>
+<div class="notification-dock">
+  <div id="queue-notifications" class="queue-notification-stack" role="status" aria-live="polite"></div>
+  <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+</div>
 
 <div class="modal-backdrop hidden" id="detail-modal-backdrop">
   <div class="card detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title">
@@ -774,6 +763,16 @@ async function showBundleDetail(bundleId) {
     return;
   }
   detailModalBody.innerHTML = detailBodyHtml(result);
+}
+
+// Toast click-through target for a bundle-linked notification — same routing
+// as desktop's focusBundle(): queue-scoped bundleIds go to the Bundle status
+// tab/detail, still-pending review cards go to Review.
+function focusBundle(bundleId) {
+  const inQueue = queueEntries.some((e) => e.bundleId === bundleId);
+  selectMobileTab(document.querySelector(`[data-tab="${inQueue ? 'queue' : 'review'}"]`));
+  if (inQueue) showQueueDetail(bundleId);
+  else showBundleDetail(bundleId);
 }
 
 function showQueueDetail(bundleId) {
@@ -1126,7 +1125,7 @@ function commit(el, card, action, flyTransform, confirmed) {
     const at = Math.min(restoreIndex < 0 ? 0 : restoreIndex, reviewCards.length);
     reviewCards.splice(at, 0, card);
     renderStack();
-    showError(`Could not ${action} — ${err.message}`);
+    showError(`Could not ${action} — ${err.message}`, card.bundleId);
   });
 }
 
@@ -1213,7 +1212,7 @@ async function removeFromQueue(bundleId, btn) {
   if (!(await confirmAction('Remove this bundle from bundle status tracking?'))) return;
   const result = await withPending(btn, 'Removing…', () => api('DELETE', `/queue/${bundleId}`));
   if (result.error) {
-    showError('Could not remove bundle: ' + result.error);
+    showError('Could not remove bundle: ' + result.error, bundleId);
     return;
   }
   loadQueue();

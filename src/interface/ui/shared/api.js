@@ -42,15 +42,26 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function showToast(message, tone) {
+function showToast(message, tone, options) {
   const toast = document.getElementById('toast');
-  toast.textContent = message;
-  toast.className = `toast-${tone || 'error'} visible`;
+  if (!toast.querySelector('.toast-message')) {
+    toast.innerHTML = '<span class="toast-message"></span><button type="button" class="toast-dismiss" aria-label="Dismiss">&times;</button>';
+  }
+  toast.querySelector('.toast-message').textContent = message;
+  const bundleId = options && options.bundleId;
+  toast.dataset.bundleId = bundleId || '';
+  toast.className = `toast-${tone || 'error'} visible${bundleId ? ' toast-clickable' : ''}`;
   if (!showToast._dismissWired) {
     showToast._dismissWired = true;
+    toast.querySelector('.toast-dismiss').addEventListener('click', (event) => {
+      event.stopPropagation();
+      clearTimeout(showToast._t);
+      toast.classList.remove('visible');
+    });
     toast.addEventListener('click', () => {
       clearTimeout(showToast._t);
       toast.classList.remove('visible');
+      if (toast.dataset.bundleId) window.focusBundle?.(toast.dataset.bundleId);
     });
   }
   clearTimeout(showToast._t);
@@ -60,8 +71,8 @@ function showToast(message, tone) {
   showToast._t = setTimeout(() => toast.classList.remove('visible'), ttl);
 }
 
-function showError(message) {
-  showToast(message, 'error');
+function showError(message, bundleId) {
+  showToast(message, 'error', { bundleId });
 }
 
 // Inline error state for a pane list that failed to load, replacing a "Loading…"
@@ -121,7 +132,7 @@ async function abortQueueEntry(bundleId, mergedCount, totalCount, btn) {
   if (!(await confirmAction(message))) return;
   const result = await withPending(btn, 'Aborting…', () => api('POST', `/queue/${bundleId}/abort`, undefined));
   if (result.error) {
-    showError('Could not abort bundle: ' + result.error);
+    showError('Could not abort bundle: ' + result.error, bundleId);
     return;
   }
   loadQueue();

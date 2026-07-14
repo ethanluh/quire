@@ -504,8 +504,10 @@
   </div>
 </div>
 
-<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
-<div id="queue-notifications" class="queue-notification-stack" role="status" aria-live="polite"></div>
+<div class="notification-dock">
+  <div id="queue-notifications" class="queue-notification-stack" role="status" aria-live="polite"></div>
+  <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+</div>
 
 <script src="shared/api.js"></script>
 <script src="shared/render.js"></script>
@@ -873,6 +875,17 @@ async function showBundleDetail(bundleId) {
   detailModalBody.innerHTML = detailBodyHtml(result);
 }
 
+// Toast click-through target for a bundle-linked notification: a queue-scoped
+// action (abort/remove/reattempt) means the bundleId is a merge-queue entry,
+// while a still-pending review card isn't in queueEntries yet — route to
+// whichever tab/detail view actually has it.
+function focusBundle(bundleId) {
+  const inQueue = queueEntries.some((e) => e.bundleId === bundleId);
+  selectTab(document.querySelector(`.tabs [data-tab="${inQueue ? 'queue' : 'review'}"]`));
+  if (inQueue) showQueueDetail(bundleId);
+  else showBundleDetail(bundleId);
+}
+
 function showQueueDetail(bundleId) {
   const entry = queueEntries.find(e => e.bundleId === bundleId);
   if (!entry) return;
@@ -1238,7 +1251,7 @@ async function removeFromQueue(bundleId, btn) {
   if (!(await confirmAction('Remove this bundle from bundle status tracking?'))) return;
   const result = await withPending(btn, 'Removing…', () => api('DELETE', `/queue/${bundleId}`));
   if (result.error) {
-    showError('Could not remove bundle: ' + result.error);
+    showError('Could not remove bundle: ' + result.error, bundleId);
     return;
   }
   loadQueue();
@@ -1262,7 +1275,7 @@ async function gesture(bundleId, action, needsConfirm) {
     }
   } catch (err) {
     buttons.forEach((b) => { b.disabled = false; });
-    showError(`Could not ${action} — ${err.message}`);
+    showError(`Could not ${action} — ${err.message}`, bundleId);
   }
 }
 
@@ -1292,6 +1305,7 @@ document.getElementById('btn-process-all').addEventListener('click', async () =>
   // by the queue size at the start. Cap defensively in case that ever changes.
   for (let i = 0; i < pending && i < queueEntries.length; i++) {
     btn.textContent = `Processing… (${processed}/${pending})`;
+    showProcessAllProgress(processed, pending);
     const stuck = queueEntries.find((e) => ['conflict', 'aborted'].includes(e.status) && !retriedThisRun.has(e.bundleId));
     let result;
     if (stuck) {
@@ -1313,7 +1327,7 @@ document.getElementById('btn-process-all').addEventListener('click', async () =>
 
   btn.textContent = 'Process all';
   btn.disabled = false;
-  showToast(`Processed ${processed}: ${landed} landed, ${conflicts} conflict(s).`, 'notice');
+  finishProcessAllProgress(processed, pending, landed, conflicts);
 });
 
 const clearAllBtn = document.getElementById('btn-clear-all');

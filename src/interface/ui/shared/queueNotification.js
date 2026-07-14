@@ -8,6 +8,49 @@ const trackedQueueNotifications = new Set();
 const queueNotificationLandedTimers = new Map();
 let lastQueueEntriesForNotifications = [];
 
+// "Process all"'s own aggregate progress — not a real bundleId, so it's kept
+// separate from trackedQueueNotifications and always rendered first (above
+// the per-bundle cards) while active.
+let processAllProgress = null;
+let processAllDismissTimer = null;
+
+function processAllNotificationCardHtml() {
+  if (!processAllProgress) return '';
+  const { processed, total, done, landed, conflicts } = processAllProgress;
+  const fraction = total ? processed / total : 0;
+  const tone = done ? (conflicts > 0 ? 'critical' : 'clean') : 'flagged';
+  const label = done
+    ? `Processed ${processed}: ${landed} landed, ${conflicts} conflict(s)`
+    : `Processing ${processed}/${total}`;
+  return `<div class="queue-notification queue-notification-${tone}">
+    ${queueRingSvg(fraction, tone)}
+    <div class="queue-notification-body">
+      <div class="queue-notification-title">Process all</div>
+      <div class="queue-notification-status">${label}</div>
+    </div>
+  </div>`;
+}
+
+// Call once per iteration of the "Process all" loop with the running counts.
+function showProcessAllProgress(processed, total) {
+  clearTimeout(processAllDismissTimer);
+  processAllProgress = { processed, total, done: false };
+  renderTrackedQueueNotifications();
+}
+
+// Call once the loop finishes — turns the ring solid (green unless any
+// conflicts happened) and auto-dismisses after the same TTL a landed
+// per-bundle card uses.
+function finishProcessAllProgress(processed, total, landed, conflicts) {
+  processAllProgress = { processed, total, done: true, landed, conflicts };
+  renderTrackedQueueNotifications();
+  clearTimeout(processAllDismissTimer);
+  processAllDismissTimer = setTimeout(() => {
+    processAllProgress = null;
+    renderTrackedQueueNotifications();
+  }, QUEUE_NOTIFICATION_TTL_MS);
+}
+
 function queueNotificationStackEl() {
   return document.getElementById('queue-notifications');
 }
@@ -76,7 +119,20 @@ function queueNotificationCardHtml(bundleId, entry, order) {
         label = summary ? `Checks in progress (${summary.completed}/${summary.total})` : 'Checks in progress';
       } else {
         fraction = 1;
-        label = 'Needs attention';
+        // "Needs attention" told you nothing you didn't already know from the
+        // critical-tier ring — name what actually happened instead.
+        if (entry.status === 'conflict') {
+          label = 'Merge conflict';
+        } else if (entry.status === 'aborted') {
+          const total = entry.bundle.members.length || 1;
+          const remaining = total - entry.mergedPrIds.length;
+          label = remaining ? `Aborted — ${remaining} remaining` : 'Aborted';
+        } else {
+          const investigations = entry.investigations || [];
+          label = investigations.some((inv) => inv.status === 'awaitingReview')
+            ? 'Investigation ready for review'
+            : 'Investigation in progress';
+        }
       }
     } else {
       const position = order.findIndex((e) => e.bundleId === bundleId);
@@ -106,9 +162,10 @@ function renderTrackedQueueNotifications() {
   const entries = lastQueueEntriesForNotifications;
   const byId = new Map(entries.map((e) => [e.bundleId, e]));
   const order = activeQueueProcessingOrder(entries);
-  // Most recently tracked on top.
+  // Most recently tracked on top; the "Process all" aggregate (if active)
+  // always leads the stack.
   const ids = Array.from(trackedQueueNotifications).reverse();
-  stack.innerHTML = ids.map((id) => queueNotificationCardHtml(id, byId.get(id), order)).join('');
+  stack.innerHTML = processAllNotificationCardHtml() + ids.map((id) => queueNotificationCardHtml(id, byId.get(id), order)).join('');
 }
 
 // Call right after a bundle is successfully accepted, before the next
