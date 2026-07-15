@@ -77,10 +77,10 @@ function runWithRetries(label: string, delaysMs: ReadonlyArray<number>, fn: () =
 
 // Shared by every GitHub-side "this PR may be unblocked now" signal (a synchronize push, a
 // green check_suite, an approved review): reattemptForPr only picks up a bundle actually
-// blocked "conflict" on that exact PR — an unrelated PR's event is a no-op. Actually landing
-// a picked-up bundle is gated the same way accept-time merging is (see gestures.ts): only
-// auto-merge if every member's repo opted in, otherwise just clear the conflict and leave
-// landing to a "Process" click.
+// blocked "conflict" or parked "waitingOnChecks" on that exact PR — an unrelated PR's event is
+// a no-op. Actually landing a picked-up bundle is gated the same way accept-time merging is
+// (see gestures.ts): only auto-merge if every member's repo opted in, otherwise just clear the
+// conflict/wait and leave landing to a "Process" click.
 async function reattemptAndMaybeAutoMerge(prIds: ReadonlyArray<string>, refreshDeps: RefreshDeps): Promise<void> {
 	for (const prId of prIds) {
 		const reattempted = await refreshDeps.queue.reattemptForPr(prId);

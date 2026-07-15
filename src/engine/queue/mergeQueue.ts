@@ -13,6 +13,12 @@ import type { ManagedAgentsClient } from "./managedAgentsClient.js";
 
 const MERGEABLE_STATES: ReadonlyArray<MergeabilityState> = ["clean", "hasHooks", "draft"];
 
+// A fresh landing attempt shouldn't even try while a member's CI checks are still
+// pending/failing ("unstable") or GitHub hasn't finished computing mergeable_state yet
+// ("unknownPending") — see checksReady()/dequeueNextLocked. Both are transient: attempting
+// anyway would just bounce into a misleading "conflict" for something that isn't one.
+const CHECKS_PENDING_STATES: ReadonlyArray<MergeabilityState> = ["unstable", "unknownPending"];
+
 // Bounded backoff for GitHub's async mergeable_state computation — both the initial read
 // and the re-check after updateBranch()/commitResolvedFiles() poll on this same schedule.
 export const DEFAULT_MERGEABILITY_POLL_DELAYS_MS: ReadonlyArray<number> = [1000, 2000, 4000, 4000, 4000];
@@ -163,11 +169,42 @@ export class MergeQueue {
 		if (entry === undefined) return undefined;
 
 		if (entry.status === "queued") {
+			// Don't attempt a merge at all while a member's checks are still pending/failing
+			// (or mergeable_state hasn't resolved yet) — parked as "waitingOnChecks" instead of
+			// touching GitHub's merge endpoint. The check_suite/pull_request_review webhook
+			// (reattemptForPr) or the pollWaitingOnChecks() backstop clears it back to "queued"
+			// once checks resolve, at which point this same gate lets it through.
+			const readiness = await this.checksReady(entry.bundle);
+			if (!readiness.ready) {
+				const waiting: MergeQueueEntry = {
+					...entry,
+					status: "waitingOnChecks",
+					waitingOnChecks: { prId: readiness.prId, detectedAt: new Date().toISOString() },
+				};
+				await this.setEntry(waiting.bundleId, waiting);
+				return waiting;
+			}
 			entry = { ...entry, status: "landing" };
 			await this.setEntry(entry.bundleId, entry);
 		}
 
 		return this.runLandingEntry(entry);
+	}
+
+	// One-shot readiness check (no polling/backoff — that's ensureMergeable's job once an
+	// attempt is actually under way) used to gate a *fresh* landing attempt. Doesn't
+	// distinguish "behind"/"dirty"/"blocked" from "clean" — those are real attempt outcomes
+	// runLandingEntry/ensureMergeable already know how to handle; only the checks-related
+	// states below are worth deferring on rather than attempting and immediately conflicting.
+	private async checksReady(bundle: Bundle): Promise<{ ready: true } | { ready: false; prId: string }> {
+		for (const pr of bundle.members) {
+			const mergeability = await this.github.getMergeability(pr.repoOwner, pr.repoName, pr.number);
+			if (mergeability.merged) continue;
+			if (CHECKS_PENDING_STATES.includes(mergeability.state)) {
+				return { ready: false, prId: pr.id };
+			}
+		}
+		return { ready: true };
 	}
 
 	// Merges each member PR of an entry already in "landing" status, skipping ones already
@@ -462,13 +499,17 @@ export class MergeQueue {
 	}
 
 	private async reattemptForPrLocked(prId: string): Promise<MergeQueueEntry | undefined> {
-		const entry = this.state.entries.find((e) => e.status === "conflict" && e.conflict?.prId === prId);
+		const entry = this.state.entries.find(
+			(e) =>
+				(e.status === "conflict" && e.conflict?.prId === prId) ||
+				(e.status === "waitingOnChecks" && e.waitingOnChecks?.prId === prId),
+		);
 		if (entry === undefined) return undefined;
 		return this.clearToQueued(entry);
 	}
 
 	private async clearToQueued(entry: MergeQueueEntry): Promise<MergeQueueEntry> {
-		const { conflict: _conflict, abortedAt: _abortedAt, ...rest } = entry;
+		const { conflict: _conflict, abortedAt: _abortedAt, waitingOnChecks: _waitingOnChecks, ...rest } = entry;
 		const retried: MergeQueueEntry = { ...rest, status: "queued" };
 		await this.setEntry(entry.bundleId, retried);
 		return retried;
@@ -563,20 +604,22 @@ export class MergeQueue {
 	}
 
 	// A human gave up waiting on a bundle stuck mid-landing (possibly with some members
-	// already merged) or blocked on conflict — moves it to a terminal "aborted" state so it
-	// stops being retried by dequeueNext()/reattempt(). Does not revert mergedPrIds (INV-4:
-	// that's a separate, explicit per-PR action via revertPr) and does not delete the entry
-	// (residual stays visible per INV-6, same as every other non-queued exit path). "queued"
-	// entries use removeQueued() instead; "landed" and already-"aborted" entries have nothing
-	// to abort.
+	// already merged), blocked on conflict, or parked "waitingOnChecks" — moves it to a
+	// terminal "aborted" state so it stops being retried by dequeueNext()/reattempt()/
+	// pollWaitingOnChecks(). Does not revert mergedPrIds (INV-4: that's a separate, explicit
+	// per-PR action via revertPr) and does not delete the entry (residual stays visible per
+	// INV-6, same as every other non-queued exit path). "queued" entries use removeQueued()
+	// instead; "landed" and already-"aborted" entries have nothing to abort.
 	async abort(bundleId: string): Promise<MergeQueueEntry | undefined> {
 		return this.withLock(() => this.abortLocked(bundleId));
 	}
 
 	private async abortLocked(bundleId: string): Promise<MergeQueueEntry | undefined> {
-		const entry = this.state.entries.find((e) => e.bundleId === bundleId && (e.status === "landing" || e.status === "conflict"));
+		const entry = this.state.entries.find(
+			(e) => e.bundleId === bundleId && (e.status === "landing" || e.status === "conflict" || e.status === "waitingOnChecks"),
+		);
 		if (entry === undefined) return undefined;
-		const { conflict: _conflict, ...rest } = entry;
+		const { conflict: _conflict, waitingOnChecks: _waitingOnChecks, ...rest } = entry;
 		const aborted: MergeQueueEntry = { ...rest, status: "aborted", abortedAt: new Date().toISOString() };
 		await this.setEntry(bundleId, aborted);
 		// Audit trail, matching logConflictResolution()'s call at every other conflict-adjacent
@@ -648,6 +691,31 @@ export class MergeQueue {
 				}
 			}
 		}
+	}
+
+	// Periodic backstop (meant to be wired into a tighter-cadence setInterval than the other
+	// queue timers — see index.ts) for entries parked "waitingOnChecks": rechecks each one's
+	// blocking PR directly against GitHub rather than relying solely on a check_suite/
+	// pull_request_review webhook delivery, same "don't trust webhooks alone" posture as
+	// reconcileWithGitHub. Returns the entries that cleared back to "queued" so the caller can
+	// decide (same bundleAutoMergeEnabled gate every other auto-merge trigger uses) whether to
+	// also drain them immediately.
+	async pollWaitingOnChecks(): Promise<ReadonlyArray<MergeQueueEntry>> {
+		return this.withLock(() => this.pollWaitingOnChecksLocked());
+	}
+
+	private async pollWaitingOnChecksLocked(): Promise<ReadonlyArray<MergeQueueEntry>> {
+		const waiting = this.state.entries.filter((e) => e.status === "waitingOnChecks");
+		const cleared: MergeQueueEntry[] = [];
+		for (const entry of waiting) {
+			try {
+				const readiness = await this.checksReady(entry.bundle);
+				if (readiness.ready) cleared.push(await this.clearToQueued(entry));
+			} catch (err) {
+				console.error(`Waiting-on-checks poll failed for bundle ${entry.bundleId}:`, err);
+			}
+		}
+		return cleared;
 	}
 
 	// Periodic check (meant to be wired into a setInterval, like refreshQueuedBranches) for

@@ -543,7 +543,7 @@ describe("webhookRouter", () => {
 		expect((await queue.getEntry(makeBundleFor(pr).id))?.status).toBe("conflict");
 	});
 
-	it("clears a matching \"conflict\" queue entry when a check_suite succeeds, without merging when autoMergeOnAccept is off", async () => {
+	it("clears a matching \"waitingOnChecks\" queue entry when a check_suite succeeds, without merging when autoMergeOnAccept is off", async () => {
 		dir = await mkdtemp(join(tmpdir(), "quire-webhook-"));
 		const client = new StubGitHubClient();
 		const { queue } = await setup(client);
@@ -551,8 +551,8 @@ describe("webhookRouter", () => {
 		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unstable" }));
 		await queue.enqueue(makeBundleFor(pr));
 		const blocked = await queue.dequeueNext();
-		expect(blocked?.status).toBe("conflict");
-		expect(blocked?.conflict?.kind).toBe("unstable");
+		expect(blocked?.status).toBe("waitingOnChecks");
+		expect(blocked?.waitingOnChecks?.prId).toBe(pr.id);
 
 		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
 		const { status } = await post(checkSuiteEventPayload("octocat", "hello-world", "completed", "success", [123]), "check_suite");
@@ -575,7 +575,7 @@ describe("webhookRouter", () => {
 		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unstable" }));
 		await queue.enqueue(makeBundleFor(pr));
 		const blocked = await queue.dequeueNext();
-		expect(blocked?.status).toBe("conflict");
+		expect(blocked?.status).toBe("waitingOnChecks");
 
 		client.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
 		const { status } = await post(checkSuiteEventPayload("octocat", "hello-world", "completed", "success", [123]), "check_suite");

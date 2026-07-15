@@ -7,6 +7,14 @@ const QUEUE_NOTIFICATION_TTL_MS = 3500;
 const trackedQueueNotifications = new Set();
 const queueNotificationLandedTimers = new Map();
 let lastQueueEntriesForNotifications = [];
+// Updated on every updateQueueNotifications() call (i.e. every loadQueue()), independent of
+// whether any bundle is actually tracked in the notification stack — shared/polling.js reads
+// this to decide whether to poll at the tighter ACTIVE_MERGE_POLL_INTERVAL_MS cadence.
+let mergeInProgress = false;
+
+function isMergeInProgress() {
+  return mergeInProgress;
+}
 
 // "Process all"'s own aggregate progress — not a real bundleId, so it's kept
 // separate from trackedQueueNotifications and always rendered first (above
@@ -67,12 +75,21 @@ function queueNotificationTone(entry) {
   if (!entry) return 'neutral';
   if (entry.status === 'landing') return 'flagged';
   if (entry.status === 'landed') return 'clean';
+  if (entry.status === 'waitingOnChecks') return 'flagged';
   if (entry.status === 'conflict') {
     const member = unstableConflictMember(entry);
     if (member && member.ciStatus === 'pending') return 'flagged';
   }
   if (['conflict', 'aborted', 'investigating'].includes(entry.status)) return 'critical';
   return 'neutral'; // queued
+}
+
+// Same member lookup unstableConflictMember does for a "conflict"/"unstable" entry, but for
+// a "waitingOnChecks" entry — accept (or a retry) deliberately didn't attempt a merge yet, so
+// there's no conflict to report, just the blocking PR's own CI status/progress.
+function waitingOnChecksMember(entry) {
+  if (!entry || !entry.waitingOnChecks) return undefined;
+  return ((entry.bundle && entry.bundle.members) || []).find((m) => m.id === entry.waitingOnChecks.prId);
 }
 
 function queueRingSvg(fraction, tone) {
@@ -111,6 +128,11 @@ function queueNotificationCardHtml(bundleId, entry, order) {
     } else if (entry.status === 'landed') {
       fraction = 1;
       label = 'Landed';
+    } else if (entry.status === 'waitingOnChecks') {
+      const member = waitingOnChecksMember(entry);
+      const summary = member && member.ciChecksSummary;
+      fraction = summary ? summary.completed / summary.total : 0;
+      label = summary ? `Waiting on checks (${summary.completed}/${summary.total})` : 'Waiting on checks';
     } else if (['conflict', 'aborted', 'investigating'].includes(entry.status)) {
       const member = unstableConflictMember(entry);
       if (member && member.ciStatus === 'pending') {
@@ -187,6 +209,7 @@ function hasTrackedQueueNotifications() {
 // current without any notification-specific fetch of its own.
 function updateQueueNotifications(queueEntries) {
   lastQueueEntriesForNotifications = queueEntries;
+  mergeInProgress = queueEntries.some((e) => e.status === 'landing' || e.status === 'waitingOnChecks');
   if (!trackedQueueNotifications.size) return;
 
   const byId = new Map(queueEntries.map((e) => [e.bundleId, e]));

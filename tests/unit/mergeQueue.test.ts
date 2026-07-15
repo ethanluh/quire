@@ -524,7 +524,7 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		expect(github.mergedPrs).toEqual([]);
 	});
 
-	it("marks the bundle as conflicted when checks are unstable", async () => {
+	it("parks a fresh entry as waitingOnChecks instead of attempting a merge while checks are unstable", async () => {
 		const { github, queue } = await setup();
 		const pr = makePr();
 		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unstable" }));
@@ -532,9 +532,9 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 
 		const blocked = await queue.dequeueNext();
 
-		expect(blocked?.status).toBe("conflict");
-		expect(blocked?.conflict?.reason).toContain("status checks");
-		expect(blocked?.conflict?.kind).toBe("unstable");
+		expect(blocked?.status).toBe("waitingOnChecks");
+		expect(blocked?.waitingOnChecks?.prId).toBe(pr.id);
+		expect(github.mergedPrs).toEqual([]);
 	});
 
 	it("bails to conflict without attempting a write when the PR head lives in a fork", async () => {
@@ -609,7 +609,26 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		expect(github.mergedPrs).toEqual([]);
 	});
 
-	it("bails to conflict when GitHub never finishes computing mergeability", async () => {
+	it("parks a fresh entry as waitingOnChecks instead of attempting a merge while GitHub hasn't finished computing mergeability", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unknownPending" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+
+		const blocked = await queue.dequeueNext();
+
+		expect(blocked?.status).toBe("waitingOnChecks");
+		expect(blocked?.waitingOnChecks?.prId).toBe(pr.id);
+		expect(github.mergedPrs).toEqual([]);
+	});
+
+	it("still bails to conflict via ensureMergeable's own timeout when a resumed 'landing' entry's mergeability never resolves", async () => {
+		// checksReady()'s pre-flight gate only runs for a *fresh* "queued" entry — a "landing"
+		// entry resumed after a crash (dequeueNextLocked's own-status-first lookup) skips
+		// straight to runLandingEntry/ensureMergeable, whose bounded poll-and-timeout this test
+		// exercises directly. Gets there the same way the "rethrows a mergePullRequest
+		// exception" test above does: a clean first attempt throws mid-merge, leaving the entry
+		// in "landing" for dequeueNext() to resume — then mergeability itself stops resolving.
 		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
 		const github = new StubGitHubClient();
 		// Empty poll-delay list: still polls once per entry with a zero-length backoff
@@ -617,9 +636,14 @@ describe("MergeQueue.dequeueNext — mergeability handling", () => {
 		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"), [0, 0]);
 		await queue.load();
 		const pr = makePr();
-		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unknownPending" }));
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		github.mergePullRequestError = new Error("network blip");
 		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await expect(queue.dequeueNext()).rejects.toThrow("network blip");
+		const resuming = await queue.getEntry("bundle-1");
+		expect(resuming?.status).toBe("landing");
 
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unknownPending" }));
 		const blocked = await queue.dequeueNext();
 
 		expect(blocked?.status).toBe("conflict");
@@ -818,6 +842,28 @@ describe("MergeQueue.reattemptForPr", () => {
 
 		await expect(queue.reattemptForPr(pr.id)).resolves.toBeUndefined();
 		expect((await queue.getEntry("bundle-1"))?.status).toBe("aborted");
+	});
+
+	it("clears a waitingOnChecks entry matching the given PR id and requeues it", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unstable" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		const waiting = await queue.dequeueNext();
+		expect(waiting?.status).toBe("waitingOnChecks");
+
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		const retried = await queue.reattemptForPr(pr.id);
+
+		expect(retried?.bundleId).toBe("bundle-1");
+		expect(retried?.status).toBe("queued");
+		expect(retried?.waitingOnChecks).toBeUndefined();
+
+		const landed = await queue.dequeueNext();
+		expect(landed?.status).toBe("landed");
 	});
 });
 
@@ -1197,6 +1243,21 @@ describe("MergeQueue.abort", () => {
 		expect((await queue.getEntry("bundle-1"))?.status).toBe("queued");
 	});
 
+	it("aborts a bundle parked waitingOnChecks, clearing the wait", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unstable" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		const waiting = await queue.dequeueNext();
+		expect(waiting?.status).toBe("waitingOnChecks");
+
+		const aborted = await queue.abort("bundle-1");
+
+		expect(aborted?.status).toBe("aborted");
+		expect(aborted?.waitingOnChecks).toBeUndefined();
+		expect(aborted?.abortedAt).toEqual(expect.any(String));
+	});
+
 	it("returns undefined for a landed bundle", async () => {
 		const { queue } = await setup();
 		await queue.enqueue(makeBundle("bundle-1", [makePr()]));
@@ -1287,6 +1348,61 @@ describe("MergeQueue.revertPr", () => {
 		const { queue } = await setup();
 
 		await expect(queue.revertPr("missing-bundle", "pr-1")).rejects.toThrow(/not found in queue/);
+	});
+});
+
+describe("MergeQueue.pollWaitingOnChecks", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		if (dir) await rm(dir, { recursive: true, force: true });
+	});
+
+	async function setup(): Promise<{ github: StubGitHubClient; queue: MergeQueue }> {
+		dir = await mkdtemp(join(tmpdir(), "quire-queue-"));
+		const github = new StubGitHubClient();
+		const queue = new MergeQueue(join(dir, "queue.json"), github, llmHolder(), join(dir, "conflict.ndjson"));
+		await queue.load();
+		return { github, queue };
+	}
+
+	it("clears a waitingOnChecks entry back to queued once its checks resolve, and returns it", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unstable" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		const waiting = await queue.dequeueNext();
+		expect(waiting?.status).toBe("waitingOnChecks");
+
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "clean" }));
+		const cleared = await queue.pollWaitingOnChecks();
+
+		expect(cleared).toHaveLength(1);
+		expect(cleared[0]?.bundleId).toBe("bundle-1");
+		expect((await queue.getEntry("bundle-1"))?.status).toBe("queued");
+	});
+
+	it("leaves a waitingOnChecks entry parked when its checks are still unresolved", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "unstable" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.dequeueNext();
+
+		const cleared = await queue.pollWaitingOnChecks();
+
+		expect(cleared).toEqual([]);
+		expect((await queue.getEntry("bundle-1"))?.status).toBe("waitingOnChecks");
+	});
+
+	it("ignores entries in every other status", async () => {
+		const { github, queue } = await setup();
+		const pr = makePr();
+		github.setMergeability(pr.repoOwner, pr.repoName, pr.number, makeMergeability({ state: "blocked" }));
+		await queue.enqueue(makeBundle("bundle-1", [pr]));
+		await queue.dequeueNext();
+
+		await expect(queue.pollWaitingOnChecks()).resolves.toEqual([]);
 	});
 });
 

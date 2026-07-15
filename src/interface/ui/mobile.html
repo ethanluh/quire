@@ -1173,8 +1173,18 @@ async function loadShelf() {
 }
 
 // --- Queue ---
+// Guards against an in-flight /queue fetch resolving *after* a fetch started later (a
+// gesture's own explicit loadQueue() and the SSE-triggered pollActivePane() one can easily
+// overlap, e.g. right after Abort/Reattempt) — without this, whichever response happens to
+// arrive last wins, which is sometimes the stale one and silently reverts a just-applied
+// status change back to what it was before. Only the response from the most recently
+// *started* call is ever applied.
+let queueLoadSeq = 0;
+
 async function loadQueue() {
+  const seq = ++queueLoadSeq;
   const entries = await api('GET', '/queue');
+  if (seq !== queueLoadSeq) return;
   if (entries.error) {
     document.getElementById('queue-list').innerHTML = paneErrorHtml(entries.error, 'loadQueue()');
     return;
@@ -1189,7 +1199,7 @@ async function loadQueue() {
     const actionButtons = [
       e.status === 'queued' && isOwner() ? `<button class="btn btn-reject btn-remove-from-queue" data-bundle-id="${escapeHtml(e.bundleId)}">Remove</button>` : '',
       ['conflict', 'aborted'].includes(e.status) && isOwner() ? `<button class="btn btn-accept btn-reattempt-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}">Reattempt</button>` : '',
-      ['landing', 'conflict'].includes(e.status) && isOwner() ? `<button class="btn btn-reject btn-abort-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}" data-merged-pr-count="${e.mergedPrIds.length}" data-member-count="${e.bundle.members.length}">Abort</button>` : '',
+      ['landing', 'conflict', 'waitingOnChecks'].includes(e.status) && isOwner() ? `<button class="btn btn-reject btn-abort-queue-entry" data-bundle-id="${escapeHtml(e.bundleId)}" data-merged-pr-count="${e.mergedPrIds.length}" data-member-count="${e.bundle.members.length}">Abort</button>` : '',
     ].filter(Boolean).join('');
     const statusRow = queueStatusRowHtml(e);
     return `<div class="queue-entry card stacked">
