@@ -13,6 +13,8 @@ function makePr(id: string, filesTouched: ReadonlyArray<string>): PullRequest {
 		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched,
+		labels: [],
+		assignees: [],
 		symbolsTouched: [],
 		testNamesChanged: [],
 		ciStatus: "success",

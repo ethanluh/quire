@@ -141,6 +141,8 @@ function prMemberListHtml(members, drift, mergeStatus) {
         ${prDriftBadges(pr.id, drift)}
         ${ciStatusBadge(pr.ciStatus, pr.ciChecksSummary)}
         <span class="badge badge-neutral">${pr.filesTouched.length} files</span>
+        ${pr.labels.map(l => `<span class="badge badge-neutral">${escapeHtml(l)}</span>`).join('')}
+        ${pr.assignees.length ? `<span class="badge badge-neutral">${pr.assignees.map(escapeHtml).join(', ')}</span>` : ''}
       </div>
     </div>`;
   }).join('') + '</div>';

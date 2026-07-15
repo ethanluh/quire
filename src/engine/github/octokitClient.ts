@@ -60,6 +60,10 @@ interface PullRequestRef {
 	title: string;
 	body: string | null;
 	head: { sha: string };
+	// GitHub's schema allows a bare label name (legacy) alongside the modern label object —
+	// both `pulls.get` and `pulls.list` items carry this shape already, no extra call needed.
+	labels: ReadonlyArray<{ name?: string } | string>;
+	assignees?: ReadonlyArray<{ login: string }> | null;
 }
 
 // Each item's per-PR work (diff + files + CI status, several API calls apiece) is
@@ -544,6 +548,8 @@ export class OctokitGitHubClient implements GitHubClient {
 			directionInferred: inferred,
 			...(linkedIssueNumber !== undefined ? { linkedIssueNumber } : {}),
 			filesTouched: files.map((f) => f.filename),
+			labels: pr.labels.map((l) => (typeof l === "string" ? l : l.name ?? "")).filter((n) => n.length > 0),
+			assignees: (pr.assignees ?? []).map((a) => a.login),
 		};
 	}
 

@@ -46,6 +46,8 @@ function makePrFixture(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 		declaredDirection: "add passwordless auth",
 		directionInferred: false,
 		filesTouched: ["src/auth.ts"],
+		labels: [],
+		assignees: [],
 		...overrides,
 	};
 }

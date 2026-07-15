@@ -14,6 +14,7 @@ function makePR(id: string, filesTouched: string[]): PullRequest {
 		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched,
+		labels: [], assignees: [],
 		symbolsTouched: [], testNamesChanged: [], ciStatus: "success",
 	};
 }

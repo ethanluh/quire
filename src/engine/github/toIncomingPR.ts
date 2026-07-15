@@ -14,6 +14,8 @@ export function rawPRPayloadToIncomingPR(pr: RawPRPayload): IncomingPR {
 		...(pr.linkedIssueNumber !== undefined ? { linkedIssueNumber: pr.linkedIssueNumber } : {}),
 		diff: { raw: pr.diff, hunks: parseUnifiedDiff(pr.diff) },
 		filesTouched: [...pr.filesTouched],
+		labels: [...pr.labels],
+		assignees: [...pr.assignees],
 		ciStatus: pr.ciStatus,
 		...(pr.ciChecksSummary !== undefined ? { ciChecksSummary: pr.ciChecksSummary } : {}),
 	};

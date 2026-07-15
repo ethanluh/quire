@@ -36,6 +36,8 @@ export function normalizePR(incoming: IncomingPR): PullRequest {
 		...(incoming.linkedIssueNumber !== undefined ? { linkedIssueNumber: incoming.linkedIssueNumber } : {}),
 		diff: incoming.diff,
 		filesTouched,
+		labels: incoming.labels ?? [],
+		assignees: incoming.assignees ?? [],
 		symbolsTouched: incoming.symbolsTouched ?? [],
 		testNamesChanged: filteredTestNames,
 		ciStatus: incoming.ciStatus,

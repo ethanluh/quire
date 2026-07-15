@@ -47,6 +47,8 @@ function makePR(id: string, direction: string, overrides: Partial<PullRequest> =
 		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: [`src/${id}.ts`],
+		labels: [],
+		assignees: [],
 		symbolsTouched: [], testNamesChanged: [], ciStatus: "success",
 		...overrides,
 	};

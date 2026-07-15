@@ -58,6 +58,11 @@ export interface PullRequest {
 	linkedIssueNumber?: number;
 	diff: Diff;
 	filesTouched: ReadonlyArray<string>;
+	// Descriptive metadata carried straight from GitHub, not extracted from the diff — like
+	// declaredDirection, these are never a drift/verdict input (INV-1's discipline applies to
+	// any human-supplied label just as much as the direction marker itself).
+	labels: ReadonlyArray<string>;
+	assignees: ReadonlyArray<string>;
 	symbolsTouched: ReadonlyArray<SymbolRef>;
 	testNamesChanged: ReadonlyArray<string>;
 	ciStatus: "success" | "failure" | "pending" | "unknown";
