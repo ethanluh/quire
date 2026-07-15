@@ -64,6 +64,8 @@ function makeBundle(id: string): Bundle {
 				directionInferred: false,
 				diff: { raw: "", hunks: [] },
 				filesTouched: [],
+				labels: [],
+				assignees: [],
 				symbolsTouched: [],
 				testNamesChanged: [],
 				ciStatus: "success",

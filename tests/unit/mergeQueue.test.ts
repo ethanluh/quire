@@ -39,6 +39,8 @@ function makePr(overrides: Partial<PullRequest> = {}): PullRequest {
 		directionInferred: false,
 		diff: { raw: "", hunks: [] },
 		filesTouched: ["src/auth.ts"],
+		labels: [],
+		assignees: [],
 		symbolsTouched: [],
 		testNamesChanged: [],
 		ciStatus: "success",

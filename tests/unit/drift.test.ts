@@ -19,6 +19,7 @@ function makePR(overrides: Partial<PullRequest> = {}): PullRequest {
 		declaredDirection: "add passwordless auth",
 		directionInferred: false,
 		diff: EMPTY_DIFF, filesTouched: ["src/auth.ts"],
+		labels: [], assignees: [],
 		symbolsTouched: [], testNamesChanged: [], ciStatus: "success",
 		...overrides,
 	};

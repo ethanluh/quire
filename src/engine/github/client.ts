@@ -22,6 +22,8 @@ export interface RawPRPayload {
 	// the PR doesn't reference an issue.
 	linkedIssueNumber?: number;
 	filesTouched: ReadonlyArray<string>;
+	labels: ReadonlyArray<string>;
+	assignees: ReadonlyArray<string>;
 }
 
 export interface IssueSummary {

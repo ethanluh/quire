@@ -11,6 +11,7 @@ function makePR(id: string): PullRequest {
 		declaredDirection: "add passwordless auth",
 		directionInferred: false,
 		diff: EMPTY_DIFF, filesTouched: [`src/${id}.ts`],
+		labels: [], assignees: [],
 		symbolsTouched: [], testNamesChanged: [], ciStatus: "success",
 	};
 }

@@ -17,6 +17,8 @@ function makeFixture(number: number): RawPRPayload {
 		declaredDirection: "direction",
 		directionInferred: false,
 		filesTouched: [],
+		labels: [],
+		assignees: [],
 	};
 }
 

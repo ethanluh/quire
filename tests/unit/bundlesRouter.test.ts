@@ -41,6 +41,8 @@ function makeBundle(id: string, filesTouched: ReadonlyArray<string> = []): Bundl
 				directionInferred: false,
 				diff: { raw: "", hunks: [] },
 				filesTouched,
+				labels: [],
+				assignees: [],
 				symbolsTouched: [],
 				testNamesChanged: [],
 				ciStatus: "success",

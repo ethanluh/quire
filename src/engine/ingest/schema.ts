@@ -33,6 +33,8 @@ export const IncomingPRSchema = z.object({
 	linkedIssueNumber: z.number().int().positive().optional(),
 	diff: DiffSchema,
 	filesTouched: z.array(z.string().max(MAX_STR)).max(MAX_FILES).optional(),
+	labels: z.array(z.string().max(MAX_STR)).max(MAX_FILES).optional(),
+	assignees: z.array(z.string().max(MAX_STR)).max(MAX_FILES).optional(),
 	symbolsTouched: z.array(z.object({
 		name: z.string().max(MAX_STR),
 		filePath: z.string().max(MAX_STR),

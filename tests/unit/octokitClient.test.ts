@@ -40,6 +40,8 @@ function makePrResponse(body: string | null, overrides: Record<string, unknown> 
 		body,
 		node_id: "PR_node123",
 		head: { sha: "abc123" },
+		labels: [],
+		assignees: [],
 		...overrides,
 	};
 }
@@ -255,6 +257,26 @@ describe("OctokitGitHubClient", () => {
 			const client = new OctokitGitHubClient(octokit);
 			const payload = await client.getPullRequest("org", "repo", 7);
 			expect(payload.linkedIssueNumber).toBeUndefined();
+		});
+
+		it("maps labels (string or object form) and assignees", async () => {
+			const { octokit } = makeFakeOctokit({
+				pr: makePrResponse(null, {
+					labels: ["bug", { name: "security" }, { name: undefined }],
+					assignees: [{ login: "octocat" }, { login: "hubot" }],
+				}),
+			});
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.labels).toEqual(["bug", "security"]);
+			expect(payload.assignees).toEqual(["octocat", "hubot"]);
+		});
+
+		it("defaults assignees to an empty array when GitHub reports it as null", async () => {
+			const { octokit } = makeFakeOctokit({ pr: makePrResponse(null, { assignees: null }) });
+			const client = new OctokitGitHubClient(octokit);
+			const payload = await client.getPullRequest("org", "repo", 7);
+			expect(payload.assignees).toEqual([]);
 		});
 
 		it("reports pending when a check run has not completed", async () => {

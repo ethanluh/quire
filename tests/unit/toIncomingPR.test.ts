@@ -18,6 +18,8 @@ function makeRawPR(overrides: Partial<RawPRPayload> = {}): RawPRPayload {
 		declaredDirection: "add passwordless auth",
 		directionInferred: false,
 		filesTouched: ["src/auth.ts"],
+		labels: ["enhancement"],
+		assignees: ["octocat"],
 		...overrides,
 	};
 }
@@ -36,6 +38,8 @@ describe("rawPRPayloadToIncomingPR", () => {
 			number: 7,
 			declaredDirection: "add passwordless auth",
 			filesTouched: ["src/auth.ts"],
+			labels: ["enhancement"],
+			assignees: ["octocat"],
 			ciStatus: "success",
 		});
 	});
@@ -58,5 +62,7 @@ describe("rawPRPayloadToIncomingPR", () => {
 		expect(pr.repoOwner).toBe("octocat");
 		expect(pr.repoName).toBe("hello-world");
 		expect(pr.filesTouched).toEqual(["src/auth.ts"]);
+		expect(pr.labels).toEqual(["enhancement"]);
+		expect(pr.assignees).toEqual(["octocat"]);
 	});
 });
