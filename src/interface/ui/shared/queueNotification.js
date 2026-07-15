@@ -119,6 +119,12 @@ function trackQueueNotification(bundleId) {
   renderTrackedQueueNotifications();
 }
 
+// Lets pollActivePane() (shared/polling.js) decide whether a non-queue pane still needs
+// a lightweight /queue refresh to keep a visible notification card current.
+function hasTrackedQueueNotifications() {
+  return trackedQueueNotifications.size > 0;
+}
+
 // Call once per loadQueue() refresh (SSE-triggered or polled) with the
 // freshly fetched entries, so every tracked notification's ring/label stays
 // current without any notification-specific fetch of its own.

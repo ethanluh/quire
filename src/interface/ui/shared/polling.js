@@ -14,6 +14,16 @@ let canRefreshReviewPane = () => true;
 const POLL_INTERVAL_MS = 10000;
 let pollTimer = null;
 
+// The queue-notification stack (shared/queueNotification.js) is a persistent overlay that can
+// be visible regardless of which pane is active, but its data only comes from a /queue fetch.
+// Refresh it here, independent of loadQueue(), so it doesn't sit stale until the user switches
+// to the Bundle Status tab.
+async function refreshQueueNotificationsOnly() {
+	const entries = await api('GET', '/queue');
+	if (entries.error) return;
+	updateQueueNotifications(entries);
+}
+
 function pollActivePane() {
 	if (document.hidden) return;
 	const activeTab = document.querySelector('.tab.active');
@@ -27,6 +37,9 @@ function pollActivePane() {
 		loadQueue();
 	} else if (pane === 'audit') {
 		loadAudit();
+	}
+	if (pane !== 'queue' && hasTrackedQueueNotifications()) {
+		refreshQueueNotificationsOnly();
 	}
 }
 
