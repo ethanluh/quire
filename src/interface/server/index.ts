@@ -362,6 +362,14 @@ async function main(): Promise<void> {
 		tenant.router(req, res, next);
 	});
 
+	// Catch-all for unmatched paths — without this, Express's default `finalhandler` 404
+	// negotiates to an HTML "Cannot GET /x" page (the frontend's `api()` helper sends no
+	// `Accept` header), which the client can't parse as JSON and surfaces as an opaque
+	// "Unexpected non-JSON response from the server" error instead of a real 404 message.
+	app.use((req, res) => {
+		res.status(404).json({ error: "Not found" });
+	});
+
 	app.use(errorHandler);
 
 	// Independent of webhooks — a safety net for a missed delivery, and the sole detection
