@@ -12,6 +12,11 @@ let canRefreshReviewPane = () => true;
 // (see routes/webhook.ts); these endpoints just read that in-memory state, so
 // polling them here is cheap and never itself calls the GitHub API.
 const POLL_INTERVAL_MS = 10000;
+// Tighter cadence while a merge is actually in flight ("landing", or "waitingOnChecks"
+// watching for CI to clear before attempting) — isMergeInProgress() (shared/
+// queueNotification.js) tracks this off whatever /queue data the page already has, so this
+// costs no extra request, just a shorter wait between the existing ones.
+const ACTIVE_MERGE_POLL_INTERVAL_MS = 3000;
 let pollTimer = null;
 
 // The queue-notification stack (shared/queueNotification.js) is a persistent overlay that can
@@ -43,9 +48,20 @@ function pollActivePane() {
 	}
 }
 
+// Self-rescheduling rather than a fixed setInterval so the cadence can tighten the moment a
+// merge is in flight and relax again the moment it isn't, instead of being locked in at
+// whatever rate was in effect when startPolling() first ran.
+function scheduleNextPoll() {
+	const delay = isMergeInProgress() ? ACTIVE_MERGE_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+	pollTimer = setTimeout(() => {
+		pollActivePane();
+		scheduleNextPoll();
+	}, delay);
+}
+
 function startPolling() {
 	if (pollTimer) return;
-	pollTimer = setInterval(pollActivePane, POLL_INTERVAL_MS);
+	scheduleNextPoll();
 }
 
 // Independent of the cheap poll above and the SSE push below — this is the fallback for when

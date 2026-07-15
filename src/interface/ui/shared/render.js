@@ -16,7 +16,7 @@ const CONFLICT_KIND_COPY = {
   unresolvable: { headline: "Can't merge", guidance: 'See the PR on GitHub for details, or retry.' },
 };
 
-const QUEUE_STATUS_TIER = { queued: 'neutral', landing: 'flagged', landed: 'clean', closed: 'neutral', conflict: 'critical', aborted: 'critical', investigating: 'flagged', reverted: 'critical' };
+const QUEUE_STATUS_TIER = { queued: 'neutral', landing: 'flagged', landed: 'clean', closed: 'neutral', conflict: 'critical', aborted: 'critical', investigating: 'flagged', reverted: 'critical', waitingOnChecks: 'flagged' };
 
 function ciStatusBadge(status, checksSummary) {
   const cls = status === 'success' ? 'badge-clean' : status === 'failure' ? 'badge-flagged' : 'badge-neutral';
@@ -208,12 +208,35 @@ function investigationSummaryHtml(investigations) {
 // The card's secondary status row — whatever's relevant to this bundle's current
 // status, per the reviewed mockup: investigation tally while investigating, otherwise
 // merge progress plus a conflict reason when there is one.
+// Same "checks in progress" member lookup unstableConflictBadge already does for a
+// "conflict"/"unstable" entry, but for a "waitingOnChecks" entry — accept (or a retry)
+// deliberately didn't attempt a merge at all, so there's no conflict to report, just the
+// blocking PR's own CI status.
+function waitingOnChecksMember(e) {
+  if (!e || !e.waitingOnChecks) return undefined;
+  return ((e.bundle && e.bundle.members) || []).find((m) => m.id === e.waitingOnChecks.prId);
+}
+
+function queueWaitingOnChecksReasonHtml(e) {
+  const member = waitingOnChecksMember(e);
+  const counts = member && member.ciChecksSummary ? ` (${member.ciChecksSummary.completed}/${member.ciChecksSummary.total})` : '';
+  return `<span class="status-reason">Waiting on checks${counts} before landing &middot; ${escapeHtml(e.waitingOnChecks.detectedAt)}</span>`;
+}
+
 function queueStatusRowHtml(e) {
   if (e.status === 'investigating') return investigationSummaryHtml(e.investigations);
+  if (e.status === 'waitingOnChecks') return queueWaitingOnChecksReasonHtml(e);
   return queueProgressHtml(e) + (e.status === 'conflict' ? queueConflictReasonHtml(e.conflict) : '');
 }
 
 function queueStatusBadge(e) {
+  if (e.status === 'waitingOnChecks') {
+    const member = waitingOnChecksMember(e);
+    const counts = member && member.ciStatus === 'pending' && member.ciChecksSummary
+      ? ` (${member.ciChecksSummary.completed}/${member.ciChecksSummary.total})`
+      : '';
+    return `<span class="badge badge-flagged">Waiting on checks${counts}</span>`;
+  }
   if (e.status === 'conflict' && e.conflict && e.conflict.kind) {
     if (e.conflict.kind === 'unstable') {
       const member = e.bundle && e.bundle.members && e.bundle.members.find(m => m.id === e.conflict.prId);

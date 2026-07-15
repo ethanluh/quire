@@ -1,6 +1,15 @@
 import type { Bundle, ReviewCard } from "./core.js";
 
-export type MergeQueueEntryStatus = "queued" | "landing" | "landed" | "closed" | "reverted" | "conflict" | "aborted" | "investigating";
+export type MergeQueueEntryStatus =
+	| "queued"
+	| "landing"
+	| "landed"
+	| "closed"
+	| "reverted"
+	| "conflict"
+	| "aborted"
+	| "investigating"
+	| "waitingOnChecks";
 
 // Why a PR couldn't merge, distinct from the coarse "conflict" queue status: mergeConflict is
 // a real text conflict Quire's own resolver couldn't clear; blocked/unstable/timedOut are
@@ -74,6 +83,13 @@ export interface MergeQueueEntry {
 	// (status "investigating" while any are still "running", back to "conflict" — carrying
 	// these for the review UI — once every investigation has a terminal outcome).
 	investigations?: ReadonlyArray<FileInvestigation>;
+	// Set when status is "waitingOnChecks": a fresh landing attempt found this member PR's CI
+	// checks still pending/failing (or GitHub hadn't yet finished computing mergeable_state)
+	// and deliberately didn't attempt a merge at all — see MergeQueue.dequeueNextLocked's
+	// pre-flight checksReady gate. Unlike "conflict", this isn't a failure: it's cleared back
+	// to "queued" once checks resolve, either by the check_suite/pull_request_review webhook
+	// (routes/webhook.ts's reattemptForPr) or the pollWaitingOnChecks() backstop.
+	waitingOnChecks?: { prId: string; detectedAt: string };
 }
 
 export interface QueueState {

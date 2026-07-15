@@ -35,6 +35,7 @@ import { verifyGithubSignature } from "./middleware/webhookSignature.js";
 import { errorHandler } from "./middleware/errors.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
 import { setUpDeclaredDirectionConvention } from "../../engine/github/repoSetup.js";
+import { bundleAutoMergeEnabled } from "./accountState.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Not derived from __dirname: the compiled dist/ output nests one level deeper than the
@@ -47,6 +48,12 @@ const DATA_DIR = process.env.QUIRE_DATA_DIR ?? join(process.cwd(), "data");
 const PORT = parseInt(process.env["PORT"] ?? "3000", 10);
 const QUEUE_REFRESH_INTERVAL_MS =
 	parseInt(process.env["QUIRE_QUEUE_REFRESH_INTERVAL_MINUTES"] ?? "5", 10) * 60 * 1000;
+
+// A bundle sitting "waitingOnChecks" is a merge actively in progress from the human's point of
+// view (they already accepted it) — worth polling far tighter than the general reconcile
+// cadence above so it lands promptly once checks turn green, even if the check_suite/
+// pull_request_review webhook delivery is missed or webhooks aren't configured at all.
+const CHECKS_POLL_INTERVAL_MS = parseInt(process.env["QUIRE_CHECKS_POLL_INTERVAL_SECONDS"] ?? "20", 10) * 1000;
 
 // Opening/updating a setup PR is more visible (and more GitHub-API-call-heavy — 6 file reads per
 // repo) than a plain refresh, so this defaults to once a day rather than reusing the tighter
@@ -446,6 +453,32 @@ async function main(): Promise<void> {
 		}
 	}, QUEUE_REFRESH_INTERVAL_MS);
 	queueGitHubSyncTimer.unref();
+
+	// Tighter-cadence backstop for bundles parked "waitingOnChecks" — a merge the human
+	// already accepted, just deferred until CI clears (see MergeQueue.dequeueNextLocked). Only
+	// drains a newly-cleared entry itself if that entry's repos opted into autoMergeOnAccept,
+	// same gate every other auto-merge trigger (gestures.ts, routes/queue.ts, routes/
+	// webhook.ts) uses — this timer only ever promotes "waitingOnChecks" to "queued", it never
+	// bypasses that opt-in.
+	const checksPollTimer = setInterval(() => {
+		for (const tenant of registry.all()) {
+			tenant.queue
+				.pollWaitingOnChecks()
+				.then((cleared) => {
+					for (const entry of cleared) {
+						if (bundleAutoMergeEnabled(tenant.accountState.current, entry.bundle)) {
+							tenant.queue.dequeueNext().catch((err: unknown) => {
+								console.error(`Background auto-merge failed for ${tenant.teamId} (${entry.bundleId}):`, err);
+							});
+						}
+					}
+				})
+				.catch((err: unknown) => {
+					console.error(`Waiting-on-checks poll failed for ${tenant.teamId}:`, err);
+				});
+		}
+	}, CHECKS_POLL_INTERVAL_MS);
+	checksPollTimer.unref();
 
 	// Checks in on any in-flight Managed Agents deep-investigation sessions (opt-in — see
 	// tenant.ts's DeepInvestigationDeps). A no-op for tenants who never started one:
