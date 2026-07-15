@@ -126,21 +126,25 @@ export function accountRouter(
 		res.json({ login: res.locals.login });
 	});
 
-	router.post("/logout", async (req, res) => {
-		const token = parse(req.headers.cookie ?? "")[SESSION_COOKIE_NAME];
-		const payload = token !== undefined ? verifySession(token, sessionSecret) : undefined;
-		if (payload !== undefined) {
-			userTokenCache.clear(payload.login);
-			await clearUserToken(userTokenPath(dataDir, payload.login));
-			// Invalidate the just-cleared cookie server-side too: clearCookie only asks the
-			// browser to drop it, but the signed token stays valid until expiry, so a copy
-			// captured before logout would keep working. Bumping the login's session epoch makes
-			// requireSession reject every token issued before now (see sessionEpoch.ts).
-			await sessionEpochs.invalidateSessions(payload.login, Date.now());
-		}
+	router.post("/logout", async (req, res, next) => {
+		try {
+			const token = parse(req.headers.cookie ?? "")[SESSION_COOKIE_NAME];
+			const payload = token !== undefined ? verifySession(token, sessionSecret) : undefined;
+			if (payload !== undefined) {
+				userTokenCache.clear(payload.login);
+				await clearUserToken(userTokenPath(dataDir, payload.login));
+				// Invalidate the just-cleared cookie server-side too: clearCookie only asks the
+				// browser to drop it, but the signed token stays valid until expiry, so a copy
+				// captured before logout would keep working. Bumping the login's session epoch makes
+				// requireSession reject every token issued before now (see sessionEpoch.ts).
+				await sessionEpochs.invalidateSessions(payload.login, Date.now());
+			}
 
-		res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
-		res.json({ loggedOut: true });
+			res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
+			res.json({ loggedOut: true });
+		} catch (err) {
+			next(err);
+		}
 	});
 
 	return router;
