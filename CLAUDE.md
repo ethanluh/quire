@@ -42,6 +42,11 @@ Every PR body should include a `<!-- declared-direction: ... -->` HTML comment s
 - `interface` for object shapes; `type` for unions and aliases.
 - No `any`.
 
+## UI conventions
+
+- **Never reset or close menu/navigation state as a side effect of an action.** After an in-app action completes (e.g. connecting GitHub from Settings), the user stays exactly where they were — don't bounce them back to a parent view like Preferences.
+- **UI changes get visual sign-off before implementation.** Update the design artifacts (desktop and mobile) and get Ethan's approval on them first; only then write the implementation.
+
 ## Architecture
 
 The pipeline runs top to bottom:
