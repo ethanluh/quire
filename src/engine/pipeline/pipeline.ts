@@ -3,6 +3,7 @@ import type { GateConfig } from "../types/gate.js";
 import type { InstrumentationSink } from "../types/instrumentation.js";
 import type { LlmProvider } from "../drift/effectList/provider.js";
 import type { StaticAnalyzer } from "../drift/footprint/analyzer.js";
+import type { PatternRegistryClient } from "../drift/patternRegistry/client.js";
 import type { AuditStore } from "../gate/auditStore.js";
 import type { GitHubClient } from "../github/client.js";
 import { runGate } from "../gate/gate.js";
@@ -10,7 +11,9 @@ import { buildBundles, type BundleConfig } from "../bundle/bundler.js";
 import { errorMessage } from "../util/error.js";
 import { appendDriftSignal, runCheapScreen } from "../drift/screen.js";
 import { findSymbolInconsistencies } from "../drift/symbolCoherence/check.js";
+import { NoopPatternRegistryClient } from "../drift/patternRegistry/noopClient.js";
 import { buildReviewCard, computeInputsHash, reuseReviewCard } from "../review/card.js";
+import { detectPatternFlag } from "../review/patternFlag.js";
 import { PrEffectCache } from "../cache/prCache.js";
 import { checkSpecConformance, type LinkedIssue, type SpecConformanceResult } from "../specConformance/check.js";
 
@@ -33,6 +36,9 @@ export interface PipelineRunDeps {
 	// to fetch the linked issue) rather than the pipeline failing outright — matches how
 	// omitting prCache/sink degrades gracefully instead of breaking existing callers.
 	githubClient?: GitHubClient;
+	// Optional: no pattern-registry tool exists yet, so omitting this reproduces today's
+	// behavior exactly (no pattern-mismatch flag is ever added).
+	patternRegistry?: PatternRegistryClient;
 }
 
 // The previous call's bundles/cards for this same PR set, used to seed clustering and
@@ -78,6 +84,7 @@ export async function orchestratePipeline(
 ): Promise<PipelineResult> {
 	const { provider, analyzer, auditStore, sink, githubClient } = deps;
 	const prCache = deps.prCache ?? new PrEffectCache();
+	const patternRegistry = deps.patternRegistry ?? new NoopPatternRegistryClient();
 	const passed: PullRequest[] = [];
 	const rejected: PullRequest[] = [];
 	const shadowed: PullRequest[] = [];
@@ -229,7 +236,8 @@ export async function orchestratePipeline(
 					}),
 				);
 			}
-			cards.push(buildReviewCard(bundle, driftVerdicts, specResultsByPr));
+			const patternFlag = await detectPatternFlag(bundle, patternRegistry);
+			cards.push(buildReviewCard(bundle, driftVerdicts, specResultsByPr, patternFlag ? [patternFlag] : []));
 		}
 	} catch (err) {
 		const error = errorMessage(err);

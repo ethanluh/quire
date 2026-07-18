@@ -30,6 +30,7 @@ import { AuditStore, loadAuditStore } from "../../engine/gate/auditStore.js";
 import { GateConfigStore, resolveEffectiveGateConfig } from "../../engine/gate/gateConfigStore.js";
 import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.js";
 import type { StaticAnalyzer } from "../../engine/drift/footprint/analyzer.js";
+import type { PatternRegistryClient } from "../../engine/drift/patternRegistry/client.js";
 import { loadAccount as loadLlmAccount } from "../../engine/llm/account.js";
 import { createNdjsonInstrumentationSink } from "../../engine/instrumentation/logger.js";
 import type { PipelineConfig } from "../../engine/pipeline/pipeline.js";
@@ -71,6 +72,7 @@ export interface TenantSharedConfig {
 	appSlug: string;
 	pipelineConfig: PipelineConfig;
 	analyzer: StaticAnalyzer;
+	patternRegistry?: PatternRegistryClient;
 	isProduction: boolean;
 	resolveDefaultLlmProvider: () => ResolvedLlmProvider;
 	// Keyed by login internally (see userTokenCache.ts), so — unlike everything else in
@@ -251,6 +253,7 @@ async function loadTenant(teamId: string, shared: TenantSharedConfig, registry: 
 		auditStore,
 		prCache,
 		instrumentationSink,
+		...(shared.patternRegistry !== undefined ? { patternRegistry: shared.patternRegistry } : {}),
 	};
 
 	// Same object every pipelineDeps-consuming closure (prsRouter, refreshRepoQueue, ...)

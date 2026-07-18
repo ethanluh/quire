@@ -8,6 +8,7 @@ import { PrEffectCache } from "../../src/engine/cache/prCache.js";
 import { StubLlmProvider } from "../mocks/llmProvider.js";
 import { StubStaticAnalyzer } from "../mocks/staticAnalyzer.js";
 import { TypeScriptAnalyzer } from "../../src/engine/drift/footprint/typescript.js";
+import { StubPatternRegistryClient } from "../mocks/patternRegistry.js";
 import type { PullRequest } from "../../src/engine/types/core.js";
 import type { PipelineConfig } from "../../src/engine/pipeline/pipeline.js";
 import type {
@@ -186,6 +187,21 @@ describe("orchestratePipeline — integration", () => {
 			const signals = drift.signals.filter((s) => s.kind === "symbolInconsistency");
 			expect(new Set(signals.map((s) => s.prId))).toEqual(new Set(["pr-2", "pr-3"]));
 		}
+	});
+
+	it("adds a pattern-mismatch flag without affecting drift status or gate outcome", async () => {
+		stub.queueCompletion('["adds OTP login"]');
+		stub.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		analyzer.setFootprint(["src/pr-1.ts"]);
+		const patternRegistry = new StubPatternRegistryClient();
+		patternRegistry.setResult({ matched: false, reason: "hand-rolled auth instead of the shared middleware" });
+
+		const prs = [makePR("pr-1", "add passwordless auth")];
+		const result = await orchestratePipeline(prs, DEFAULT_CONFIG, { provider: stub, analyzer, auditStore, patternRegistry });
+
+		expect(result.cards[0]?.flags).toContain("unusual implementation pattern: hand-rolled auth instead of the shared middleware");
+		expect(result.cards[0]?.drift.status).toBe("clean");
+		expect(result.rejected.length).toBe(0);
 	});
 
 	it("extractor never receives declaredDirection in any LLM call (INV-2)", async () => {

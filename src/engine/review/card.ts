@@ -44,6 +44,10 @@ export function buildReviewCard(
 	bundle: Bundle,
 	driftVerdicts: ReadonlyMap<string, DriftVerdict>,
 	specResultsByPr: ReadonlyMap<string, SpecConformanceResult>,
+	// Additional non-blocking flags computed outside this builder (e.g. a pattern-registry
+	// mismatch, which needs an async client call — see pipeline.ts) and merged in here so
+	// this function stays a pure sync combination of bundle + verdicts + flags.
+	extraFlags: ReadonlyArray<string> = [],
 ): ReviewCard {
 	const anchor = bundle.members[0];
 	if (anchor === undefined) throw new Error("Bundle must have at least one member");
@@ -86,7 +90,7 @@ export function buildReviewCard(
 		repoOwner: anchor.repoOwner,
 		repoName: anchor.repoName,
 		blastRadius: computeBlastRadius(bundle),
-		flags,
+		flags: [...flags, ...extraFlags],
 		drift,
 		residualDisclosure:
 			bundle.members.length === 1 ? RESIDUAL_DISCLOSURE + SINGLETON_DISCLOSURE : RESIDUAL_DISCLOSURE, // INV-6: always set
