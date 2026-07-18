@@ -1636,6 +1636,27 @@ describe("githubAppRouter", () => {
 			expect(state.bundles.size).toBe(2);
 		});
 
+		it("aggregates gate-rejected PRs into the response's bundlesCreated/rejected counts", async () => {
+			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
+			const client = new StubGitHubClient();
+			// PIPELINE_CONFIG's buildFailure criterion is "enforce" — a failing-CI PR is gate-rejected
+			// before it ever reaches effect extraction, so no StubLlmProvider completions are queued.
+			client.addFixture("acme-corp", "widgets", makePrFixture({ owner: "acme-corp", repo: "widgets", ciStatus: "failure" }));
+			setup(async () => [], client, new StubLlmProvider(), {
+				installations: [{ installationId: 555, accountLogin: "acme-corp", accountType: "Organization", boundAt: "2026-06-30T00:00:00.000Z" }],
+				repos: [repoBindingFixture({ owner: "acme-corp", name: "widgets", installationId: 555 })],
+			});
+			await new Promise((resolve) => server.once("listening", resolve));
+
+			const { status, body } = await call(server, "POST", "/account/github/repos/refresh");
+
+			expect(status).toBe(200);
+			expect(body["refreshed"]).toBe(true);
+			expect(body["bundlesCreated"]).toBe(0);
+			expect(body["rejected"]).toBe(1);
+			expect(body["repos"]).toEqual([{ owner: "acme-corp", name: "widgets", ok: true }]);
+		});
+
 		it("with a body, refreshes just the named repo", async () => {
 			dir = await mkdtemp(join(tmpdir(), "quire-githubapp-"));
 			const client = new StubGitHubClient();
