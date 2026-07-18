@@ -457,6 +457,14 @@ export function webhookRouter(
 							`Webhook-triggered refresh for ${parsed.repoOwner}/${parsed.repoName} ingested with errors: ${refreshed.error}`,
 						);
 					}
+					// Enforce-mode gate criteria discard a PR with no other trace (only shadow mode
+					// writes an audit entry — see gate.ts), so on this unattended path this log line
+					// is the only signal a rejection happened at all.
+					if (refreshed.rejected.length > 0) {
+						console.log(
+							`Webhook-triggered refresh for ${parsed.repoOwner}/${parsed.repoName}: gate rejected ${refreshed.rejected.length} PR(s): ${refreshed.rejected.join(", ")}`,
+						);
+					}
 				},
 				forgetDelivery(rawDeliveryId),
 			);

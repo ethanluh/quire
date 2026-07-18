@@ -392,6 +392,14 @@ async function main(): Promise<void> {
 								`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) ingested with errors: ${result.error}`,
 							);
 						}
+						// Enforce-mode gate criteria discard a PR with no other trace (only shadow
+						// mode writes an audit entry — see gate.ts), so on this unattended path this
+						// log line is the only signal a rejection happened at all.
+						if (result.rejected.length > 0) {
+							console.log(
+								`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}): gate rejected ${result.rejected.length} PR(s): ${result.rejected.join(", ")}`,
+							);
+						}
 					})
 					.catch((err: unknown) => {
 						if (err instanceof InstallationRevokedError) {
