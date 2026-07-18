@@ -958,6 +958,34 @@ a.btn {
 	color: var(--color-text-primary);
 }
 
+/* Houses the GitHub panel's #account-status next to its refresh button —
+   .account-status itself stays untouched since team/LLM panels reuse it
+   without a trailing button. */
+.account-status-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--space-3);
+}
+
+.account-status-row .account-status {
+	margin-bottom: 0;
+}
+
+.btn-icon.is-refreshing svg {
+	animation: btn-icon-spin 0.8s linear infinite;
+}
+
+@keyframes btn-icon-spin {
+	to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.btn-icon.is-refreshing svg {
+		animation: none;
+	}
+}
+
 .result-msg {
 	margin-top: var(--space-3);
 	font-size: var(--text-sm);

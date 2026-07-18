@@ -1,6 +1,7 @@
 const repoPanel = document.getElementById('repo-panel');
 const installBtn = document.getElementById('btn-account-install');
 const accountDisconnectAllBtn = document.getElementById('btn-account-disconnect-all');
+const githubRefreshBtn = document.getElementById('btn-github-refresh');
 let loadedInstallations = [];
 
 function showAccountResult(message, isError) {
@@ -68,6 +69,35 @@ accountDisconnectAllBtn.addEventListener('click', async () => {
 	if (!(await confirmAction('Disconnect all GitHub App installations? This clears the current selection and cached repo lists.', { danger: true }))) return;
 	await api('POST', '/account/github/disconnect-all', undefined);
 	loadAccount();
+});
+
+// Full re-check: re-verifies installation/repo status with GitHub (also catches a revoked
+// installation — see loadAccount()'s loadRepos() call) AND re-runs PR ingestion for every
+// watched repo, in one action — recovers from both a stale connection and missed PRs without
+// needing to know which one is actually wrong.
+githubRefreshBtn.addEventListener('click', async () => {
+	githubRefreshBtn.disabled = true;
+	githubRefreshBtn.classList.add('is-refreshing');
+	try {
+		await loadAccount();
+		const result = await api('POST', '/account/github/repos/refresh', undefined);
+		if (result.error) {
+			showAccountResult('Refresh failed: ' + result.error, true);
+			return;
+		}
+		loadReview();
+		const parts = ['GitHub connection refreshed.'];
+		if (result.refreshed) {
+			parts.push(`${result.bundlesCreated || 0} new bundle(s) created.`);
+			if (result.rejected) parts.push(`${result.rejected} PR(s) rejected by the auto-reject gate (see Pipeline settings).`);
+		} else {
+			parts.push('No repos are currently watched.');
+		}
+		showAccountResult(parts.join(' '), false);
+	} finally {
+		githubRefreshBtn.disabled = false;
+		githubRefreshBtn.classList.remove('is-refreshing');
+	}
 });
 
 installBtn.addEventListener('click', async () => {

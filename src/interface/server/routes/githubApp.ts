@@ -688,9 +688,23 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 				return;
 			}
 			const results = await Promise.allSettled(repos.map((repo) => enqueueRefresh(repo.owner, repo.name, refreshDeps)));
+			let bundlesCreated = 0;
+			let rejected = 0;
 			for (const [i, result] of results.entries()) {
-				if (result.status !== "rejected") continue;
 				const repo = repos[i];
+				if (result.status === "fulfilled") {
+					bundlesCreated += result.value.bundlesCreated;
+					rejected += result.value.rejected.length;
+					// Enforce-mode gate rejections otherwise leave no trace on this unattended
+					// path (see gate.ts — only shadow mode writes an audit entry) — a PR can
+					// vanish here with zero signal anywhere else that it was ever considered.
+					if (result.value.rejected.length > 0) {
+						console.log(
+							`Repo refresh for team ${teamId} (${repo?.owner}/${repo?.name}): gate rejected ${result.value.rejected.length} PR(s): ${result.value.rejected.join(", ")}`,
+						);
+					}
+					continue;
+				}
 				const err: unknown = result.reason;
 				if (err instanceof InstallationRevokedError) {
 					console.warn(`Repo refresh paused for team ${teamId} (${repo?.owner}/${repo?.name}): ${err.message}`);
@@ -702,6 +716,8 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 			}
 			res.json({
 				refreshed: true,
+				bundlesCreated,
+				rejected,
 				repos: repos.map((repo, i) => ({ owner: repo.owner, name: repo.name, ok: results[i]?.status === "fulfilled" })),
 			});
 		} catch (err) {
