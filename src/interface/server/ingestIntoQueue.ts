@@ -4,6 +4,7 @@ import type { PipelineConfig, PriorPipelineRun } from "../../engine/pipeline/pip
 import type { LlmProvider } from "../../engine/drift/effectList/provider.js";
 import { LlmProviderHolder } from "../../engine/drift/effectList/providerHolder.js";
 import type { StaticAnalyzer } from "../../engine/drift/footprint/analyzer.js";
+import type { PatternRegistryClient } from "../../engine/drift/patternRegistry/client.js";
 import type { AuditStore } from "../../engine/gate/auditStore.js";
 import type { InstrumentationSink } from "../../engine/types/instrumentation.js";
 import type { PrEffectCache } from "../../engine/cache/prCache.js";
@@ -16,6 +17,7 @@ export interface PipelineDeps {
 	auditStore: AuditStore;
 	prCache: PrEffectCache;
 	instrumentationSink?: InstrumentationSink;
+	patternRegistry?: PatternRegistryClient;
 }
 
 export interface IngestSummary {
@@ -55,6 +57,7 @@ export async function ingestIntoQueue(
 			auditStore: deps.auditStore,
 			prCache: deps.prCache,
 			...(deps.instrumentationSink !== undefined ? { sink: deps.instrumentationSink } : {}),
+			...(deps.patternRegistry !== undefined ? { patternRegistry: deps.patternRegistry } : {}),
 		},
 		priorRun,
 	);

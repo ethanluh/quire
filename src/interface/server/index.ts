@@ -12,6 +12,7 @@ import { resolveSessionSecret } from "./sessionSecret.js";
 import { buildAuthorizeUrl, exchangeCodeForToken, refreshAccessToken } from "../../engine/github/oauth.js";
 import type { OAuthDeps } from "../../engine/github/oauth.js";
 import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
+import { NoopPatternRegistryClient } from "../../engine/drift/patternRegistry/noopClient.js";
 import { TenantRegistry } from "./tenant.js";
 import type { TenantSharedConfig } from "./tenant.js";
 import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
@@ -236,6 +237,8 @@ async function main(): Promise<void> {
 		appSlug,
 		pipelineConfig,
 		analyzer: new TypeScriptAnalyzer(),
+		// No pattern-registry tool exists yet — swap this for a real client once one does.
+		patternRegistry: new NoopPatternRegistryClient(),
 		isProduction,
 		resolveDefaultLlmProvider: () => resolveLlmProvider(process.env),
 		userTokenCache,
