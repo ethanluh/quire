@@ -28,6 +28,14 @@ export interface IngestSummary {
 	error?: string;
 }
 
+// Thrown (internally — see refreshRepoQueue's enqueueRefresh) when the caller's isSuperseded
+// check, re-evaluated immediately before committing to `state`, reports that a newer refresh
+// for the same repo already took over. orchestratePipeline's LLM-backed extraction below can
+// run long enough on its own for that to happen even when nothing upstream of this call
+// stalled — the commit must stay gated on a check taken right up against the write, not one
+// taken before this (possibly slow) call started.
+export class StaleIngestError extends Error {}
+
 // Shared by POST /prs/ingest and POST /account/github/repos/select — both land PRs on
 // the review queue through the same gate → bundle → cheap-screen pipeline and the same
 // state mutation, so the response shape and state-population logic exist in one place.
@@ -41,6 +49,7 @@ export async function ingestIntoQueue(
 	state: ServerState,
 	deps: PipelineDeps,
 	priorRun?: PriorPipelineRun,
+	isSuperseded?: () => boolean,
 ): Promise<IngestSummary> {
 	// Pin the provider for the duration of this one ingestion run: deps.provider may be an
 	// LlmProviderHolder that can be reassigned mid-run if the user connects/disconnects an
@@ -62,6 +71,11 @@ export async function ingestIntoQueue(
 		priorRun,
 	);
 
+	// No await between this check and the commit loops below — synchronous end to end, so
+	// nothing else can run (and thus supersede this call) in between.
+	if (isSuperseded?.() === true) {
+		throw new StaleIngestError("Ingestion superseded by a newer refresh; discarding stale result");
+	}
 	for (const bundle of result.bundles) {
 		state.bundles.set(bundle.id, bundle);
 	}

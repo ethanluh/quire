@@ -1629,8 +1629,8 @@ describe("githubAppRouter", () => {
 			expect(body["refreshed"]).toBe(true);
 			expect(body["repos"]).toEqual(
 				expect.arrayContaining([
-					{ owner: "acme-corp", name: "widgets", ok: true },
-					{ owner: "acme-corp", name: "gadgets", ok: true },
+					{ owner: "acme-corp", name: "widgets", ok: true, timedOut: false },
+					{ owner: "acme-corp", name: "gadgets", ok: true, timedOut: false },
 				]),
 			);
 			expect(state.bundles.size).toBe(2);
@@ -1654,7 +1654,7 @@ describe("githubAppRouter", () => {
 			expect(body["refreshed"]).toBe(true);
 			expect(body["bundlesCreated"]).toBe(0);
 			expect(body["rejected"]).toBe(1);
-			expect(body["repos"]).toEqual([{ owner: "acme-corp", name: "widgets", ok: true }]);
+			expect(body["repos"]).toEqual([{ owner: "acme-corp", name: "widgets", ok: true, timedOut: false }]);
 		});
 
 		it("with a body, refreshes just the named repo", async () => {
@@ -1677,7 +1677,7 @@ describe("githubAppRouter", () => {
 
 			expect(status).toBe(200);
 			expect(body["refreshed"]).toBe(true);
-			expect(body["repos"]).toEqual([{ owner: "acme-corp", name: "widgets", ok: true }]);
+			expect(body["repos"]).toEqual([{ owner: "acme-corp", name: "widgets", ok: true, timedOut: false }]);
 			expect(state.bundles.size).toBe(1);
 		});
 
@@ -1723,8 +1723,8 @@ describe("githubAppRouter", () => {
 			expect(body["refreshed"]).toBe(true);
 			expect(body["repos"]).toEqual(
 				expect.arrayContaining([
-					{ owner: "acme-corp", name: "widgets", ok: true },
-					{ owner: "acme-corp", name: "gadgets", ok: false },
+					{ owner: "acme-corp", name: "widgets", ok: true, timedOut: false },
+					{ owner: "acme-corp", name: "gadgets", ok: false, timedOut: false },
 				]),
 			);
 		});
