@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "@jest/globals";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { refreshRepoQueue, enqueueRefresh, InstallationRevokedError, AccountChangedError } from "../../src/interface/server/refreshRepoQueue.js";
+import { refreshRepoQueue, enqueueRefresh, InstallationRevokedError, AccountChangedError, RefreshTimeoutError } from "../../src/interface/server/refreshRepoQueue.js";
 import type { RefreshDeps } from "../../src/interface/server/refreshRepoQueue.js";
 import { onStateChanged } from "../../src/interface/server/changeEvents.js";
 import { createAccountState } from "../../src/interface/server/accountState.js";
@@ -308,5 +308,184 @@ describe("enqueueRefresh", () => {
 
 		expect(notifyCount).toBe(2);
 		unsubscribe();
+	});
+
+	it("rejects with RefreshTimeoutError and releases the lock when a refresh exceeds its deadline, instead of stranding every later call behind it", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
+		const client = new BlockingGitHubClient(); // never resolves until releaseFirst() is called
+		const deps: RefreshDeps = {
+			accountState: createAccountState({
+				installations: [BASE_BINDING],
+				repos: [{ owner: "octocat", name: "hello-world", installationId: BASE_BINDING.installationId, addedAt: "2026-06-30T00:00:00.000Z", addedBy: "alice" }],
+			}),
+			accountPath: join(dir, "installation.json"),
+			clientHolder: new GitHubClientHolder(client),
+			appConfig: { appId: "1", privateKey: "unused" },
+			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),
+			state: createServerState(),
+			pipelineDeps: {
+				config: PIPELINE_CONFIG,
+				provider: new StubLlmProvider(),
+				analyzer: new StubStaticAnalyzer(),
+				auditStore: new AuditStore(),
+				prCache: new PrEffectCache(),
+			},
+			queue: new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
+			refreshTimeoutMs: 10,
+		};
+
+		await expect(enqueueRefresh("octocat", "hello-world", deps)).rejects.toThrow(RefreshTimeoutError);
+
+		// The wedged first call is still pending (never released), but the lock must already be
+		// free — otherwise this second call would hang behind it exactly like the production bug.
+		const second = enqueueRefresh("octocat", "hello-world", deps);
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(client.calls).toBe(2);
+
+		client.releaseFirst();
+		await second;
+	});
+
+	it("discards a timed-out refresh's result if it resolves after a newer refresh already ran, instead of clobbering the newer state", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
+		// The first call's PR (pr-call-1) never surfaces to the caller (the refresh it belongs
+		// to times out) but keeps resolving in the background — if it were allowed to mutate
+		// state after the second call (pr-call-2) already ingested, the queue would end up with
+		// pr-call-1 in it despite that refresh having been reported as failed.
+		class VersionedBlockingGitHubClient extends StubGitHubClient {
+			calls = 0;
+			private release: (() => void) | undefined;
+			private readonly gate = new Promise<void>((resolve) => {
+				this.release = resolve;
+			});
+
+			override async listOpenPullRequests() {
+				this.calls++;
+				const callNumber = this.calls;
+				if (callNumber === 1) await this.gate;
+				return {
+					payloads: [makePrFixture({ id: `pr-call-${callNumber}`, number: callNumber, title: `from call ${callNumber}` })],
+					skipped: [],
+				};
+			}
+
+			releaseFirst(): void {
+				this.release?.();
+			}
+		}
+
+		const client = new VersionedBlockingGitHubClient();
+		const provider = new StubLlmProvider();
+		// Only the second call's PR ever reaches ingestIntoQueue (the first call's
+		// isSuperseded check throws before getting there) — one PR's worth of completions.
+		provider.queueCompletion('["adds OTP login"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		const deps: RefreshDeps = {
+			accountState: createAccountState({
+				installations: [BASE_BINDING],
+				repos: [{ owner: "octocat", name: "hello-world", installationId: BASE_BINDING.installationId, addedAt: "2026-06-30T00:00:00.000Z", addedBy: "alice" }],
+			}),
+			accountPath: join(dir, "installation.json"),
+			clientHolder: new GitHubClientHolder(client),
+			appConfig: { appId: "1", privateKey: "unused" },
+			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),
+			state: createServerState(),
+			pipelineDeps: {
+				config: PIPELINE_CONFIG,
+				provider,
+				analyzer: new StubStaticAnalyzer(),
+				auditStore: new AuditStore(),
+				prCache: new PrEffectCache(),
+			},
+			queue: new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
+			refreshTimeoutMs: 10,
+		};
+
+		await expect(enqueueRefresh("octocat", "hello-world", deps)).rejects.toThrow(RefreshTimeoutError);
+		await enqueueRefresh("octocat", "hello-world", deps);
+
+		const memberIds = [...deps.state.bundles.values()].flatMap((b) => b.members.map((m) => m.id));
+		expect(memberIds).toContain("pr-call-2");
+		expect(memberIds).not.toContain("pr-call-1");
+
+		// Let the abandoned first call finally resolve and discover it's stale — must not throw
+		// unhandled or mutate state further.
+		client.releaseFirst();
+		await new Promise((resolve) => setImmediate(resolve));
+		const memberIdsAfter = [...deps.state.bundles.values()].flatMap((b) => b.members.map((m) => m.id));
+		expect(memberIdsAfter).toEqual(memberIds);
+	});
+
+	it("also discards a stale result when the stall happens inside ingestIntoQueue's LLM-backed pipeline, not just the GitHub fetch", async () => {
+		dir = await mkdtemp(join(tmpdir(), "quire-refresh-"));
+		// Distinct from the previous test: here the GitHub fetch returns immediately every
+		// time, and the stall is in orchestratePipeline's LLM call instead — the risk the
+		// earlier (network-fetch-only) isSuperseded check in refreshRepoQueue can't cover,
+		// since it runs before ingestIntoQueue is even called.
+		class BlockingLlmProvider extends StubLlmProvider {
+			completeCalls = 0;
+			private release: (() => void) | undefined;
+			private readonly gate = new Promise<void>((resolve) => {
+				this.release = resolve;
+			});
+
+			override async complete(messages: Parameters<StubLlmProvider["complete"]>[0]) {
+				this.completeCalls++;
+				if (this.completeCalls === 1) await this.gate;
+				return super.complete(messages);
+			}
+
+			releaseFirst(): void {
+				this.release?.();
+			}
+		}
+
+		const client = new StubGitHubClient();
+		client.addFixture("octocat", "hello-world", makePrFixture({ id: "pr-1" }));
+		const provider = new BlockingLlmProvider();
+		provider.queueCompletion('["adds OTP login"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		provider.queueCompletion('["adds OTP login"]');
+		provider.queueCompletion(JSON.stringify([{ clause: "adds OTP login", matchedDirection: true }]));
+		const state = createServerState();
+		// Both calls resolve the same PR fixture, so a stale write would be invisible in
+		// state.bundles' size or keys — count actual writes instead of inspecting content.
+		let bundleWrites = 0;
+		const originalSet = state.bundles.set.bind(state.bundles);
+		state.bundles.set = ((...args: Parameters<typeof originalSet>) => {
+			bundleWrites++;
+			return originalSet(...args);
+		}) as typeof state.bundles.set;
+		const deps: RefreshDeps = {
+			accountState: createAccountState({
+				installations: [BASE_BINDING],
+				repos: [{ owner: "octocat", name: "hello-world", installationId: BASE_BINDING.installationId, addedAt: "2026-06-30T00:00:00.000Z", addedBy: "alice" }],
+			}),
+			accountPath: join(dir, "installation.json"),
+			clientHolder: new GitHubClientHolder(client),
+			appConfig: { appId: "1", privateKey: "unused" },
+			decidedStore: new DecidedPrStore(join(dir, "decided-prs.json")),
+			state,
+			pipelineDeps: {
+				config: PIPELINE_CONFIG,
+				provider,
+				analyzer: new StubStaticAnalyzer(),
+				auditStore: new AuditStore(),
+				prCache: new PrEffectCache(),
+			},
+			queue: new MergeQueue(join(dir, "queue.json"), new StubGitHubClient(), new LlmProviderHolder(new StubLlmProvider()), join(dir, "conflict.ndjson")),
+			refreshTimeoutMs: 10,
+		};
+
+		await expect(enqueueRefresh("octocat", "hello-world", deps)).rejects.toThrow(RefreshTimeoutError);
+		await enqueueRefresh("octocat", "hello-world", deps);
+		expect(bundleWrites).toBe(1);
+
+		// Release the first call's blocked LLM completion — its orchestratePipeline resolves,
+		// but ingestIntoQueue's own pre-commit isSuperseded check must catch that a newer
+		// refresh already committed and skip writing its (now stale) bundle over it.
+		provider.releaseFirst();
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(bundleWrites).toBe(1);
 	});
 });

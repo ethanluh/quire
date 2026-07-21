@@ -15,7 +15,7 @@ import { TypeScriptAnalyzer } from "../../engine/drift/footprint/typescript.js";
 import { NoopPatternRegistryClient } from "../../engine/drift/patternRegistry/noopClient.js";
 import { TenantRegistry } from "./tenant.js";
 import type { TenantSharedConfig } from "./tenant.js";
-import { enqueueRefresh, AccountChangedError } from "./refreshRepoQueue.js";
+import { enqueueRefresh, AccountChangedError, RefreshTimeoutError } from "./refreshRepoQueue.js";
 import { createAllowlist, createPlatformAdminAllowlist } from "./allowlist.js";
 import type { Allowlist } from "./allowlist.js";
 import { PlatformAllowlistStore } from "../../engine/platform/platformAllowlistStore.js";
@@ -411,6 +411,12 @@ async function main(): Promise<void> {
 						}
 						if (err instanceof AccountChangedError) {
 							console.warn(`Reconciliation poll for ${tenant.teamId} (${repo.owner}/${repo.name}) aborted: ${err.message}`);
+							return;
+						}
+						if (err instanceof RefreshTimeoutError) {
+							// Expected under GitHub rate-limit pressure now that a refresh can't hang
+							// forever (see refreshRepoQueue's REFRESH_TIMEOUT_MS) — the next tick retries.
+							console.warn(`Reconciliation poll timed out for ${tenant.teamId} (${repo.owner}/${repo.name}): ${err.message}`);
 							return;
 						}
 						console.error(`Reconciliation poll failed for ${tenant.teamId} (${repo.owner}/${repo.name}):`, err);

@@ -13,7 +13,7 @@ import { checkDeclaredDirectionConvention, setUpDeclaredDirectionConvention } fr
 import type { UserTokenCache } from "../../../engine/github/userTokenCache.js";
 import { refreshUserTokenFromDisk, userTokenPath } from "../../../engine/github/userToken.js";
 import { settleWithConcurrency } from "../../../engine/util/concurrency.js";
-import { clearRepoFromQueue, enqueueRefresh, InstallationRevokedError, AccountChangedError } from "../refreshRepoQueue.js";
+import { clearRepoFromQueue, enqueueRefresh, InstallationRevokedError, AccountChangedError, RefreshTimeoutError } from "../refreshRepoQueue.js";
 import type { RefreshDeps } from "../refreshRepoQueue.js";
 import { validateBody } from "../middleware/validation.js";
 import { requireRole } from "../middleware/requireRole.js";
@@ -710,6 +710,11 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 					console.warn(`Repo refresh paused for team ${teamId} (${repo?.owner}/${repo?.name}): ${err.message}`);
 				} else if (err instanceof AccountChangedError) {
 					console.warn(`Repo refresh for team ${teamId} (${repo?.owner}/${repo?.name}) aborted: ${err.message}`);
+				} else if (err instanceof RefreshTimeoutError) {
+					// The one case that used to hang the whole request to a proxy timeout with
+					// zero signal to the caller — now bounded (see refreshRepoQueue's
+					// REFRESH_TIMEOUT_MS) and surfaced here instead.
+					console.warn(`Repo refresh timed out for team ${teamId} (${repo?.owner}/${repo?.name}): ${err.message}`);
 				} else {
 					console.error(`Repo refresh failed for team ${teamId} (${repo?.owner}/${repo?.name}):`, err);
 				}
@@ -718,7 +723,15 @@ export function githubAppRouter(options: GithubAppRouterOptions): Router {
 				refreshed: true,
 				bundlesCreated,
 				rejected,
-				repos: repos.map((repo, i) => ({ owner: repo.owner, name: repo.name, ok: results[i]?.status === "fulfilled" })),
+				repos: repos.map((repo, i) => {
+					const result = results[i];
+					return {
+						owner: repo.owner,
+						name: repo.name,
+						ok: result?.status === "fulfilled",
+						timedOut: result?.status === "rejected" && result.reason instanceof RefreshTimeoutError,
+					};
+				}),
 			});
 		} catch (err) {
 			next(err);

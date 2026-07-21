@@ -12,24 +12,51 @@ import { OctokitGitHubClient, isHttpError } from "./octokitClient.js";
 // 5xx. The user/app clients below (single interactive calls) stay plain Octokit.
 const ThrottledOctokit = Octokit.plugin(throttling, retry);
 const MAX_RATE_LIMIT_RETRIES = 2;
+// GitHub's Retry-After on a rate limit can legitimately be minutes long; honoring it verbatim
+// is what let a single refresh hang well past Cloudflare's own proxy timeout with no error
+// surfaced anywhere. Past this ceiling, fail fast instead of sleeping through it — the caller
+// (refreshRepoQueue's REFRESH_TIMEOUT_MS) has its own bounded timeout upstream regardless.
+const MAX_RATE_LIMIT_RETRY_AFTER_SECONDS = 10;
+// No client-side connect/response timeout exists anywhere in the default Octokit fetch, so a
+// stalled GitHub request (not a rate limit, just a hung socket) could otherwise wait forever.
+const REQUEST_TIMEOUT_MS = 20_000;
 
 interface ThrottleCallbackOptions {
 	method: string;
 	url: string;
 }
 
+export function shouldRetryRateLimit(retryAfter: number, retryCount: number): boolean {
+	return retryAfter <= MAX_RATE_LIMIT_RETRY_AFTER_SECONDS && retryCount < MAX_RATE_LIMIT_RETRIES;
+}
+
 const throttleOptions = {
 	onRateLimit: (retryAfter: number, options: ThrottleCallbackOptions, _octokit: unknown, retryCount: number): boolean => {
 		console.warn(`GitHub rate limit hit on ${options.method} ${options.url}; retrying after ${retryAfter}s (attempt ${retryCount + 1})`);
-		return retryCount < MAX_RATE_LIMIT_RETRIES;
+		return shouldRetryRateLimit(retryAfter, retryCount);
 	},
 	onSecondaryRateLimit: (retryAfter: number, options: ThrottleCallbackOptions, _octokit: unknown, retryCount: number): boolean => {
 		console.warn(
 			`GitHub secondary rate limit hit on ${options.method} ${options.url}; retrying after ${retryAfter}s (attempt ${retryCount + 1})`,
 		);
-		return retryCount < MAX_RATE_LIMIT_RETRIES;
+		return shouldRetryRateLimit(retryAfter, retryCount);
 	},
 };
+
+// Wraps the global fetch with a per-call timeout: Octokit has no built-in connect/response
+// timeout, so without this a single stalled GitHub request could hang indefinitely regardless
+// of anything the throttling plugin does.
+function fetchWithTimeout(url: string | URL | Request, init?: RequestInit): Promise<Response> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(new Error(`GitHub request timed out after ${REQUEST_TIMEOUT_MS}ms`)), REQUEST_TIMEOUT_MS);
+	const externalSignal = init?.signal;
+	const onExternalAbort = (): void => controller.abort(externalSignal?.reason);
+	externalSignal?.addEventListener("abort", onExternalAbort);
+	return fetch(url, { ...init, signal: controller.signal }).finally(() => {
+		clearTimeout(timer);
+		externalSignal?.removeEventListener("abort", onExternalAbort);
+	});
+}
 
 export interface GitHubAppConfig {
 	appId: string;
@@ -52,6 +79,7 @@ export function buildInstallationOctokit(config: GitHubAppConfig, installationId
 		authStrategy: createAppAuth,
 		auth: { appId: config.appId, privateKey: config.privateKey, installationId },
 		throttle: throttleOptions,
+		request: { fetch: fetchWithTimeout },
 	});
 }
 

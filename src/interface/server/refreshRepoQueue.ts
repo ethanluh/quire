@@ -11,7 +11,9 @@ import type { AccountState } from "./accountState.js";
 import { installationForRepo } from "./accountState.js";
 import { notifyStateChanged } from "./changeEvents.js";
 import { createKeyedLock } from "../../engine/util/keyedLock.js";
-import { ingestIntoQueue } from "./ingestIntoQueue.js";
+import { withTimeout } from "../../engine/util/timeout.js";
+import { errorMessage } from "../../engine/util/error.js";
+import { ingestIntoQueue, StaleIngestError } from "./ingestIntoQueue.js";
 import type { IngestSummary, PipelineDeps } from "./ingestIntoQueue.js";
 import type { ServerState } from "./state.js";
 
@@ -21,6 +23,21 @@ export { InstallationRevokedError } from "../../engine/github/installationClient
 // while a refresh was mid-flight — see the compare-and-swap in refreshRepoQueue below.
 // Not a real failure: the binding itself is fine, this refresh cycle is just stale.
 export class AccountChangedError extends Error {}
+
+// Thrown when a single refresh (a GitHub rate-limit stall, most commonly) runs past
+// REFRESH_TIMEOUT_MS — without this, enqueueRefresh's coalescing lock never released, so a
+// single wedged refresh silently stranded every later refresh for that repo behind it.
+export class RefreshTimeoutError extends Error {}
+
+// Thrown (internally, never surfaced to a caller — see enqueueRefresh) when a refresh that
+// already missed its deadline finally resolves after a newer refresh for the same repo has
+// started. withTimeout only bounds how long enqueueRefresh's *caller* waits; the abandoned
+// call keeps running underneath and would otherwise still reach clearRepoFromQueue/
+// ingestIntoQueue and clobber whatever the newer, already-completed refresh wrote — exactly
+// the race the coalescing lock exists to prevent. Discarding here closes that gap.
+export class StaleRefreshError extends Error {}
+
+const REFRESH_TIMEOUT_MS = 30_000;
 
 export interface RefreshDeps {
 	accountState: AccountState;
@@ -37,6 +54,9 @@ export interface RefreshDeps {
 	// omitted defaults to the pre-multi-tenant behavior of one shared lock namespace, which
 	// existing single-tenant callers/tests still rely on.
 	tenantKey?: string;
+	// Overrides REFRESH_TIMEOUT_MS — exists so tests can force a timeout deterministically
+	// without waiting out the real 30s budget.
+	refreshTimeoutMs?: number;
 }
 
 export interface RefreshRepoQueueResult extends IngestSummary {
@@ -70,6 +90,7 @@ export async function refreshRepoQueue(
 	owner: string,
 	name: string,
 	deps: RefreshDeps,
+	isSuperseded?: () => boolean,
 ): Promise<RefreshRepoQueueResult> {
 	const activeAtStart = installationForRepo(deps.accountState.current, owner, name);
 	if (activeAtStart === undefined) throw new Error(`No connected installation backs ${owner}/${name}`);
@@ -92,6 +113,14 @@ export async function refreshRepoQueue(
 	if (installationForRepo(deps.accountState.current, owner, name)?.installationId !== activeAtStart.installationId) {
 		throw new AccountChangedError("Installation binding changed mid-refresh; aborting this refresh");
 	}
+	// A cheap early exit — isSuperseded is undefined for direct callers (tests, no coalescing
+	// involved); enqueueRefresh is the only caller that passes one. This check alone isn't
+	// sufficient (ingestIntoQueue below can itself run long on LLM-backed extraction, well
+	// past this point) — see the guard passed into ingestIntoQueue, which is the one that
+	// actually gates the state write.
+	if (isSuperseded?.() === true) {
+		throw new StaleRefreshError(`Refresh of ${owner}/${name} superseded by a newer refresh; discarding stale result`);
+	}
 
 	const prs = rawPRs.map((raw) => normalizePR(rawPRPayloadToIncomingPR(raw)));
 	const undecided = prs.filter((pr) => !deps.decidedStore.isDecided(pr.id));
@@ -105,11 +134,22 @@ export async function refreshRepoQueue(
 		if (card !== undefined) priorCards.set(bundle.id, card);
 	}
 
+	// clearRepoFromQueue is itself synchronous and immediately followed by ingestIntoQueue's
+	// own pre-commit guard (same isSuperseded, re-checked there since orchestratePipeline's
+	// LLM-backed work below can take long enough for a newer refresh to finish first) — so
+	// re-checking here too would only guard the (comparatively instant) gap since the last
+	// check, not the real risk window.
+	if (isSuperseded?.() === true) {
+		throw new StaleRefreshError(`Refresh of ${owner}/${name} superseded by a newer refresh; discarding stale result`);
+	}
 	clearRepoFromQueue(deps.state, { owner, name });
-	const summary = await ingestIntoQueue(undecided, deps.state, deps.pipelineDeps, {
-		bundles: priorBundles,
-		cards: priorCards,
-	});
+	const summary = await ingestIntoQueue(
+		undecided,
+		deps.state,
+		deps.pipelineDeps,
+		{ bundles: priorBundles, cards: priorCards },
+		isSuperseded,
+	);
 	return { ...summary, skipped };
 }
 
@@ -123,10 +163,40 @@ export async function refreshRepoQueue(
 // guard) exactly as it did when this was a hand-rolled promise chain.
 const refreshLock = createKeyedLock();
 
+// The most recent attempt's identity for each lock key — lets a call that's still running
+// after its own timeout fired (see REFRESH_TIMEOUT_MS) recognize, once it finally resolves,
+// that a newer call already took its place and it must not touch deps.state. A plain
+// per-key counter would work just as well; a symbol just makes "am I still current" an
+// identity check instead of a comparison that could be fooled by wraparound.
+const activeAttempts = new Map<string, symbol>();
+
 export function enqueueRefresh(owner: string, name: string, deps: RefreshDeps): Promise<RefreshRepoQueueResult> {
 	const key = `${deps.tenantKey ?? ""}:${owner}/${name}`;
 	return refreshLock(key, async () => {
-		const result = await refreshRepoQueue(owner, name, deps);
+		const attempt = Symbol(key);
+		activeAttempts.set(key, attempt);
+		const timeoutMs = deps.refreshTimeoutMs ?? REFRESH_TIMEOUT_MS;
+		const inFlight = refreshRepoQueue(owner, name, deps, () => activeAttempts.get(key) !== attempt);
+		// withTimeout's race already attaches its own handler to `inFlight`, so this second
+		// subscription doesn't affect that race or risk an unhandled rejection — it only logs
+		// whatever the abandoned call eventually settles with, since nothing else observes it
+		// once the race below has already moved on without it.
+		inFlight.catch((err: unknown) => {
+			if (err instanceof StaleRefreshError || err instanceof StaleIngestError) {
+				console.warn(err.message);
+				return;
+			}
+			console.error(`Refresh of ${owner}/${name} settled after its timeout was already reported to the caller: ${errorMessage(err)}`);
+		});
+		const result = await withTimeout(
+			inFlight,
+			timeoutMs,
+			() => new RefreshTimeoutError(`Refresh of ${owner}/${name} exceeded ${timeoutMs}ms`),
+		);
+		// Only reclaim the map entry on a normal (non-timed-out) completion: withTimeout throws
+		// before reaching this line otherwise, which is exactly when a later, still-abandoned
+		// resolution needs `activeAttempts.get(key) !== attempt` to keep reading true.
+		if (activeAttempts.get(key) === attempt) activeAttempts.delete(key);
 		// Single choke point for both the webhook route and the reconciliation timer —
 		// tells this tenant's open SSE connections to re-fetch instead of waiting for their
 		// next poll tick. Falls back to "" to match the lock key above for callers that omit
